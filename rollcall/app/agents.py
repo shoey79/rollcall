@@ -241,6 +241,10 @@ def normalize_report(r) -> dict:
         d["detections"] = [x for x in _as_list(d.get("detections")) if isinstance(x, dict)]
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
+    if "storage" in c:
+        st = c["storage"] = _as_dict(c["storage"])
+        for k in ("physical", "virtual", "volumes", "dyn_disks", "drives"):
+            st[k] = [x for x in _as_list(st.get(k)) if isinstance(x, dict)]
     if "containers" in c:
         c["containers"] = [x for x in _as_list(c["containers"]) if isinstance(x, dict)]
     if "immich" in c:
@@ -280,7 +284,7 @@ class Ignore:
                 continue
             kind, _, value = e.partition(":") if ":" in e else ("service", "", e)
             kind = kind.lower()
-            if kind not in ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm"):
+            if kind not in IGNORE_KINDS:
                 kind, value = "service", e
             self.items.setdefault(kind, set()).add(value.strip().lower().rstrip(":"))
 
@@ -320,7 +324,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
         return None
 
 
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage")
 
 
 def disk_key(name) -> str:
@@ -521,6 +525,59 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
             if not bits:
                 bits.append(f"{busy} job(s) queued" if qs else "API answering")
             checks.append(_check("immich", "Immich", level, f"Immich{ver}: " + "; ".join(bits)))
+
+    st = rc.get("storage")
+    if st:
+        crit, warn, total = [], [], 0
+        bad_words = ("lost communication", "failed", "detached", "incomplete", "missing", "error", "no redundancy")
+        for d in st.get("physical") or []:
+            nm = f"{d.get('name') or 'Disk'}" + (f" ({d.get('serial')})" if d.get("serial") else "")
+            if ign.has("storage", d.get("name")) or ign.has("storage", d.get("serial")):
+                continue
+            total += 1
+            h, s_ = (d.get("health") or "").lower(), (d.get("status") or "").lower()
+            if h == "unhealthy" or any(w in s_ for w in bad_words):
+                crit.append(f"disk {nm}: {d.get('status') or d.get('health')}")
+            elif h == "warning" or "predictive" in s_:
+                warn.append(f"disk {nm}: {d.get('status') or d.get('health')}")
+        for v in st.get("virtual") or []:
+            if ign.has("storage", v.get("name")):
+                continue
+            total += 1
+            h, s_ = (v.get("health") or "").lower(), (v.get("status") or "").lower()
+            label = f"{v.get('name')}" + (f" ({v.get('layout')})" if v.get("layout") else "")
+            # Storage Spaces reports a failed disk as Degraded with health Warning; an
+            # mdadm array that's already rebuilding says so, and is only amber.
+            if h == "unhealthy" or ("degraded" in s_ and "rebuild" not in s_) or any(w in s_ for w in bad_words):
+                crit.append(f"{label}: {v.get('status') or v.get('health')}")
+            elif h == "warning":
+                warn.append(f"{label}: {v.get('status') or v.get('health')}")
+        for v in st.get("volumes") or []:
+            name = f"{v.get('letter')}:" if v.get("letter") else (v.get("label") or v.get("volume"))
+            if ign.has("storage", name) or ign.has("storage", v.get("volume")):
+                continue
+            total += 1
+            s_ = (v.get("status") or "").lower()
+            desc = f"{v.get('type')} {name} {v.get('status')}"
+            if s_ in ("failed rd", "failed", "missing") or "fail" in s_:
+                crit.append(desc.replace("Failed Rd", "failed redundancy (a disk has failed)"))
+            elif s_ in ("rebuild", "resynching", "regenerating", "at risk") or s_ not in ("healthy", ""):
+                warn.append(desc)
+        for d in st.get("dyn_disks") or []:
+            if ign.has("storage", d.get("disk")):
+                continue
+            crit.append(f"{d.get('disk')}: {d.get('status')}")
+        for d in st.get("drives") or []:
+            if ign.has("storage", d.get("name")):
+                continue
+            (warn if "pred" in (d.get("status") or "").lower() else crit).append(f"{d.get('name')}: {d.get('status')}")
+        if crit or warn or total:
+            if crit:
+                checks.append(_check("storage", "Storage", CRIT, "; ".join(crit + warn), confirm=True))
+            elif warn:
+                checks.append(_check("storage", "Storage", WARN, "; ".join(warn)))
+            else:
+                checks.append(_check("storage", "Storage", OK, f"{total} disk(s) and array(s) healthy"))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 
