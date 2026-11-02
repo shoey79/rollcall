@@ -1,0 +1,66 @@
+#include <tunables/global>
+
+# AppArmor profile for Rollcall, based on Home Assistant's example profile for
+# add-ons that start with s6-overlay. The Supervisor renames the profile to the
+# add-on's slug when it loads it.
+#
+# 1.9.0's stricter profile stopped the add-on starting: it didn't allow
+# s6-overlay to run its init from /run/s6. This one follows the official
+# example for start-up, and keeps Rollcall inside its container: no mounting,
+# no tracing other processes, no loading kernel modules, no extra capabilities.
+profile ping_monitor flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Files and network inside the container (data, temp, run-time state,
+  # pings, port and web checks, Home Assistant API, dashboard and agents).
+  file,
+  network,
+  signal,
+
+  # Ordinary root capabilities used by s6-overlay and the start script only.
+  capability chown,
+  capability dac_override,
+  capability dac_read_search,
+  capability fowner,
+  capability fsetid,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  capability setpcap,
+
+  # s6-overlay (the container's start-up manager)
+  /init ix,
+  /bin/** ix,
+  /sbin/** ix,
+  /usr/bin/** ix,
+  /usr/sbin/** ix,
+  /usr/local/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /etc/s6-overlay/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  # bashio and Rollcall's start script
+  /usr/lib/bashio/** ix,
+  /run.sh ix,
+  /tmp/** rwk,
+
+  # Rollcall's own data
+  /data/** rwk,
+  /ssl/** r,
+
+  # Things a monitoring add-on never needs
+  deny mount,
+  deny umount,
+  deny pivot_root,
+  deny ptrace,
+  deny /proc/sys/** w,
+  deny /sys/** w,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/kcore rwklx,
+}
