@@ -259,6 +259,7 @@ One PowerShell script, the same on every server. Each run (every 5 minutes) it w
 | **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row) |
 | **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off) | |
 | **IIS** | | An app pool or site stopped (two reports) |
+| **Storage** | A disk predicting failure, or a RAID volume rebuilding | A failed disk: a mirror or RAID-5 with failed redundancy, a missing dynamic disk, an unhealthy disk or degraded Storage Space (two reports) |
 | **AD** (domain controllers) | | Replication failing, or SYSVOL/NETLOGON not shared (two reports) |
 | **DHCP** | A scope 85% or more used | 95% or more used |
 | **Hyper-V** | | A VM in a critical state |
@@ -268,6 +269,8 @@ One PowerShell script, the same on every server. Each run (every 5 minutes) it w
 | **Events** | Alert-worthy events in the last 24 h | |
 
 Roles are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
+
+**Storage health** covers Windows' own RAID: mirrored and RAID-5 volumes on dynamic disks (read with `diskpart` on servers that have dynamic disks), Storage Spaces, and each physical disk's health, including SMART predicted failures. Hardware RAID controllers (e.g. Dell PERC) aren't covered: their arrays look like single healthy disks to Windows, and need the vendor's tools (OpenManage, iDRAC alerts).
 
 **Alerted as they happen** (phone notification for each):
 - **Security log:** account locked out (4740), account created or deleted (4720/4726), member added to a security group (4728/4732/4756, e.g. Domain Admins), audit policy changed (4719), Security log cleared (1102). The IDs are in `agent_security_alert_ids`.
@@ -312,7 +315,7 @@ These settings are stored in the add-on's data folder (`agent_settings.json`) an
 **From the Configuration tab** (all servers):
 - **`agent_disk_warn` / `agent_disk_crit`** are the default disk thresholds.
 - **Last update date** is the newest of: Windows Update history (which includes MECM and WSUS installs), the Setup event log (every package Windows installs, even with the Windows Update service disabled), and the installed-updates list. Details shows which source it came from, and the OS build number. If you'd rather leave patch compliance to MECM, set `agent_patch_days: 0`; a pending reboot is still flagged.
-- **`agent_ignore`** quietens known noise. Use a service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`.
+- **`agent_ignore`** quietens known noise. Use a service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array name).
 - **`agent_watch_services`** adds services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - **`agent_event_alerts` / `agent_security_alerts`** turn those alert types off.
 - Pausing a computer (maintenance) silences its agent alerts too.
@@ -336,6 +339,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so n
 - **Containers:** every container that's running, has a restart policy, or belongs to a Compose stack is watched (Immich's server, machine learning, Postgres and Redis/Valkey included). A one-off container that exited cleanly isn't. Containers can be ignored like services.
 - **Immich:** found from its container (port 2283 unless mapped elsewhere). It always checks the API answers and reports the version. With an API key it also shows each job queue (active, waiting, failed, paused), the photo and video counts and storage use.
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors and any critical journal entry; users created or deleted (4720/4726) and users added to groups such as `sudo` or `docker` (4732). SSH logins are listed in Details but not alerted.
+- **Storage:** software RAID (mdadm) arrays from `/proc/mdstat` and ZFS pools. A degraded array or a failed member is red; an array that's already rebuilding is amber.
 - **Updates:** last apt run (from apt's history), packages waiting and how many are security updates (re-checked every 6 hours, after a restart, or straight after apt installs anything), and whether a reboot is required.
 
 ### Setting it up

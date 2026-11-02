@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.6'
+$AgentVersion = '1.0.7'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -668,6 +668,84 @@ function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
     return $checks
 }
 
+function ConvertFrom-DiskPartTable([string[]]$Lines) {
+    # diskpart prints fixed-width tables; the row of dashes under the header gives the columns.
+    $dash = -1
+    for ($i = 1; $i -lt $Lines.Count; $i++) { if ($Lines[$i] -match '^\s*-{3,}(\s+-{2,})+\s*$') { $dash = $i; break } }
+    if ($dash -lt 1) { return @() }
+    $starts = @(); $lens = @()
+    foreach ($m in [regex]::Matches($Lines[$dash], '-+')) { $starts += $m.Index; $lens += $m.Length }
+    $header = $Lines[$dash - 1].PadRight($Lines[$dash].Length)
+    $names = @(for ($c = 0; $c -lt $starts.Count; $c++) { $header.Substring($starts[$c], $lens[$c]).Trim() })
+    $rows = @()
+    for ($i = $dash + 1; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        if (-not $line.Trim()) { break }
+        $row = [ordered]@{}
+        for ($c = 0; $c -lt $starts.Count; $c++) {
+            $a = $starts[$c]
+            $b = if ($c + 1 -lt $starts.Count) { $starts[$c + 1] } else { [Math]::Max($line.Length, $a) }
+            $row[$names[$c]] = if ($line.Length -gt $a) { $line.Substring($a, [Math]::Min($b, $line.Length) - $a).Trim() } else { '' }
+        }
+        $rows += , $row
+    }
+    return , $rows
+}
+
+function Invoke-DiskPart([string]$Command) {
+    $tmp = [IO.Path]::GetTempFileName()
+    $outFile = "$tmp.out"
+    try {
+        Set-Content -Path $tmp -Value $Command -Encoding ASCII
+        $p = Start-Process -FilePath 'diskpart.exe' -ArgumentList "/s `"$tmp`"" -RedirectStandardOutput $outFile -NoNewWindow -PassThru
+        if (-not $p.WaitForExit(60000)) { try { $p.Kill() } catch { }; throw 'diskpart timed out' }
+        return @(Get-Content -Path $outFile -ErrorAction SilentlyContinue)
+    } finally {
+        Remove-Item -Path $tmp, $outFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-StorageHealth {
+    # Physical disks and Storage Spaces (Windows 8 / Server 2012 and later), software RAID on
+    # dynamic disks (mirrors, RAID-5) from diskpart, and SMART status from the disk drives.
+    $st = [ordered]@{ physical = @(); virtual = @(); volumes = @(); dyn_disks = @(); drives = @() }
+    if (Get-Command Get-PhysicalDisk -ErrorAction SilentlyContinue) {
+        try {
+            $st.physical = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{ name = [string]$_.FriendlyName; serial = ([string]$_.SerialNumber).Trim(); media = [string]$_.MediaType; bus = [string]$_.BusType
+                        health = [string]$_.HealthStatus; status = (@($_.OperationalStatus) -join ', '); size_gb = [Math]::Round($_.Size / 1GB, 0) }
+                })
+        } catch { Add-CollectorError 'physical disks' $_ }
+        try {
+            $st.virtual = @(Get-VirtualDisk -ErrorAction Stop | ForEach-Object {
+                    [ordered]@{ name = [string]$_.FriendlyName; layout = [string]$_.ResiliencySettingName
+                        health = [string]$_.HealthStatus; status = (@($_.OperationalStatus) -join ', ') }
+                })
+        } catch { }
+    }
+    try {
+        $st.drives = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop | Where-Object { $_.Status -and $_.Status -ne 'OK' } | ForEach-Object {
+                [ordered]@{ name = [string]$_.Model; index = [int]$_.Index; status = [string]$_.Status }
+            })
+    } catch { }
+    $dynamic = $false
+    try { $dynamic = [bool](@(Get-CimInstance -ClassName Win32_DiskPartition -ErrorAction Stop | Where-Object { $_.Type -match 'Logical Disk Manager' }).Count) } catch { }
+    if ($dynamic) {
+        try {
+            $vols = ConvertFrom-DiskPartTable (Invoke-DiskPart 'list volume')
+            $st.volumes = @($vols | Where-Object { $_['Type'] -and $_['Type'] -ne 'Partition' -and $_['Type'] -ne 'Removable' -and $_['Type'] -ne 'DVD-ROM' } | ForEach-Object {
+                    [ordered]@{ volume = [string]$_['Volume ###']; letter = [string]$_['Ltr']; label = [string]$_['Label']; type = [string]$_['Type']
+                        status = [string]$_['Status']; info = [string]$_['Info'] }
+                })
+            $disks = ConvertFrom-DiskPartTable (Invoke-DiskPart 'list disk')
+            $st.dyn_disks = @($disks | Where-Object { $_['Status'] -and $_['Status'] -ne 'Online' } | ForEach-Object {
+                    [ordered]@{ disk = ([string]$_['Disk ###']).TrimStart('*', ' '); status = [string]$_['Status']; size = [string]$_['Size'] }
+                })
+        } catch { Add-CollectorError 'software raid' $_ }
+    }
+    return $st
+}
+
 function Get-Report($State, [string[]]$ExtraWatch) {
     $now = Get-Date
     $since = if ($State.last_run) { ([DateTime]$State.last_run).ToLocalTime().AddMinutes(-2) } else { $now.AddMinutes(-60) }
@@ -705,6 +783,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
     $report.checks = Get-RoleChecks $discovery.roles $since $State
+    try {
+        $storage = Measure-Step 'storage health' { Get-StorageHealth }
+        if ($storage) { $report.checks.storage = $storage }
+    } catch { Add-CollectorError 'storage' $_ }
     $report.errors = @($script:Errors)
     try {
         $proc = [Diagnostics.Process]::GetCurrentProcess()

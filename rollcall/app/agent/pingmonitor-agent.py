@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.3"
+AGENT_VERSION = "1.0.4"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -319,6 +319,44 @@ def disks():
             except Exception as err:  # noqa: BLE001
                 collector_error("disk %s" % m[1], err)
     return out
+
+
+def storage_health():
+    """Software RAID (mdadm) arrays and ZFS pools."""
+    st = {"physical": [], "virtual": [], "volumes": [], "dyn_disks": [], "drives": []}
+    md = read("/proc/mdstat")
+    blocks = re.split(r"\n(?=md\d+\s*:)", md)
+    for b in blocks:
+        m = re.match(r"(md\d+)\s*:\s*(\S+)\s+(?:\(\S+\)\s+)?(raid\d+|linear)?\s*(.*)", b)
+        if not m:
+            continue
+        name, active, level, members = m.group(1), m.group(2), m.group(3) or "", m.group(4).split("\n")[0]
+        failed = re.findall(r"(\S+?)\[\d+\]\(F\)", members)
+        counts = re.search(r"\[(\d+)/(\d+)\]", b)
+        status, health = "OK", "Healthy"
+        if active != "active":
+            status, health = active.capitalize(), "Unhealthy"
+        elif counts and int(counts.group(2)) < int(counts.group(1)):
+            status, health = "Degraded (%s of %s disks)" % (counts.group(2), counts.group(1)), "Unhealthy"
+        if failed:
+            status += "; failed: " + ", ".join(failed)
+            health = "Unhealthy"
+        prog = re.search(r"(recovery|resync|reshape|check)\s*=\s*([\d.]+%)", b)
+        if prog and prog.group(1) in ("recovery", "resync", "reshape"):
+            status += "; %s %s" % ("rebuilding" if prog.group(1) == "recovery" else prog.group(1), prog.group(2))
+            if health == "Healthy" or (prog.group(1) == "recovery" and not failed):
+                health = "Warning"  # redundancy is being restored
+        st["virtual"].append({"name": "/dev/" + name, "layout": level, "health": health, "status": status})
+    if shutil.which("zpool"):
+        rc, out, _ = run(["zpool", "list", "-H", "-o", "name,health"], timeout=30)
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2:
+                hl = parts[1].strip()
+                st["virtual"].append({"name": "zpool " + parts[0], "layout": "zfs",
+                                      "health": "Healthy" if hl == "ONLINE" else "Unhealthy",
+                                      "status": hl})
+    return st
 
 
 # --------------------------------------------------------------------------
@@ -646,6 +684,10 @@ def build_report(state, conf):
     with step("auth log"):
         r["security"] = security_report(state)
     r["checks"] = {}
+    with step("storage health"):
+        sh = storage_health()
+        if sh["virtual"]:
+            r["checks"]["storage"] = sh
     if conts is not None:
         r["checks"]["containers"] = conts
     with step("immich"):

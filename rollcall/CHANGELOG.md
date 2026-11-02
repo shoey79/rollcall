@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.8.0 - 2026-11-02
+
+### Added
+- **Storage health check** (Windows agent 1.0.7, Linux agent 1.0.4). Red when a disk in a software RAID fails: Windows mirrored or RAID-5 volumes on dynamic disks with failed redundancy, missing dynamic disks, degraded Storage Spaces, unhealthy physical disks; Linux mdadm arrays that are degraded or have a failed member, and ZFS pools that aren't ONLINE. Amber for a disk predicting failure (SMART) or an array that's rebuilding. Details has a **Storage health** section, and items can be ignored (`storage:E:`).
+
+### Fixed
+- Opening a server's Details briefly showed the previous server's name and agent version until the new details loaded.
+
+Update the agents to get the Storage check: download them again from **Agents** (Windows: replace the script on the share or run it again with MECM; Linux: run `--install` again).
+
 ## 1.7.0 - 2026-11-02
 
 ### Added
