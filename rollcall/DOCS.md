@@ -454,9 +454,8 @@ content: >
 
 ## Add-on security
 
-Rollcall runs with the least access it needs, which gives it Home Assistant's top security rating:
+Rollcall runs with the least access it needs, which gives it a security rating of 7 out of 8:
 - **No extra privileges.** Ping uses unprivileged ICMP sockets, which Docker allows by default, so the add-on doesn't need the `NET_RAW` privilege. If a system doesn't allow them, Rollcall says so in its log and on the dashboard, and checks whether each host is up over TCP instead: a host counts as up if any common port (or one of its service-check ports) answers, even by refusing the connection.
-- **AppArmor profile** (`apparmor.txt`): Rollcall can read its own image, run only the start script, Python and ping, use the network, and write only to its data folder and temporary folders.
 - **Ingress**: the dashboard is only reachable through Home Assistant, with Home Assistant's login.
 - The Supervisor API is used with the default (lowest) role, only to read the add-on's own details, restart it after an import, and update its own options.
 
