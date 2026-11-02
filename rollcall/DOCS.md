@@ -363,6 +363,16 @@ The add-on reads HA's user list to find out who's an admin. If it can't (the log
 
 To hide the panel from some non-admin users entirely, remove it from their sidebar under their **Profile → Change the order and hide items from the sidebar**. That only hides it; anyone who can sign in to HA could still open the view-only page by URL.
 
+## Monitoring schedules
+
+By default every computer is monitored all the time. For one that's only meant to be on at certain times, open **Edit → Monitoring schedule**, choose **Only at set times** and add one or more windows, each with its days and times, e.g. Mon–Fri 07:00–19:00, or Sat 22:00–06:00 for an overnight job. A window can run past midnight; it belongs to the day it starts.
+
+- **Outside its windows** the computer shows as **Off schedule** (grey), with when monitoring resumes. It's still pinged, so you can see if it's on, but nothing alerts: no down alert, no service or agent alerts, and the agent isn't flagged for not reporting. Off-schedule time doesn't count against uptime %.
+- **When a window opens** it shows **Starting up** until it replies, for up to the allowance you set (15 minutes by default, 0–240). If it hasn't replied by then, you get the usual down alert ("It didn't come up after its monitoring window started").
+- **When a window closes**, it goes back to Off schedule without an alert.
+
+Times are in Home Assistant's time zone (Settings → System → General), and follow daylight saving. The schedule shows under the computer's name on the dashboard, and the `sensor.ping_monitor_<name>` entity has `off_schedule` and `schedule` attributes. A tab condition **Status is Off schedule** lists them. A manual **Pause** still works on a scheduled computer and takes priority while it lasts.
+
 ## Pausing for reboots (maintenance mode)
 
 Click **Pause** on a row before rebooting or working on a machine. You'll be asked for a time limit (default `maintenance_minutes`, 30).

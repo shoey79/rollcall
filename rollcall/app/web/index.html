@@ -160,6 +160,17 @@ table.small tr.dim td{opacity:.55}
 .diskset label{display:inline-flex;align-items:center;gap:4px}
 .diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 .old{color:var(--amber)}
+.schedopt{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:4px 0}
+.schedopt input{margin-top:3px;accent-color:var(--accent)}
+.swin{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin:8px 0}
+.days{display:flex;gap:3px}
+.days label{display:inline-flex}
+.days input{display:none}
+.days span{display:inline-block;min-width:36px;text-align:center;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;cursor:pointer;color:var(--muted);background:var(--card)}
+.days input:checked+span{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.swin input[type=time]{font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text)}
+.sched{color:var(--muted);font-size:11.5px;margin-top:2px}
+.dot.offsched{background:var(--grey)}
 .haresults{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .harow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
 .harow small{display:block;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
@@ -323,6 +334,17 @@ table.small tr.dim td{opacity:.55}
           (<code>&gt;</code> <code>&lt;</code> <code>=</code> <code>!=</code>). Without a condition it only needs to be available.
         </p>
       </fieldset>
+      <fieldset>
+        <legend>Monitoring schedule</legend>
+        <label class="schedopt"><input type="radio" name="schedMode" value="always" checked> <span><b>All the time</b> (24/7)</span></label>
+        <label class="schedopt"><input type="radio" name="schedMode" value="times"> <span><b>Only at set times</b>: outside them it shows as <i>Off schedule</i> and never alerts, like a pause</span></label>
+        <div id="schedBox" hidden>
+          <div id="schedWins"></div>
+          <button type="button" id="schedAdd">+ Add time window</button>
+          <label class="tabfield">Allow <input type="number" id="schedGrace" min="0" max="240" value="15" style="width:70px"> minutes for it to start up when a window opens, before alerting</label>
+          <p class="hint">Times are in Home Assistant's time zone. A window can run past midnight, e.g. 22:00 to 06:00 (it belongs to the day it starts).</p>
+        </div>
+      </fieldset>
     </div>
     <p class="form-err" id="formErr" role="alert"></p>
     <div class="dlg-foot">
@@ -338,7 +360,7 @@ table.small tr.dim td{opacity:.55}
   </form>
 </dialog>
 <script>
-const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded"};
+const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off schedule"};
 const ORDER = {red: 0, degraded: 1, amber: 2, maintenance: 3, unknown: 4, green: 5};
 const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked"};
 let data = null;
@@ -407,6 +429,21 @@ function maintNote(h) {
   const phase = h.maint_seen_down ? "Down, waiting for reply" : "Waiting for it to go down";
   return `<div class="note">${phase}<br>until ${until}</div>`;
 }
+function statusLabel(h) {
+  if (h.maint_until) return LABEL[h.status];
+  if (h.off_schedule) return "Off schedule";
+  if (h.starting_up) return "Starting up";
+  return LABEL[h.status];
+}
+function schedNote(h) {
+  if (h.maint_until || !h.schedule) return "";
+  const soon = h.schedule_next && h.schedule_next - Date.now() / 1000 < 6 * 86400;
+  const at = h.schedule_next ? new Date(h.schedule_next * 1000).toLocaleString([], soon ? {weekday: "short", hour: "2-digit", minute: "2-digit"}
+    : {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : null;
+  if (h.off_schedule) return `<div class="note">Monitoring resumes ${at ? at : "—"}</div>`;
+  if (h.starting_up) return `<div class="note">Window opened; waiting for it to reply</div>`;
+  return "";
+}
 function degradedNote(h) {
   if (h.status !== "degraded") return "";
   const red = h.services.filter(s => s.status === "red");
@@ -449,12 +486,12 @@ function render() {
   if (!data) return;
   const now = data.now;
   const q = document.getElementById("filter").value.trim().toLowerCase();
-  const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0};
-  data.hosts.forEach(h => counts[h.status]++);
+  const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0, offsched: 0};
+  data.hosts.forEach(h => counts[h.off_schedule && !h.maint_until ? "offsched" : h.status]++);
 
   const hasServices = data.hosts.some(h => h.services.length);
   const chips = ["green", "amber"].concat(hasServices || counts.degraded ? ["degraded"] : [], ["red"],
-    counts.maintenance ? ["maintenance"] : []);
+    counts.maintenance ? ["maintenance"] : [], counts.offsched ? ["offsched"] : []);
   document.getElementById("summary").innerHTML = chips.map(s =>
     `<span class="chip"><span class="dot ${s}"></span>${counts[s]} <small>${LABEL[s]}</small></span>`).join("");
   document.getElementById("meta").textContent =
@@ -476,8 +513,8 @@ function render() {
     const strip = h.history.map(c => `<span class="${c}"></span>`).join("");
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
-      <td class="first"><div><span class="status"><span class="dot ${h.status}"></span>${LABEL[h.status]}</span>${maintNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div><div class="name">${esc(h.name)}</div>${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
+      <td class="first"><div><span class="status"><span class="dot ${h.off_schedule ? "offsched" : h.status}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
+      <td data-label="Name"><div><div class="name">${esc(h.name)}</div>${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -502,7 +539,7 @@ const FIELDS = {
   address: {label: "Hostname or IP", ops: {begins: "begins with", contains: "contains", ends: "ends with", is: "is", not: "is not", notcontains: "doesn't contain", regex: "matches pattern"}, ph: ".example.local"},
   ip:      {label: "IP range", ops: {in: "is in", notin: "is not in"}, ph: "10.0.1.0/24 or 10.0.1.10-50 or 10.0.1.*"},
   os:      {label: "Operating system", ops: {is: "is", not: "is not"}, values: {windows: "Windows (agent)", linux: "Linux (agent)", none: "No agent"}},
-  status:  {label: "Status", ops: {is: "is", not: "is not"}, values: {problem: "Needs attention (down, degraded or missed a check)", red: "Down", degraded: "Degraded", amber: "Unresponsive", maintenance: "Paused", green: "Up", unknown: "Pending"}},
+  status:  {label: "Status", ops: {is: "is", not: "is not"}, values: {problem: "Needs attention (down, degraded or missed a check)", red: "Down", degraded: "Degraded", amber: "Unresponsive", maintenance: "Paused or off schedule", offschedule: "Off schedule", green: "Up", unknown: "Pending"}},
   role:    {label: "Server role (agent)", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "Domain controller, IIS, Immich"},
   check:   {label: "Service check", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "SQL, HTTPS, Plex"},
   uptime:  {label: "Uptime (24 h)", ops: {below: "is below %", above: "is above %"}, ph: "99.5"},
@@ -559,7 +596,7 @@ function ruleMatch(h, r) {
       return r.op === "in" ? hit : !hit;
     }
     case "os": return (osOf(h) === v) === (r.op === "is");
-    case "status": return (v === "problem" ? PROBLEM.has(h.status) : h.status === v) === (r.op === "is");
+    case "status": return (v === "problem" ? PROBLEM.has(h.status) : v === "offschedule" ? !!h.off_schedule : h.status === v) === (r.op === "is");
     case "role": { const roles = ((h.agent && h.agent.roles) || []).join(" | ").toLowerCase();
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => roles.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "check": { const hay = h.services.filter(s => !s.agent).map(s => (s.label + " " + s.target).toLowerCase()).join(" | ");
@@ -1263,6 +1300,32 @@ document.getElementById("haResults").addEventListener("click", e => {
   b.outerHTML = `<span class="ignored">Added</span>`;
 });
 
+// Monitoring schedule editor
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function schedRow(w) {
+  const div = document.createElement("div");
+  div.className = "swin";
+  div.innerHTML = `<span class="days">${DAYS.map((d, i) => `<label><input type="checkbox" value="${i}"${w.days.includes(i) ? " checked" : ""}><span>${d}</span></label>`).join("")}</span>
+    <input type="time" class="sStart" value="${esc(w.start)}" aria-label="From"> to <input type="time" class="sEnd" value="${esc(w.end === "24:00" ? "00:00" : w.end)}" aria-label="To">
+    <button type="button" class="danger mini" title="Remove this window">✕</button>`;
+  div.querySelector("button").addEventListener("click", () => div.remove());
+  document.getElementById("schedWins").append(div);
+}
+function setSchedMode(mode) {
+  document.querySelectorAll('input[name="schedMode"]').forEach(r => r.checked = r.value === mode);
+  document.getElementById("schedBox").hidden = mode !== "times";
+  if (mode === "times" && !document.querySelector("#schedWins .swin")) schedRow({days: [0, 1, 2, 3, 4], start: "08:00", end: "18:00"});
+}
+document.querySelectorAll('input[name="schedMode"]').forEach(r => r.addEventListener("change", () => setSchedMode(r.value)));
+document.getElementById("schedAdd").addEventListener("click", () => schedRow({days: [0, 1, 2, 3, 4], start: "08:00", end: "18:00"}));
+function readSchedule() {
+  if (!document.querySelector('input[name="schedMode"][value="times"]').checked) return null;
+  return {grace: +document.getElementById("schedGrace").value || 0,
+    windows: [...document.querySelectorAll("#schedWins .swin")].map(el => ({
+      days: [...el.querySelectorAll(".days input:checked")].map(c => +c.value),
+      start: el.querySelector(".sStart").value, end: el.querySelector(".sEnd").value === "00:00" ? "24:00" : el.querySelector(".sEnd").value}))};
+}
+
 function addCustomRow(value = "") {
   const row = document.createElement("div");
   row.className = "custom";
@@ -1287,6 +1350,10 @@ async function openDialog(h) {
     const cb = presetNames.has(k) && form.querySelector(`.preset input[value="${CSS.escape(k)}"]`);
     if (cb) cb.checked = true; else addCustomRow(c);
   }
+  document.getElementById("schedWins").innerHTML = "";
+  document.getElementById("schedGrace").value = h && h.schedule ? h.schedule.grace : 15;
+  if (h && h.schedule) h.schedule.windows.forEach(schedRow);
+  setSchedMode(h && h.schedule ? "times" : "always");
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -1305,7 +1372,8 @@ form.addEventListener("submit", async e => {
   const err = document.getElementById("formErr");
   const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
-  const body = {name: fName.value.trim(), host: fHost.value.trim(), checks};
+  const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule()};
+  if (body.schedule && !body.schedule.windows.length) { err.textContent = "Add at least one time window, or choose All the time."; return; }
   if (!body.name) { err.textContent = "Name is required."; return fName.focus(); }
   if (!body.host) { err.textContent = "Enter an IP address or hostname."; return fHost.focus(); }
   const save = document.getElementById("saveDlg");
