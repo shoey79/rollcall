@@ -63,7 +63,7 @@ button.primary:hover{background:color-mix(in srgb,var(--accent) 85%,#000)}
 #addHost{font-size:13px;padding:7px 14px}
 body.view-only .edit-only{display:none !important}
 .viewonly{display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:var(--card)}
-body.view-only .viewonly{display:inline-block}
+body.view-only.loaded .viewonly{display:inline-block}
 .actions{display:flex;gap:6px}
 .empty button{margin-top:10px;font-size:13px;padding:7px 14px}
 /* Add/Edit dialog */
@@ -205,7 +205,8 @@ table.small tr.dim td{opacity:.55}
 }
 </style>
 </head>
-<body>
+<!-- Starts view-only: admin controls only appear once the add-on confirms this user can make changes. -->
+<body class="view-only">
 <main>
   <header>
     <div>
@@ -828,12 +829,13 @@ async function load() {
     const r = await fetch("api/status", {cache: "no-store"});
     if (!r.ok) throw new Error(r.status);
     data = await r.json();
-    const viewOnly = data.can_edit === false;
+    const viewOnly = data.can_edit !== true;  // fail closed
     const pend = data.agents_pending || 0, badge = document.getElementById("pendBadge");
     badge.hidden = !pend; badge.textContent = pend;
     badge.title = pend ? `${pend} server(s) waiting for approval` : "";
     document.body.classList.toggle("view-only", viewOnly);
-    if (viewOnly && document.getElementById("dlg").open) document.getElementById("dlg").close();
+    document.body.classList.add("loaded");
+    if (viewOnly) ["dlg", "agDlg", "bkDlg", "tabDlg"].forEach(id => { const d = document.getElementById(id); if (d && d.open) d.close(); });
     document.getElementById("err").hidden = true;
     render();
   } catch (e) {
