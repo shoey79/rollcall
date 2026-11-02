@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.8.1 - 2026-11-02
+
+### Fixed
+- For a moment after the page loaded, view-only users could see and click admin buttons (Agents, Export / import, Add computer, Reset all uptime) until their permissions arrived. The page now starts view-only and only shows admin controls once the add-on confirms the user can make changes; if that check fails, it stays view-only. Any admin dialog that's open is closed if the user turns out to be view-only. The add-on already refused those actions for view-only users (HTTP 403), so no data or settings were exposed.
+
 ## 1.8.0 - 2026-11-02
 
 ### Added
