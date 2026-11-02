@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.3 - 2026-11-02
+
+### Fixed
+- An agent could attach to the wrong dashboard entry when the server also holds another monitored address, such as an Exchange DAG or failover-cluster IP on whichever node owns it: the agent's checks showed on the DAG entry and not on the server. Agents are now matched by name before IP (and, by IP, their primary address first). An agent already attached by IP to an entry that isn't its server moves to the entry with its name at the next start or report, and the leftover agent sensors on the other entry are removed.
+- Log messages say "agent" rather than "Windows agent", since they cover Linux agents too.
+
 ## 1.9.2 - 2026-11-02
 
 ### Changed

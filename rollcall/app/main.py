@@ -1037,7 +1037,7 @@ class Host:
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
     removed: bool = False              # deleted while a check was in flight
-    agent_id: str | None = None        # linked Windows agent
+    agent_id: str | None = None        # linked agent
     agent_checks: list[Service] = field(default_factory=list)
     agent_report: dict | None = None   # latest report from the agent
     agent_seen: float | None = None    # when it arrived
@@ -1226,7 +1226,7 @@ class Monitor:
             await self.ha.delete_state(eid)
         if h.agent_id and self.agents and h.agent_id in self.agents.agents:
             a = self.agents.revoke(h.agent_id)
-            log.info("Revoked the Windows agent on %s along with it", a["hostname"])
+            log.info("Revoked the agent on %s along with it", a["hostname"])
         log.info("Deleted %s (%s)", h.name, h.host)
 
     @staticmethod
@@ -1607,7 +1607,7 @@ class Monitor:
                 payload["data"] = data
             await self.ha.service("notify", svc, payload)
 
-    # -- Windows agents -----------------------------------------------------
+    # -- Agents ------------------------------------------------------------
     LEVEL_STATUS = {agentlib.OK: GREEN, agentlib.WARN: AMBER, agentlib.CRIT: RED}
 
     async def attach_agents(self, store: AgentStore) -> None:
@@ -1615,6 +1615,7 @@ class Monitor:
         self.agents = store
         for agent in list(store.agents.values()):
             h = self.hosts.get(agent.get("host_key") or "") or self._find_host_for(agent)
+            h = await self._relink_if_better(agent, h)
             if not h:
                 continue
             h.agent_id = agent["id"]
@@ -1627,24 +1628,76 @@ class Monitor:
                 await self._apply(h, agent, agentlib.normalize_report(saved["report"]), saved.get("received") or time.time(), restoring=True)
         n = sum(1 for h in self.hosts.values() if h.agent_id)
         if store.agents or store.pending:
-            log.info("Windows agents: %d approved (%d on the dashboard), %d waiting for approval",
+            log.info("Agents: %d approved (%d on the dashboard), %d waiting for approval",
                      len(store.agents), n, len(store.pending))
 
-    def _find_host_for(self, agent: dict) -> Host | None:
+    @staticmethod
+    def _name_match(h: Host, agent: dict) -> bool:
         hostname = (agent.get("hostname") or "").lower()
         fqdn = (agent.get("fqdn") or "").lower()
-        ips = set(agent.get("ips") or [])
-        for h in self.hosts.values():
-            if h.agent_id and h.agent_id != agent.get("id"):
-                continue
-            names = {h.name.lower(), h.host.lower(), h.host.lower().split(".")[0]}
-            if hostname in names or (fqdn and fqdn in names) or h.host in ips or (h.ip and h.ip in ips):
+        names = {h.name.lower(), h.host.lower(), h.host.lower().split(".")[0]}
+        return bool(hostname and hostname in names) or bool(fqdn and fqdn in names)
+
+    def _find_host_for(self, agent: dict) -> Host | None:
+        """The dashboard entry for an agent: by name first, then by IP.
+
+        Name first because a server can hold extra addresses that have their own
+        entry, e.g. a DAG or failover-cluster IP on whichever node owns it. Among
+        IP matches, the agent's first (primary) address wins."""
+        free = [h for h in self.hosts.values() if not h.agent_id or h.agent_id == agent.get("id")]
+        for h in free:
+            if self._name_match(h, agent):
                 return h
+        for ip in agent.get("ips") or []:
+            for h in free:
+                if h.host == ip or h.ip == ip:
+                    return h
         return None
+
+    AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
+                        "defender", "security", "events", "immich", "storage")
+
+    async def _unlink(self, h: Host, report: dict | None = None) -> None:
+        """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
+
+        At start-up its checks haven't been rebuilt yet, so the entities it could
+        have made in Home Assistant are removed by name too."""
+        base = f"sensor.ping_monitor_{h.key}"
+        for k in self.AGENT_CHECK_KEYS:
+            await self.dismiss(f"ping_monitor_{h.key}__agent_{k}")
+            await self.ha.delete_state(f"{base}_agent_{k}")
+        for s in h.agent_checks:
+            await self.dismiss(f"ping_monitor_{svc_key(h, s)}")
+            await self.ha.delete_state(svc_entity(h, s))
+        if report and not h.agent_report:
+            h.agent_report = report
+        for eid in set(self._metric_entities(h)) | {f"{base}_cpu", f"{base}_memory"}:
+            await self.ha.delete_state(eid)
+        h.agent_id, h.agent_checks, h.agent_report, h.agent_seen = None, [], None, None
+        h.agent_history = {"events": [], "security": [], "detections": [], "failed_logons": []}
+        if h.status == DEGRADED and not any(s.status == RED for s in h.services):
+            h.status = GREEN
+        await self.publish(h)
+
+    async def _relink_if_better(self, agent: dict, h: Host | None) -> Host | None:
+        """Move an agent off an entry matched only by IP when one matches its name."""
+        if h is None or self._name_match(h, agent):
+            return h
+        best = self._find_host_for(agent)
+        if best and best is not h and self._name_match(best, agent):
+            log.info("Moving the %s agent from %s (matched by IP) to %s (matches its name)",
+                     agent.get("hostname"), h.name, best.name)
+            saved = self.agents.load_report(agent["id"]) or {}
+            await self._unlink(h, agentlib.normalize_report(saved["report"]) if saved.get("report") else None)
+            agent["host_key"] = best.key
+            self.agents.save()
+            return best
+        return h
 
     async def _link(self, agent: dict, create: bool) -> Host | None:
         h = self.hosts.get(agent.get("host_key") or "")
         if h and h.agent_id in (None, agent["id"]):
+            h = await self._relink_if_better(agent, h)
             h.agent_id = agent["id"]
             return h
         h = self._find_host_for(agent)
@@ -1652,7 +1705,7 @@ class Monitor:
             # Prefer the IP: .local AD names often don't resolve from Home Assistant.
             addr = (agent.get("ips") or [None])[0] or agent.get("fqdn") or agent["hostname"]
             h = await self.add_host({"name": agent["hostname"], "host": addr, "checks": []})
-            log.info("Added %s to the dashboard for its Windows agent", h.name)
+            log.info("Added %s to the dashboard for its agent", h.name)
         if h:
             h.agent_id = agent["id"]
             agent["host_key"] = h.key
@@ -1660,7 +1713,7 @@ class Monitor:
         return h
 
     async def agent_pending_notice(self, rec: dict) -> None:
-        log.info("Windows agent on %s (%s) is asking to join; approve it in Windows agents",
+        log.info("Agent on %s (%s) is asking to join; approve it under Agents",
                  rec["hostname"], ", ".join(rec.get("ips") or []) or rec.get("source_ip"))
         what = "replace its existing agent" if rec.get("replaces") else "join"
         await self.persist(f"ping_monitor_pending_{rec['id']}", "Rollcall: agent waiting for approval",
@@ -1671,13 +1724,13 @@ class Monitor:
         agent = self.agents.approve(pid)
         await self.dismiss(f"ping_monitor_pending_{pid}")
         h = await self._link(agent, create=True)
-        log.info("Approved the Windows agent on %s%s", agent["hostname"], f" (dashboard: {h.name})" if h else "")
+        log.info("Approved the agent on %s%s", agent["hostname"], f" (dashboard: {h.name})" if h else "")
         return agent
 
     async def reject_agent(self, pid: str) -> dict:
         rec = self.agents.reject(pid)
         await self.dismiss(f"ping_monitor_pending_{pid}")
-        log.info("Rejected the Windows agent request from %s", rec["hostname"])
+        log.info("Rejected the agent request from %s", rec["hostname"])
         return rec
 
     async def revoke_agent(self, aid: str) -> dict:
@@ -1693,7 +1746,7 @@ class Monitor:
                 h.agent_history = {"events": [], "security": [], "detections": [], "failed_logons": []}
                 await self._recompute(h)
                 await self.publish(h)
-        log.info("Revoked the Windows agent on %s", agent["hostname"])
+        log.info("Revoked the agent on %s", agent["hostname"])
         return agent
 
     async def receive_report(self, agent: dict, report: dict, source_ip: str | None) -> None:
@@ -2344,7 +2397,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         await monitor.set_disk(h, disk, warn, crit)
         return web.json_response({"ok": True})
 
-    # -- Windows agents (admin) ---------------------------------------------
+    # -- Agents (admin) ---------------------------------------------------
     def _agent_row(a):
         h = monitor.hosts.get(a.get("host_key") or "")
         return {"id": a["id"], "hostname": a["hostname"], "fqdn": a.get("fqdn"), "ips": a.get("ips") or [],
@@ -2397,7 +2450,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
 
     async def agents_rotate(_req):
         monitor.agents.rotate_key()
-        log.info("Rotated the Windows agent enrolment key")
+        log.info("Rotated the agent enrolment key")
         return web.json_response({"key_hint": "…" + monitor.agents.enrol_key[-4:]})
 
     async def agents_script(req):
@@ -2777,7 +2830,7 @@ def _script_version() -> str | None:
 
 
 def build_agent_app(monitor: Monitor) -> web.Application:
-    """The small API the Windows agents talk to, on its own LAN port.
+    """The small API the agents talk to, on its own LAN port.
 
     Only enrol and report live here; the dashboard stays behind HA ingress.
     """
@@ -2901,7 +2954,7 @@ async def main() -> None:
             agent_runner = web.AppRunner(build_agent_app(monitor), access_log=None)
             await agent_runner.setup()
             await web.TCPSite(agent_runner, "0.0.0.0", AGENT_PORT, ssl_context=ctx).start()
-            log.info("Windows agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
+            log.info("Agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
         except Exception as err:  # noqa: BLE001
             log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
         await monitor.run()
