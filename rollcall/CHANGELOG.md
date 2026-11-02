@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0 - 2026-11-02
+
+### Changed
+- **Agents page** reorganised: the address agents report to, then side-by-side Windows and Linux sections with the same layout (requirements, download, install, options, update, remove, troubleshoot).
+- **Security rating up from 6 to 8.** The add-on no longer asks for the `NET_RAW` privilege (ping uses unprivileged ICMP sockets) and now has its own AppArmor profile, which limits what it can run and where it can write.
+
+### Added
+- If a system doesn't allow unprivileged ping, Rollcall logs it, says so on the dashboard, and checks hosts over TCP instead (up if any common port, or one of the host's service-check ports, answers or refuses).
+
 ## 1.8.1 - 2026-11-02
 
 ### Fixed

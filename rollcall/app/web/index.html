@@ -160,6 +160,16 @@ table.small tr.dim td{opacity:.55}
 .diskset label{display:inline-flex;align-items:center;gap:4px}
 .diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 .old{color:var(--amber)}
+.osgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.oscard{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--bg);font-size:13px;line-height:1.5;min-width:0;overflow-wrap:anywhere}
+.oscard code{font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;word-break:break-all}
+.oscard .oshead{display:flex;justify-content:space-between;align-items:baseline}
+.oscard h4{margin:0;font-size:15px}
+.oscard h5{margin:12px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.oscard p{margin:2px 0}
+.oscard .osreq{color:var(--muted);margin:2px 0 10px}
+.oscard .steps{margin-top:2px}
+@media (max-width:760px){.osgrid{grid-template-columns:1fr}}
 .schedopt{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:4px 0}
 .schedopt input{margin-top:3px;accent-color:var(--accent)}
 .swin{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin:8px 0}
@@ -246,7 +256,7 @@ table.small tr.dim td{opacity:.55}
 
 <dialog id="agDlg" class="wide">
   <form method="dialog">
-    <div class="dlg-head"><h2>Agents</h2><div class="sub">One script for every Windows server and one for Linux servers. Each works out what the server runs and reports disk space, services, logs and security.</div></div>
+    <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents only send reports; they never take instructions.</div></div>
     <div class="dlg-body" id="agBody"></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
   </form>
@@ -496,7 +506,7 @@ function render() {
   document.getElementById("summary").innerHTML = chips.map(s =>
     `<span class="chip"><span class="dot ${s}"></span>${counts[s]} <small>${LABEL[s]}</small></span>`).join("");
   document.getElementById("meta").textContent =
-    `${data.hosts.length} host${data.hosts.length === 1 ? "" : "s"} · checked every ${every(data.interval)}${data.retry_interval !== data.interval ? `, re-checked after ${every(data.retry_interval)} on a miss` : ""} · updated ${new Date().toLocaleTimeString()}`;
+    `${data.hosts.length} host${data.hosts.length === 1 ? "" : "s"} · checked every ${every(data.interval)}${data.retry_interval !== data.interval ? `, re-checked after ${every(data.retry_interval)} on a miss` : ""}${data.ping_mode === "tcp" ? " · checked by TCP (ping isn't permitted on this system)" : ""} · updated ${new Date().toLocaleTimeString()}`;
 
   renderTabs();
   const tab = currentTab();
@@ -1161,29 +1171,44 @@ function renderAgents() {
   const known = a.agents.concat(a.pending).map(x => (x.fqdn || "").split(".").slice(1).join(".")).find(Boolean);
   const share = `\\\\${esc(known || "your-domain")}\\NETLOGON`;
   let html = "";
-  html += sect("1. Get the script", `
-    <div class="row-inline"><input type="text" id="agServer" value="${esc(defaultServer())}" spellcheck="false" aria-label="Address the servers use to reach Home Assistant">
-      <button type="button" class="primary" id="agDownload">Download PingMonitorAgent.ps1</button></div>
+  html += sect("1. Where the agents report to", `
+    <div class="row-inline"><input type="text" id="agServer" value="${esc(defaultServer())}" spellcheck="false" aria-label="Address the servers use to reach Home Assistant"></div>
     ${a.ssl ? `<label class="row-inline" style="margin-top:6px;font-size:13px"><input type="checkbox" id="agIgnoreCert"> Accept a self-signed certificate</label>` : ""}
-    <p class="hint">The address your servers use to reach Home Assistant on port ${a.port}. Use the IP if they can't resolve the name.
-    The script has this address and the enrolment key built in.</p>`);
-  html += sect("2. Install it on your Windows servers", `<ol class="steps">
-    <li>Copy <code>PingMonitorAgent.ps1</code> to <code>${share}</code> (or any share the servers can read).</li>
-    <li>Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add
-      <code>powershell.exe</code> with parameters <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\PingMonitorAgent.ps1 -Install</code>.
-      Servers pick it up at their next restart. Re-running is safe and also updates the installed copy.</li>
-    <li>Or, without waiting for a restart, run that same command once on a server as an administrator.</li>
-    <li>Or with MECM: <i>Software Library → Scripts → Create Script</i>, import the downloaded file, approve it, then right-click a device collection → <i>Run Script</i> and set <b>Action</b> to <code>Install</code>. Leave the other parameters as they are.</li>
-    <li>Each server installs a SYSTEM scheduled task that reports every 5 minutes, then appears below for approval.</li></ol>`);
-  html += sect("Linux servers (e.g. Immich on Ubuntu)", `
-    <div class="row-inline"><button type="button" id="agDownloadLinux">Download pingmonitor-agent.py</button>
-      ${a.latest_linux_version ? `<small class="muted">version ${esc(a.latest_linux_version)}</small>` : ""}</div>
-    <ol class="steps">
-    <li>Uses the same address as above. Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code></li>
-    <li>On the server run <code>sudo python3 pingmonitor-agent.py --install</code>. Needs Python 3.8 or later (Ubuntu 20.04 and newer have it); nothing else to install.</li>
-    <li>For Immich job queues and library statistics, add an API key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> and <code>job.read</code> (or <code>queue.read</code>) permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs <code>all</code>):
-      <code>sudo python3 pingmonitor-agent.py --install --immich-api-key KEY</code>. Without one it still checks Immich answers and its containers are healthy.</li>
-    <li>It installs a systemd timer that reports every 5 minutes, then appears below for approval. <code>--report</code> shows what it would send; <code>--uninstall</code> removes it.</li></ol>`);
+    <p class="hint">The address your servers use to reach Home Assistant on port ${a.port}; use the IP if they can't resolve the name.
+    Both downloads have this address and the enrolment key built in, so set it before downloading.</p>`);
+  const card = (o) => `<div class="oscard">
+      <div class="oshead"><h4>${o.title}</h4><small class="muted">${o.version ? "version " + esc(o.version) : ""}</small></div>
+      <p class="osreq">${o.req}</p>
+      <button type="button" class="primary" id="${o.btn}">Download ${o.file}</button>
+      <h5>Install</h5><ol class="steps">${o.install.map(x => `<li>${x}</li>`).join("")}</ol>
+      ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
+      <h5>Update</h5><p>${o.update}</p>
+      <h5>Remove</h5><p>${o.remove}</p>
+      <h5>Troubleshoot</h5><p>${o.trouble}</p>
+    </div>`;
+  html += sect("2. Download and install", `<div class="osgrid">${card({
+      title: "Windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
+      req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
+      install: [
+        `Copy the file to <code>${share}</code> or another share the servers can read.`,
+        `Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add <code>powershell.exe</code> with <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\PingMonitorAgent.ps1 -Install</code>. Applies at the next restart.`,
+        `Or run that command once as an administrator to start straight away, or use MECM: <i>Software Library → Scripts</i>, import the file, approve it, then <i>Run Script</i> on a collection with <b>Action</b> set to <code>Install</code>.`,
+        `It creates a scheduled task that runs as SYSTEM every 5 minutes, and the server appears below for approval.`],
+      update: "Replace the file on the share; servers update at their next restart, or run <code>-Install</code> again.",
+      remove: "<code>-Uninstall</code> on the server, then <b>Revoke</b> below.",
+      trouble: "<code>-ShowReport</code> prints what it would send. Log: <code>C:\\ProgramData\\PingMonitor\\agent.log</code>."
+    })}${card({
+      title: "Linux", version: a.latest_linux_version, btn: "agDownloadLinux", file: "pingmonitor-agent.py",
+      req: "Ubuntu 20.04 or later, or any systemd Linux with Python 3.8 or later; nothing to install.",
+      install: [
+        "Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code>",
+        "On the server run <code>sudo python3 pingmonitor-agent.py --install</code>.",
+        "It copies itself to <code>/usr/local/lib/pingmonitor</code> and adds a systemd timer that runs as root every 5 minutes, and the server appears below for approval."],
+      options: `Immich job queues and library statistics: add <code>--immich-api-key KEY</code>, a key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> and <code>job.read</code> (or <code>queue.read</code>). Immich elsewhere than a local container: <code>--immich-url http://host:2283</code>.`,
+      update: "Download it again and run <code>--install</code> again; settings and approval are kept.",
+      remove: "<code>sudo python3 /usr/local/lib/pingmonitor/pingmonitor-agent.py --uninstall</code>, then <b>Revoke</b> below.",
+      trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/pingmonitor/agent.log</code>; <code>systemctl status pingmonitor-agent</code>."
+    })}</div>`);
   html += sect(`Waiting for approval (${a.pending.length})`, a.pending.length ? tbl(["Server", "Address", "Operating system", "Asked", ""], a.pending.map(p =>
     `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
       <td>${esc((p.ips || []).join(", "))}<br><small class="muted">sent from ${esc(p.source_ip || "?")}</small></td><td>${esc(p.os || "")}</td><td>${ago(p.requested_at, now)}</td>
