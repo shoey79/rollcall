@@ -757,10 +757,19 @@ document.getElementById("bkFile").addEventListener("change", e => { document.get
 document.getElementById("bkImport").addEventListener("click", async e => {
   const f = document.getElementById("bkFile").files[0], st = document.getElementById("bkStatus");
   if (!f || !confirm(`Replace everything on this install with ${f.name}? The add-on restarts afterwards.`)) return;
-  e.target.disabled = true; st.textContent = "Uploading and checking…";
+  e.target.disabled = true;
   try {
-    const r = await fetch("api/import?options=" + (document.getElementById("bkOptions").checked ? 1 : 0),
-      {method: "POST", headers: {"Content-Type": "application/zip"}, body: f});
+    // Upload in 1 MB pieces: Home Assistant's ingress proxy rejects large requests (HTTP 413).
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(10)), x => x.toString(16).padStart(2, "0")).join("");
+    const CHUNK = 1024 * 1024;
+    for (let off = 0; off < f.size; off += CHUNK) {
+      st.textContent = `Uploading… ${Math.round(100 * off / f.size)}%`;
+      const c = await fetch(`api/import/chunk?upload=${id}&offset=${off}`,
+        {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: f.slice(off, off + CHUNK)});
+      if (!c.ok) { const d = await c.json().catch(() => ({})); throw new Error(d.error || `upload failed (${c.status})`); }
+    }
+    st.textContent = "Checking the export…";
+    const r = await fetch(`api/import?upload=${id}&options=` + (document.getElementById("bkOptions").checked ? 1 : 0), {method: "POST"});
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { st.textContent = d.error || `Import failed (${r.status})`; e.target.disabled = false; return; }
     const m = d.manifest || {};
