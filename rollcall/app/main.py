@@ -617,7 +617,67 @@ async def resolve(host: str) -> str | None:
         return None
 
 
-async def ping(ip: str, count: int, timeout: int) -> tuple[bool, float | None]:
+# The add-on doesn't ask for the NET_RAW privilege: ping uses unprivileged ICMP
+# sockets, which Docker allows by default. If this system doesn't, hosts are
+# checked by TCP instead (any answer, even "connection refused", means it's up).
+PING_MODE = "icmp"
+PING_BLOCKED = re.compile(r"socket:|Operation not permitted|Lacking privilege|permission denied|not supported by protocol", re.I)
+TCP_PROBE_PORTS = [445, 3389, 22, 443, 80, 135, 53, 8080, 8443, 139]
+
+
+async def detect_ping_mode() -> str:
+    """Try pinging this container's own loopback once at start-up."""
+    global PING_MODE
+    try:
+        proc = await asyncio.create_subprocess_exec("ping", "-n", "-c", "1", "-W", "1", "127.0.0.1",
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        text = out.decode(errors="replace")
+        if proc.returncode == 0:
+            PING_MODE = "icmp"
+        elif PING_BLOCKED.search(text):
+            PING_MODE = "tcp"
+            log.warning("This system doesn't allow ping without extra privileges (%s). Hosts will be checked by "
+                        "TCP instead: a host counts as up if any common port answers, even with 'refused'.",
+                        text.strip().splitlines()[-1][:120])
+    except (FileNotFoundError, asyncio.TimeoutError, OSError) as err:
+        PING_MODE = "tcp"
+        log.warning("ping isn't usable (%s); checking hosts by TCP instead", err)
+    return PING_MODE
+
+
+async def tcp_alive(ip: str, ports: list[int], timeout: float) -> tuple[bool, float | None]:
+    """Up if any port connects or actively refuses; down if they all time out."""
+    async def one(port):
+        t0 = time.monotonic()
+        try:
+            _r, w = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout)
+            w.close()
+            return (time.monotonic() - t0) * 1000
+        except ConnectionRefusedError:
+            return (time.monotonic() - t0) * 1000
+        except (asyncio.TimeoutError, OSError):
+            return None
+    tasks = [asyncio.create_task(one(p)) for p in ports]
+    try:
+        for fut in asyncio.as_completed(tasks):
+            ms = await fut
+            if ms is not None:
+                return True, round(ms, 1)
+        return False, None
+    finally:
+        for t in tasks:
+            t.cancel()
+
+
+async def ping(ip: str, count: int, timeout: int, ports: list[int] | None = None) -> tuple[bool, float | None]:
+    if PING_MODE == "tcp":
+        seen, order = set(), []
+        for p in (ports or []) + TCP_PROBE_PORTS:
+            if p and p not in seen:
+                seen.add(p)
+                order.append(p)
+        return await tcp_alive(ip, order[:16], max(1.0, float(timeout)))
     cmd = ["ping", "-n", "-c", str(count), "-W", str(timeout), "-i", "0.5", ip]
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1308,7 +1368,8 @@ class Monitor:
                 if ip:
                     h.ip = ip
                     ok, latency = await ping(
-                        ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"])
+                        ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
+                        [s.port for s in h.services if s.port],
                     )
                 else:
                     ok, latency = False, None
@@ -2038,6 +2099,7 @@ class Monitor:
         return {"now": time.time(), "interval": self.interval,
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
+                "ping_mode": PING_MODE,
                 "hosts": hosts}
 
 
@@ -2813,6 +2875,8 @@ async def main() -> None:
             url = f"/{slug}"
         monitor.click_url = url if url.startswith(("/", "http://", "https://")) else "/" + url
         log.info("Phone notifications will open %s", monitor.click_url)
+        await detect_ping_mode()
+        log.info("Checking hosts by %s", "ping" if PING_MODE == "icmp" else "TCP (ping isn't permitted)")
         global TZ
         cfg = await ha.get_json("/config")
         try:

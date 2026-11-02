@@ -1,5 +1,5 @@
 name: Rollcall
-version: "1.8.1"
+version: "1.9.0"
 slug: ping_monitor
 description: "Who's up, and how are they doing? Server monitoring by ping, service checks, Home Assistant sensors and optional Windows and Linux agents (disk, services, containers, logs, security, updates), with a dashboard and alerts."
 url: https://github.com/shoey79/rollcall
@@ -16,8 +16,6 @@ panel_title: Rollcall
 panel_admin: false
 homeassistant_api: true
 hassio_api: true
-privileged:
-  - NET_RAW
 ports:
   8100/tcp: 8100
 ports_description:
