@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.2 - 2026-11-02
+
+### Fixed
+- Importing an export failed with "Import failed (413)" when the file was more than a few MB. Home Assistant's ingress proxy rejects large uploads, so the dashboard now uploads the file in 1 MB pieces, showing progress, and imports it once it's all there. Existing export files work as they are.
+
 ## 1.6.1 - 2026-11-02
 
 ### Fixed

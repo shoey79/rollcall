@@ -2001,8 +2001,46 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         return web.Response(body=data, content_type="application/zip",
                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
-    async def import_data(req):
+    # Home Assistant's ingress proxy refuses large request bodies (HTTP 413), so the
+    # dashboard uploads an export in pieces and then asks for it to be imported.
+    upload_dir = DB_PATH.parent / "uploads"
+
+    def _upload_path(req) -> Path:
+        uid = req.query.get("upload", "")
+        if not re.match(r"^[a-z0-9]{8,32}$", uid):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "bad upload id"}), content_type="application/json")
+        return upload_dir / f"{uid}.zip"
+
+    async def import_chunk(req):
+        path = _upload_path(req)
+        try:
+            offset = int(req.query.get("offset", "-1"))
+        except ValueError:
+            offset = -1
         data = await req.read()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for old in upload_dir.glob("*.zip"):  # tidy abandoned uploads
+            if time.time() - old.stat().st_mtime > 3600 and old != path:
+                old.unlink(missing_ok=True)
+        size = path.stat().st_size if path.exists() else 0
+        if offset != size:
+            return web.json_response({"error": f"piece out of order (have {size} bytes, got offset {offset})", "size": size}, status=409)
+        if size + len(data) > 1024 ** 3:
+            path.unlink(missing_ok=True)
+            return web.json_response({"error": "The export is too large"}, status=400)
+        with open(path, "ab") as f:
+            f.write(data)
+        return web.json_response({"size": size + len(data)})
+
+    async def import_data(req):
+        if req.query.get("upload"):
+            path = _upload_path(req)
+            if not path.exists():
+                return web.json_response({"error": "Upload not found; try again"}, status=400)
+            data = await asyncio.to_thread(path.read_bytes)
+            path.unlink(missing_ok=True)
+        else:
+            data = await req.read()
         try:
             manifest = await asyncio.to_thread(stage_restore, data)
         except ValueError as err:
@@ -2279,6 +2317,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/views", views_get)
     app.router.add_get("/api/export", editor_only(export_data))
     app.router.add_post("/api/import", editor_only(import_data))
+    app.router.add_post("/api/import/chunk", editor_only(import_chunk))
     app.router.add_get("/api/ha/entities", editor_only(ha_entities))
     app.router.add_put("/api/views", editor_only(views_put))
     app.router.add_post("/api/check/{key}", check_now)  # harmless, so open to all viewers
