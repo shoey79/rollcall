@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rollcall</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#1b2027;--muted:#5d6a79;--line:#e2e6eb;--green:#1f9d55;--amber:#d99a00;--red:#d64545;--grey:#9aa5b1;--accent:#2b6cb0;--blue:#3b6fd8;--orange:#e8590c}
+@media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1a1f25;--text:#e6e9ed;--muted:#97a3b0;--line:#2a313a;--green:#3ccf7a;--amber:#f2b632;--red:#f06565;--grey:#5f6b7a;--accent:#63a4ff;--blue:#6f9dff;--orange:#ff8a3d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1240px;margin:0 auto;padding:20px 16px 40px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
+h1{font-size:20px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12px}
+.summary{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-weight:600;font-variant-numeric:tabular-nums}
+.chip small{font-weight:500;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:none;background:var(--grey)}
+.dot.green{background:var(--green)}.dot.amber{background:var(--amber)}.dot.red{background:var(--red);animation:pulse 1.6s ease-out infinite}.dot.maintenance{background:var(--blue)}.dot.degraded{background:var(--orange)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--red) 60%,transparent)}100%{box-shadow:0 0 0 8px transparent}}
+.toolbar{display:flex;gap:8px;margin-bottom:12px}
+input[type=search]{flex:1;max-width:320px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font:inherit}
+.wrap{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--text)}
+th.sortable .arrow{display:inline-block;width:10px;margin-left:4px;opacity:.35}
+th.sortable.sorted{color:var(--accent)}
+th.sortable.sorted .arrow{opacity:1}
+#sortMobile{display:none;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font:inherit}
+tr.red td{background:color-mix(in srgb,var(--red) 7%,transparent)}
+tr.amber td{background:color-mix(in srgb,var(--amber) 7%,transparent)}
+tr.maintenance td{background:color-mix(in srgb,var(--blue) 7%,transparent)}
+tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
+.svcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:250px}
+.svc{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:16px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-weight:500;cursor:default}
+.svc i{width:7px;height:7px;border-radius:50%;background:var(--grey);flex:none}
+.svc.green i{background:var(--green)}.svc.amber i{background:var(--amber)}
+.svc.red{color:var(--orange);border-color:color-mix(in srgb,var(--orange) 45%,var(--line));font-weight:600}
+.svc.red i{background:var(--orange)}
+.status{display:flex;align-items:center;gap:8px;font-weight:600}
+.note{color:var(--muted);font-size:12px;font-weight:400;margin:2px 0 0 18px;white-space:normal;max-width:150px;line-height:1.3}
+.name{font-weight:600}.host{color:var(--muted);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
+.num{font-variant-numeric:tabular-nums}
+.up-g{color:var(--green)}.up-a{color:var(--amber)}.up-r{color:var(--red)}
+.strip{display:flex;gap:1px;height:18px;width:144px;margin-top:3px}
+.strip span{flex:1;border-radius:1px;background:var(--grey);opacity:.25}
+.strip .g{background:var(--green);opacity:1}.strip .a{background:var(--amber);opacity:1}.strip .r{background:var(--red);opacity:1}.strip .m{background:var(--blue);opacity:.7}
+.muted{color:var(--muted)}
+button{font:inherit;font-size:12px;padding:5px 10px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--accent);cursor:pointer}
+button:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+button:disabled{opacity:.5;cursor:default}
+button.danger{color:var(--red)}
+button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
+#resetAll{margin-left:auto;font-size:13px;padding:7px 12px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.primary:hover{background:color-mix(in srgb,var(--accent) 85%,#000)}
+#addHost{font-size:13px;padding:7px 14px}
+body.view-only .edit-only{display:none !important}
+.viewonly{display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:var(--card)}
+body.view-only .viewonly{display:inline-block}
+.actions{display:flex;gap:6px}
+.empty button{margin-top:10px;font-size:13px;padding:7px 14px}
+/* Add/Edit dialog */
+dialog{border:1px solid var(--line);border-radius:12px;padding:0;background:var(--card);color:var(--text);width:min(680px,calc(100vw - 24px));max-height:calc(100vh - 24px)}
+dialog::backdrop{background:rgba(10,14,20,.45)}
+dialog form{display:flex;flex-direction:column;max-height:calc(100vh - 26px)}
+.dlg-head{padding:16px 20px 4px}
+.dlg-head h2{margin:0;font-size:17px}
+.dlg-body{padding:8px 20px 4px;overflow-y:auto}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:600}
+.field input,.custom input{font:inherit;font-size:14px;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.field input:focus,.custom input:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
+fieldset{border:none;padding:0;margin:0 0 14px}
+legend{font-size:12px;color:var(--muted);font-weight:600;padding:0;margin-bottom:6px}
+legend small{font-weight:400}
+.group-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 6px}
+.presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px}
+.preset{display:flex;min-width:0;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:var(--bg)}
+.preset:has(input:checked){border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--card))}
+.preset input{margin:2px 0 0;accent-color:var(--accent);flex:none}
+.preset b{display:block;font-size:13px;font-weight:600}
+.preset small{display:block;font-size:11px;color:var(--muted);line-height:1.35;margin-top:1px;overflow-wrap:anywhere}
+.preset-filter{width:100%;font:inherit;font-size:14px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);margin-bottom:6px}
+.preset-filter:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
+.preset[hidden],.pgroup[hidden]{display:none}
+.picked{font-size:12px;color:var(--muted);margin:0 0 4px;min-height:16px}
+.picked b{color:var(--text);font-weight:600}
+.custom{display:flex;gap:6px;margin-bottom:6px}
+.custom input{flex:1;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
+.hint{font-size:12px;color:var(--muted);margin:6px 0 0;line-height:1.5}
+.hint code{font-size:11.5px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.form-err{color:var(--red);font-size:13px;margin:0 20px;min-height:0}
+.form-err:empty{display:none}
+.dlg-foot{display:flex;justify-content:space-between;gap:8px;padding:12px 20px 16px;border-top:1px solid var(--line);margin-top:8px;flex-wrap:wrap}
+.dlg-foot div{display:flex;gap:6px}
+.dlg-foot button{font-size:13px;padding:7px 14px}
+.empty,.err{padding:28px;text-align:center;color:var(--muted)}
+.err{color:var(--red)}
+@media (max-width:760px){
+  thead{display:none}
+  table,tbody,tr,td{display:block;width:100%}
+  tr{border-bottom:1px solid var(--line);padding:6px 0}
+  td{border:none;padding:4px 14px;display:flex;justify-content:space-between;align-items:center;gap:12px;white-space:normal}
+  td::before{content:attr(data-label);color:var(--muted);font-size:12px}
+  td.first::before{content:none}
+  .strip{width:150px}
+  #sortMobile{display:block;flex:1}
+  td[data-label="Name"] > div{text-align:right}
+  .svcs{justify-content:flex-end;max-width:220px;margin-left:auto}
+  .toolbar{flex-wrap:wrap;align-items:center}
+  .toolbar input[type=search]{flex:1 1 100%;max-width:none}
+  .fields{grid-template-columns:1fr}
+  .presets{grid-template-columns:1fr}
+}
+.svc.agentsum{cursor:pointer;border-style:dashed}
+.svc.agentsum:hover{border-color:var(--accent);color:var(--text)}
+.badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:6px;border-radius:999px;background:var(--red);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:700}
+#agentsBtn,#backupBtn{font-size:13px;padding:7px 12px}
+.bk{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0;background:var(--bg)}
+.bk h3{margin:0 0 4px;font-size:14px}
+.bk p{margin:4px 0 8px;font-size:13px;color:var(--muted);line-height:1.5}
+.bk .warn{color:var(--text)}
+dialog.wide{width:min(980px,calc(100vw - 24px))}
+.sect{margin:14px 0 4px}
+.sect h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 6px;font-weight:600}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 18px;font-size:13px}
+.kv div span{display:block;color:var(--muted);font-size:11px}
+.pills{display:flex;flex-wrap:wrap;gap:5px}
+.pill{font-size:12px;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--card));border:1px solid var(--line)}
+.checklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px}
+.checklist div{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
+.checklist b{display:block}
+.checklist small{color:var(--muted);display:block;line-height:1.35}
+.diskrow{display:grid;grid-template-columns:110px 1fr 150px;gap:10px;align-items:center;font-size:13px;margin:4px 0}
+.bar{height:10px;border-radius:5px;background:var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--green)}
+.bar i.amber{background:var(--amber)}.bar i.red{background:var(--red)}
+table.small{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:2px}
+table.small th,table.small td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:normal;vertical-align:top}
+table.small th{font-size:10.5px}
+table.small tr.hl td{background:color-mix(in srgb,var(--amber) 10%,transparent)}
+table.small td.msg{max-width:420px;color:var(--muted)}
+.empty-note{color:var(--muted);font-size:13px}
+.steps{font-size:13px;line-height:1.55;margin:4px 0 0;padding-left:20px}
+.steps code,.agent-hint code{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px;word-break:break-all}
+.row-inline{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row-inline input[type=text]{flex:1;min-width:220px;font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.stale{color:var(--red);font-weight:600}
+button.mini{font-size:11.5px;padding:3px 8px}
+.ignored{font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
+table.small tr.dim td{opacity:.55}
+.diskset{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 8px 70px;font-size:12px}
+.diskset label{display:inline-flex;align-items:center;gap:4px}
+.diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
+.old{color:var(--amber)}
+.haresults{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
+.harow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
+.harow small{display:block;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+.harow .val{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+/* Tabs */
+/* The underline is an inset shadow, so the open tab can cover it without overlapping the
+   container (a negative margin there made Chrome show a vertical scrollbar). */
+.tabs{display:flex;gap:2px;align-items:flex-end;box-shadow:inset 0 -1px 0 var(--line);margin-bottom:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+.tab{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;background:transparent;color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;flex:none}
+.tab:hover{background:color-mix(in srgb,var(--accent) 6%,transparent);color:var(--text)}
+.tab.on{background:var(--card);border-color:var(--line);color:var(--text)}
+.tab .n{font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
+.tab .bad{display:inline-block;min-width:17px;padding:0 5px;border-radius:999px;background:var(--orange);color:#fff;font-size:10.5px;line-height:17px;text-align:center}
+.tab .bad.red{background:var(--red)}
+.tab .pen{font-size:12px;opacity:.6;padding:0 2px;border-radius:4px}
+.tab .pen:hover{opacity:1;background:color-mix(in srgb,var(--accent) 15%,transparent)}
+.tab.add{color:var(--accent);font-weight:500}
+.tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
+.rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
+.rule select,.rule input,.tabfield select{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0}
+.tabfield{display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0 10px;flex-wrap:wrap}
+.preview{font-size:12.5px;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px;line-height:1.5}
+.preview b{color:var(--text)}
+.tpl{display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 12px}
+@media (max-width:760px){.rule{grid-template-columns:1fr 1fr}.rule input,.rule .vsel{grid-column:1/2}}
+@media (max-width:760px){
+  .diskrow{grid-template-columns:44px 1fr;}
+  .diskrow span:last-child{grid-column:2}
+  .diskset{margin-left:54px}
+  table.small{display:block;overflow-x:auto}
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Rollcall</h1>
+      <div class="sub" id="meta">Loading…</div>
+    </div>
+    <div class="summary" id="summary"></div>
+  </header>
+  <div class="toolbar">
+    <input type="search" id="filter" placeholder="Filter by name, IP or service">
+    <select id="sortMobile" aria-label="Sort by"></select>
+    <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
+    <button id="resetAll" class="danger edit-only" title="Clear uptime history for every host">Reset all uptime</button>
+    <button id="backupBtn" class="edit-only" title="Export everything to move it to another install, or import an export">Export / import</button>
+    <button id="agentsBtn" class="edit-only" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
+    <button id="addHost" class="primary edit-only">+ Add computer</button>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="Device lists"></nav>
+  <div class="wrap">
+    <table>
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>No computers have been added yet.<br><button class="primary edit-only" id="addFirst">+ Add computer</button></div>
+    <div class="empty" id="emptyTab" hidden>Nothing in this tab right now.</div>
+    <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
+  </div>
+</main>
+
+<dialog id="detDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="detTitle">Details</h2><div class="sub" id="detSub"></div></div>
+    <div class="dlg-body" id="detBody"></div>
+    <div class="dlg-foot"><div></div><div><button type="button" id="detRefresh">Refresh</button><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="agDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Agents</h2><div class="sub">One script for every Windows server and one for Linux servers. Each works out what the server runs and reports disk space, services, logs and security.</div></div>
+    <div class="dlg-body" id="agBody"></div>
+    <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="bkDlg">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Export / import</h2><div class="sub">Move everything to another install of this add-on, e.g. when switching to the GitHub version.</div></div>
+    <div class="dlg-body">
+      <div class="bk">
+        <h3>Export</h3>
+        <p>Downloads one file with your computers and their checks, tabs, pauses, agent approvals, ignores and disk thresholds,
+          each agent's last report, uptime history, and the Configuration-tab settings.</p>
+        <p class="warn">Keep the file safe: it contains the agent enrolment key and could be used to restore your monitoring elsewhere.</p>
+        <button type="button" class="primary" id="bkExport">Download export</button> <span class="hint" id="bkExportNote"></span>
+      </div>
+      <div class="bk">
+        <h3>Import</h3>
+        <p class="warn"><b>Replaces everything on this install</b> with the export, then restarts the add-on. What's here now is kept in a
+          <code>before_import_…</code> folder in the add-on's data folder, just in case.</p>
+        <p>Agents carry on reporting without being reinstalled, as long as they can reach this install on the same address and port.</p>
+        <div class="row-inline"><input type="file" id="bkFile" accept=".zip,application/zip"></div>
+        <label class="row-inline" style="margin-top:8px;font-size:13px"><input type="checkbox" id="bkOptions" checked> Also restore the Configuration-tab settings (notifications, thresholds, agent options)</label>
+        <p style="margin-top:10px"><button type="button" class="danger" id="bkImport" disabled>Import and restart</button></p>
+        <p class="hint" id="bkStatus"></p>
+      </div>
+    </div>
+    <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="tabDlg">
+  <form id="tabForm" novalidate>
+    <div class="dlg-head"><h2 id="tabTitle">New tab</h2><div class="sub">A tab shows the computers that match its conditions, and updates as computers are added or change.</div></div>
+    <div class="dlg-body">
+      <div class="fields" style="grid-template-columns:1fr"><label class="field">Tab name<input id="tName" maxlength="40" placeholder="SQL servers" autocomplete="off"></label></div>
+      <div class="group-title">Start from</div>
+      <div class="tpl" id="tTemplates"></div>
+      <div class="tabfield">Show computers that match
+        <select id="tMatch"><option value="all">all of these conditions</option><option value="any">any of these conditions</option></select></div>
+      <div class="rules" id="tRules"></div>
+      <button type="button" id="tAddRule">+ Add condition</button>
+      <div class="preview" id="tPreview"></div>
+    </div>
+    <p class="form-err" id="tErr" role="alert"></p>
+    <div class="dlg-foot">
+      <div id="tEditOnly">
+        <button type="button" class="danger" id="tDelete">Delete tab</button>
+        <button type="button" id="tLeft" title="Move this tab left">◀</button>
+        <button type="button" id="tRight" title="Move this tab right">▶</button>
+      </div>
+      <div><button type="button" id="tCancel">Cancel</button><button type="submit" class="primary" id="tSave">Save tab</button></div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg">
+  <form id="hostForm" novalidate>
+    <div class="dlg-head"><h2 id="dlgTitle">Add computer</h2></div>
+    <div class="dlg-body">
+      <div class="fields">
+        <label class="field">Name<input id="fName" maxlength="64" placeholder="SQL01" autocomplete="off"></label>
+        <label class="field">IP address or hostname<input id="fHost" maxlength="253" placeholder="10.0.1.20" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <fieldset>
+        <legend>Services to check <small>— ping is always checked</small></legend>
+        <input type="search" id="presetFilter" class="preset-filter" placeholder="Find a service, e.g. sql, proxmox, plex" autocomplete="off" spellcheck="false">
+        <div class="picked" id="picked"></div>
+        <div id="presetGroups"></div>
+        <p class="hint" id="noMatch" hidden>No preset matches. You can add it as a custom check below.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Home Assistant sensors <small>— e.g. CPU and memory from the UniFi integration</small></legend>
+        <input type="search" id="haSearch" class="preset-filter" placeholder="Search Home Assistant sensors, e.g. office ap" autocomplete="off" spellcheck="false">
+        <div id="haResults" class="haresults"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Custom checks</legend>
+        <div id="customList"></div>
+        <button type="button" id="addCustom">+ Add custom check</button>
+        <p class="hint">
+          A port: <code>tcp:5985</code> · a web page on this computer: <code>https:443/owa</code> ·
+          a full URL: <code>https://mail.example.local/owa</code><br>
+          Give it a name with <code>Name=</code>, e.g. <code>Reporting=tcp:50123</code><br>
+          A Home Assistant sensor: <code>CPU=ha:sensor.office_ap_cpu_utilization&gt;90</code> goes amber, then red, while the condition is true
+          (<code>&gt;</code> <code>&lt;</code> <code>=</code> <code>!=</code>). Without a condition it only needs to be available.
+        </p>
+      </fieldset>
+    </div>
+    <p class="form-err" id="formErr" role="alert"></p>
+    <div class="dlg-foot">
+      <div id="editOnly">
+        <button type="button" class="danger" id="delHost">Delete</button>
+        <button type="button" class="danger" id="resetHost">Reset uptime</button>
+      </div>
+      <div>
+        <button type="button" id="cancelDlg">Cancel</button>
+        <button type="submit" class="primary" id="saveDlg">Save</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+<script>
+const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded"};
+const ORDER = {red: 0, degraded: 1, amber: 2, maintenance: 3, unknown: 4, green: 5};
+const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked"};
+let data = null;
+
+// Column definitions. `val` returns the sort key; null/undefined always sorts last.
+const ipNum = ip => ip ? ip.split(".").reduce((n, o) => n * 256 + (+o || 0), 0) : null;
+const COLUMNS = [
+  {key: "status",  label: "Status",       val: h => ORDER[h.status]},
+  {key: "name",    label: "Name",         val: h => h.name, text: true},
+  {key: "ip",      label: "IP address",   val: h => ipNum(h.ip)},
+  {key: "uptime",  label: "Uptime (24h)", val: h => h.uptime_24h},
+  {key: "latency", label: "Latency",      val: h => h.latency_ms},
+  {key: "check",   label: "Last check",   val: h => h.last_check == null ? null : -h.last_check},
+  {key: "since",   label: "Since",        val: h => h.last_change == null ? null : -h.last_change},
+];
+const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: "base"});
+let sort = {key: "status", dir: 1};
+try { const s = JSON.parse(localStorage.getItem("pm_sort")); if (s && COLUMNS.some(c => c.key === s.key)) sort = s; } catch (e) {}
+
+function setSort(key, dir) {
+  sort = {key, dir: dir ?? (sort.key === key ? -sort.dir : 1)};
+  try { localStorage.setItem("pm_sort", JSON.stringify(sort)); } catch (e) {}
+  render();
+}
+
+function compare(a, b) {
+  const col = COLUMNS.find(c => c.key === sort.key);
+  const va = col.val(a), vb = col.val(b);
+  if (va == null && vb == null) return collator.compare(a.name, b.name);
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  const r = col.text ? collator.compare(va, vb) : va - vb;
+  return r ? r * sort.dir : collator.compare(a.name, b.name);
+}
+
+function renderHead() {
+  document.getElementById("head").innerHTML = COLUMNS.map(c => {
+    const on = c.key === sort.key;
+    const aria = on ? (sort.dir === 1 ? "ascending" : "descending") : "none";
+    return `<th class="sortable${on ? " sorted" : ""}" data-sort="${c.key}" aria-sort="${aria}" title="Sort by ${c.label}">` +
+      `${c.label}<span class="arrow">${on ? (sort.dir === 1 ? "▲" : "▼") : "↕"}</span></th>`;
+  }).join("") + "<th></th>";
+  const sel = document.getElementById("sortMobile");
+  sel.innerHTML = COLUMNS.flatMap(c => [1, -1].map(d =>
+    `<option value="${c.key}:${d}"${c.key === sort.key && d === sort.dir ? " selected" : ""}>Sort: ${c.label} ${d === 1 ? "▲" : "▼"}</option>`)).join("");
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function ago(ts, now) {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.round(now - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m ago";
+  return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h ago";
+}
+function every(sec) {
+  if (sec < 60 || sec % 60) return sec + " sec";
+  const m = sec / 60;
+  return m === 1 ? "1 min" : m + " min";
+}
+function maintNote(h) {
+  if (!h.maint_until) return "";
+  const until = new Date(h.maint_until * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  const phase = h.maint_seen_down ? "Down, waiting for reply" : "Waiting for it to go down";
+  return `<div class="note">${phase}<br>until ${until}</div>`;
+}
+function degradedNote(h) {
+  if (h.status !== "degraded") return "";
+  const red = h.services.filter(s => s.status === "red");
+  // Probe checks keep their short reason; agent checks just list names (details are a click away).
+  const lines = red.filter(s => !s.agent).map(s => esc(s.label) + (s.detail ? `: ${esc(s.detail)}` : " down"));
+  const ag = red.filter(s => s.agent).map(s => esc(s.label));
+  if (ag.length) lines.push(ag.slice(0, 4).join(", ") + (ag.length > 4 ? ` +${ag.length - 4} more` : "") + " need attention");
+  const shown = lines.slice(0, 3);
+  if (lines.length > 3) shown.push(`+${lines.length - 3} more`);
+  return `<div class="note">${shown.join("<br>")}</div>`;
+}
+function chip(s) {
+  const tip = s.agent
+    ? [s.label, s.detail].filter(Boolean).join(": ")
+    : [s.label + " (" + s.target + ")", SVC_LABEL[s.status] || s.status,
+       s.detail, s.latency_ms != null ? s.latency_ms + " ms" : null,
+       s.uptime_24h != null ? s.uptime_24h + "% over 24h" : null].filter(Boolean).join(" · ");
+  const val = s.kind === "ha" && s.detail && s.status !== "unknown" ? " " + s.detail.split(" (")[0] : "";
+  return `<span class="svc ${s.status}" title="${esc(tip)}"><i></i>${esc(s.label)}${esc(val.length > 18 ? val.slice(0, 17) + "…" : val)}</span>`;
+}
+function svcChips(h) {
+  const probes = h.services.filter(s => !s.agent);
+  const ag = h.services.filter(s => s.agent);
+  let out = probes.map(chip).join("");
+  if (h.agent) {
+    // Only agent checks that need attention get their own chip; the rest fold into one.
+    const issues = ag.filter(s => s.status !== "green");
+    const ok = ag.length - issues.length;
+    out += issues.map(chip).join("");
+    const osName = h.agent.os_family === "linux" ? "Linux" : "Windows";
+    const label = !ag.length ? `${osName}: waiting for first report`
+      : issues.length ? `${osName}: ${ok} OK` : `${osName} ✓ ${ok} checks`;
+    out += `<span class="svc agentsum ${!ag.length ? "unknown" : "green"}" data-details="${esc(h.key)}" title="${osName} agent: click for details"><i></i>${label}</span>`;
+  }
+  return out ? `<div class="svcs">${out}</div>` : "";
+}
+function upClass(p) { return p == null ? "muted" : p >= 99.9 ? "up-g" : p >= 95 ? "up-a" : "up-r"; }
+
+function render() {
+  if (!data) return;
+  const now = data.now;
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0};
+  data.hosts.forEach(h => counts[h.status]++);
+
+  const hasServices = data.hosts.some(h => h.services.length);
+  const chips = ["green", "amber"].concat(hasServices || counts.degraded ? ["degraded"] : [], ["red"],
+    counts.maintenance ? ["maintenance"] : []);
+  document.getElementById("summary").innerHTML = chips.map(s =>
+    `<span class="chip"><span class="dot ${s}"></span>${counts[s]} <small>${LABEL[s]}</small></span>`).join("");
+  document.getElementById("meta").textContent =
+    `${data.hosts.length} host${data.hosts.length === 1 ? "" : "s"} · checked every ${every(data.interval)}${data.retry_interval !== data.interval ? `, re-checked after ${every(data.retry_interval)} on a miss` : ""} · updated ${new Date().toLocaleTimeString()}`;
+
+  renderTabs();
+  const tab = currentTab();
+  const hosts = data.hosts
+    .filter(h => tabMatch(h, tab))
+    .filter(h => !q || [h.name, h.host, h.ip || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
+    .sort(compare);
+  renderHead();
+
+  document.getElementById("empty").hidden = data.hosts.length > 0;
+  document.getElementById("emptyTab").hidden = !data.hosts.length || hosts.length > 0;
+  document.getElementById("emptyTab").textContent = q ? "Nothing in this tab matches the search." : "Nothing in this tab right now.";
+  document.getElementById("rows").innerHTML = hosts.map(h => {
+    const up = h.uptime_24h;
+    const strip = h.history.map(c => `<span class="${c}"></span>`).join("");
+    const showHost = h.host !== h.ip;
+    return `<tr class="${h.status}">
+      <td class="first"><div><span class="status"><span class="dot ${h.status}"></span>${LABEL[h.status]}</span>${maintNote(h)}${degradedNote(h)}</div></td>
+      <td data-label="Name"><div><div class="name">${esc(h.name)}</div>${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
+      <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
+      <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
+        <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
+      <td data-label="Latency" class="num">${h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
+      <td data-label="Last check">${h.checking ? "checking…" : ago(h.last_check, now)}</td>
+      <td data-label="Since">${ago(h.last_change, now)}</td>
+      <td data-label=""><div class="actions">
+        <button data-key="${esc(h.key)}" ${h.checking ? "disabled" : ""}>Check now</button>
+        ${h.agent ? `<button data-details="${esc(h.key)}" title="Disks, services, logs and more from the agent">Details</button>` : ""}
+        ${h.maint_until
+          ? `<button class="edit-only" data-resume="${esc(h.key)}" title="Resume monitoring and alerts now">Resume</button>`
+          : `<button class="edit-only" data-pause="${esc(h.key)}" data-name="${esc(h.name)}" title="Pause alerts, e.g. for a reboot">Pause</button>`}
+        <button class="edit-only" data-edit="${esc(h.key)}" title="Change name, address or checks">Edit</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+}
+
+// ---- Tabs: saved filters, shared by everyone ----
+const FIELDS = {
+  name:    {label: "Name", ops: {begins: "begins with", contains: "contains", ends: "ends with", is: "is", not: "is not", notcontains: "doesn't contain", regex: "matches pattern"}, ph: "SQL"},
+  address: {label: "Hostname or IP", ops: {begins: "begins with", contains: "contains", ends: "ends with", is: "is", not: "is not", notcontains: "doesn't contain", regex: "matches pattern"}, ph: ".example.local"},
+  ip:      {label: "IP range", ops: {in: "is in", notin: "is not in"}, ph: "10.0.1.0/24 or 10.0.1.10-50 or 10.0.1.*"},
+  os:      {label: "Operating system", ops: {is: "is", not: "is not"}, values: {windows: "Windows (agent)", linux: "Linux (agent)", none: "No agent"}},
+  status:  {label: "Status", ops: {is: "is", not: "is not"}, values: {problem: "Needs attention (down, degraded or missed a check)", red: "Down", degraded: "Degraded", amber: "Unresponsive", maintenance: "Paused", green: "Up", unknown: "Pending"}},
+  role:    {label: "Server role (agent)", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "Domain controller, IIS, Immich"},
+  check:   {label: "Service check", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "SQL, HTTPS, Plex"},
+  uptime:  {label: "Uptime (24 h)", ops: {below: "is below %", above: "is above %"}, ph: "99.5"},
+};
+const PROBLEM = new Set(["red", "degraded", "amber"]);
+const osOf = h => h.agent ? (h.agent.os_family || "windows") : "none";
+const BUILTIN = [
+  {id: "all", name: "All", rules: []},
+  {id: "problems", name: "Needs attention", rules: [{field: "status", op: "is", value: "problem"}], builtin: true},
+  {id: "windows", name: "Windows", rules: [{field: "os", op: "is", value: "windows"}], builtin: true, auto: true},
+  {id: "linux", name: "Linux", rules: [{field: "os", op: "is", value: "linux"}], builtin: true, auto: true},
+  {id: "noagent", name: "No agent", rules: [{field: "os", op: "is", value: "none"}], builtin: true, auto: true},
+];
+let views = [], tabId = "all";
+try { tabId = localStorage.getItem("pm_tab") || "all"; } catch (e) {}
+
+function ipRanges(spec) {
+  return spec.split(/[,\s]+/).filter(Boolean).map(p => {
+    let m;
+    if ((m = /^([\d.]+)\/(\d+)$/.exec(p))) {
+      const bits = +m[2], base = ipNum(m[1]); if (bits > 32 || base == null) return null;
+      const size = 2 ** (32 - bits), lo = Math.floor(base / size) * size; return [lo, lo + size - 1];
+    }
+    if ((m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)-(\d+)$/.exec(p))) { const lo = ipNum(`${m[1]}.${m[2]}.${m[3]}.${m[4]}`); return [lo, lo - +m[4] + +m[5]]; }
+    if ((m = /^([\d.]+)-([\d.]+)$/.exec(p))) return [ipNum(m[1]), ipNum(m[2])];
+    if (p.includes("*") || p.split(".").length < 4) {
+      const parts = p.split(".").filter(x => x !== "*");
+      const fixed = parts.length, lo = ipNum(parts.concat(Array(4 - fixed).fill("0")).join("."));
+      return [lo, lo + 2 ** (8 * (4 - fixed)) - 1];
+    }
+    const n = ipNum(p); return [n, n];
+  }).filter(Boolean);
+}
+function textTest(op, hay, v) {
+  const hs = hay.map(x => String(x || "").toLowerCase()), val = v.toLowerCase();
+  switch (op) {
+    case "begins": return hs.some(x => x.startsWith(val));
+    case "contains": return hs.some(x => x.includes(val));
+    case "ends": return hs.some(x => x.endsWith(val));
+    case "is": return hs.some(x => x === val);
+    case "not": return !hs.some(x => x === val);
+    case "notcontains": return !hs.some(x => x.includes(val));
+    case "regex": try { const re = new RegExp(v, "i"); return hay.some(x => re.test(String(x || ""))); } catch (e) { return false; }
+  }
+  return false;
+}
+function ruleMatch(h, r) {
+  const v = String(r.value || "");
+  switch (r.field) {
+    case "name": return textTest(r.op, [h.name], v);
+    case "address": return textTest(r.op, [h.host, h.ip], v);
+    case "ip": {
+      const n = ipNum(h.ip); const hit = n != null && ipRanges(v).some(([lo, hi]) => n >= lo && n <= hi);
+      return r.op === "in" ? hit : !hit;
+    }
+    case "os": return (osOf(h) === v) === (r.op === "is");
+    case "status": return (v === "problem" ? PROBLEM.has(h.status) : h.status === v) === (r.op === "is");
+    case "role": { const roles = ((h.agent && h.agent.roles) || []).join(" | ").toLowerCase();
+      const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => roles.includes(x)); return r.op === "contains" ? hit : !hit; }
+    case "check": { const hay = h.services.filter(s => !s.agent).map(s => (s.label + " " + s.target).toLowerCase()).join(" | ");
+      const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); return r.op === "contains" ? hit : !hit; }
+    case "uptime": return h.uptime_24h != null && (r.op === "below" ? h.uptime_24h < +v : h.uptime_24h > +v);
+  }
+  return true;
+}
+function tabMatch(h, t) {
+  if (!t || !(t.rules || []).length) return true;
+  return t.match === "any" ? t.rules.some(r => ruleMatch(h, r)) : t.rules.every(r => ruleMatch(h, r));
+}
+function allTabs() {
+  const hosts = data ? data.hosts : [];
+  const builtins = BUILTIN.filter(t => {
+    if (!t.auto) return true;
+    const n = hosts.filter(h => tabMatch(h, t)).length;
+    return n > 0 && n < hosts.length;  // only worth a tab when it splits the list
+  });
+  return builtins.concat(views);
+}
+function currentTab() {
+  const tabs = allTabs();
+  return tabs.find(t => t.id === tabId) || tabs[0];
+}
+function renderTabs() {
+  const hosts = data.hosts, cur = currentTab();
+  const one = t => {
+    const list = hosts.filter(h => tabMatch(h, t));
+    const red = list.filter(h => h.status === "red").length, bad = list.filter(h => PROBLEM.has(h.status)).length;
+    const custom = !t.builtin && t.id !== "all";
+    return `<button type="button" class="tab${t.id === cur.id ? " on" : ""}" data-tab="${esc(t.id)}" title="${esc(describe(t))}">${esc(t.name)}
+      <span class="n">${list.length}</span>${bad && t.id !== "problems" ? `<span class="bad${red ? " red" : ""}" title="${bad} need attention">${bad}</span>` : ""}
+      ${custom && t.id === cur.id ? `<span class="pen edit-only" data-tabedit="${esc(t.id)}" title="Edit this tab">✎</span>` : ""}</button>`;
+  };
+  const tabs = allTabs();
+  const b = tabs.filter(t => t.id === "all" || t.builtin), c = tabs.filter(t => !t.builtin && t.id !== "all");
+  document.getElementById("tabs").innerHTML = b.map(one).join("") + (c.length ? `<span class="tabsep"></span>` + c.map(one).join("") : "") +
+    `<button type="button" class="tab add edit-only" id="tabNew" title="Create a tab from your own filters">+ New tab</button>`;
+}
+function describe(t) {
+  if (!(t.rules || []).length) return "Every computer";
+  return t.rules.map(r => {
+    const f = FIELDS[r.field]; if (!f) return "";
+    return `${f.label} ${f.ops[r.op] || r.op} ${f.values ? (f.values[r.value] || r.value) : r.value}`;
+  }).join(t.match === "any" ? " OR " : " AND ");
+}
+async function loadViews() {
+  try { const r = await fetch("api/views", {cache: "no-store"}); if (r.ok) views = (await r.json()).views || []; } catch (e) {}
+}
+document.getElementById("tabs").addEventListener("click", e => {
+  if (e.target.closest("#tabNew")) return openTab(null);
+  const pen = e.target.closest("[data-tabedit]");
+  if (pen) { e.stopPropagation(); return openTab(views.find(v => v.id === pen.dataset.tabedit)); }
+  const t = e.target.closest("[data-tab]");
+  if (!t) return;
+  tabId = t.dataset.tab;
+  try { localStorage.setItem("pm_tab", tabId); } catch (err) {}
+  render();
+});
+
+// Tab editor
+const tabDlg = document.getElementById("tabDlg");
+let editingTab = null;
+const TEMPLATES = [
+  {label: "Name begins with…", rules: [{field: "name", op: "begins", value: ""}]},
+  {label: "IP range", rules: [{field: "ip", op: "in", value: ""}]},
+  {label: "Windows servers", name: "Windows", rules: [{field: "os", op: "is", value: "windows"}]},
+  {label: "Linux servers", name: "Linux", rules: [{field: "os", op: "is", value: "linux"}]},
+  {label: "Domain controllers", name: "Domain controllers", rules: [{field: "role", op: "contains", value: "Domain controller"}]},
+  {label: "Web servers", name: "Web servers", rules: [{field: "role", op: "contains", value: "IIS"}, {field: "check", op: "contains", value: "http"}], match: "any"},
+  {label: "Low uptime", name: "Low uptime", rules: [{field: "uptime", op: "below", value: "99"}]},
+];
+function ruleRow(r) {
+  const f = FIELDS[r.field] || FIELDS.name;
+  const fieldSel = `<select data-r="field">${Object.entries(FIELDS).map(([k, x]) => `<option value="${k}"${k === r.field ? " selected" : ""}>${x.label}</option>`).join("")}</select>`;
+  const opSel = `<select data-r="op">${Object.entries(f.ops).map(([k, x]) => `<option value="${k}"${k === r.op ? " selected" : ""}>${x}</option>`).join("")}</select>`;
+  const val = f.values
+    ? `<select data-r="value" class="vsel">${Object.entries(f.values).map(([k, x]) => `<option value="${k}"${k === r.value ? " selected" : ""}>${x}</option>`).join("")}</select>`
+    : `<input data-r="value" value="${esc(r.value || "")}" placeholder="${esc(f.ph || "")}" ${r.field === "uptime" ? 'inputmode="decimal"' : ""} spellcheck="false" autocomplete="off">`;
+  return `<div class="rule">${fieldSel}${opSel}${val}<button type="button" class="danger mini" data-rdel title="Remove this condition">✕</button></div>`;
+}
+function readRules() {
+  return [...document.querySelectorAll("#tRules .rule")].map(el => ({
+    field: el.querySelector('[data-r="field"]').value, op: el.querySelector('[data-r="op"]').value,
+    value: el.querySelector('[data-r="value"]').value.trim()}));
+}
+function drawRules(rules) {
+  document.getElementById("tRules").innerHTML = rules.map(ruleRow).join("") ||
+    `<p class="empty-note">No conditions: this tab would show every computer. Add one, or start from a template above.</p>`;
+  preview();
+}
+function preview() {
+  const t = {match: document.getElementById("tMatch").value, rules: readRules().filter(r => r.value)};
+  const list = data.hosts.filter(h => tabMatch(h, t)).sort((a, b) => collator.compare(a.name, b.name));
+  document.getElementById("tPreview").innerHTML = `<b>${list.length} of ${data.hosts.length}</b> computers match` +
+    (list.length ? ": " + list.slice(0, 25).map(h => esc(h.name)).join(", ") + (list.length > 25 ? ` and ${list.length - 25} more` : "") : ".");
+}
+function openTab(v) {
+  editingTab = v || null;
+  document.getElementById("tabTitle").textContent = v ? `Edit tab: ${v.name}` : "New tab";
+  document.getElementById("tName").value = v ? v.name : "";
+  document.getElementById("tMatch").value = v ? v.match : "all";
+  document.getElementById("tErr").textContent = "";
+  document.getElementById("tEditOnly").style.visibility = v ? "visible" : "hidden";
+  document.getElementById("tTemplates").innerHTML = TEMPLATES.map((t, i) => `<button type="button" class="mini" data-tpl="${i}">${esc(t.label)}</button>`).join("");
+  drawRules(v ? v.rules.map(r => ({...r})) : [{field: "name", op: "begins", value: ""}]);
+  tabDlg.showModal();
+  document.getElementById("tName").focus();
+}
+document.getElementById("tTemplates").addEventListener("click", e => {
+  const b = e.target.closest("[data-tpl]"); if (!b) return;
+  const t = TEMPLATES[+b.dataset.tpl];
+  const name = document.getElementById("tName");
+  if (t.name && !name.value.trim()) name.value = t.name;
+  document.getElementById("tMatch").value = t.match || "all";
+  drawRules(t.rules.map(r => ({...r})));
+  const first = document.querySelector('#tRules input[data-r="value"]'); if (first && !first.value) first.focus();
+});
+document.getElementById("tAddRule").addEventListener("click", () => {
+  const rules = readRules(); rules.push({field: "name", op: "contains", value: ""}); drawRules(rules);
+  const inputs = document.querySelectorAll('#tRules input[data-r="value"]'); if (inputs.length) inputs[inputs.length - 1].focus();
+});
+document.getElementById("tRules").addEventListener("click", e => {
+  if (!e.target.closest("[data-rdel]")) return;
+  e.target.closest(".rule").remove(); drawRules(readRules());
+});
+document.getElementById("tRules").addEventListener("change", e => {
+  if (e.target.dataset.r !== "field") return preview();
+  const row = e.target.closest(".rule"), rules = readRules(), i = [...row.parentNode.children].indexOf(row);
+  const f = FIELDS[rules[i].field];
+  rules[i] = {field: rules[i].field, op: Object.keys(f.ops)[0], value: f.values ? Object.keys(f.values)[0] : ""};
+  drawRules(rules);
+});
+document.getElementById("tRules").addEventListener("input", preview);
+document.getElementById("tMatch").addEventListener("change", preview);
+document.getElementById("tCancel").addEventListener("click", () => tabDlg.close());
+async function saveViews(list, selectId) {
+  const r = await fetch("api/views", {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({views: list})});
+  let body = {}; try { body = await r.json(); } catch (e) {}
+  if (!r.ok) { document.getElementById("tErr").textContent = body.error || `Couldn't save (${r.status})`; return false; }
+  views = body.views || [];
+  if (selectId !== undefined) { tabId = selectId; try { localStorage.setItem("pm_tab", tabId); } catch (e) {} }
+  render();
+  return true;
+}
+document.getElementById("tabForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = document.getElementById("tErr");
+  const name = document.getElementById("tName").value.trim();
+  const rules = readRules();
+  if (!name) { err.textContent = "Give the tab a name."; return; }
+  if (rules.some(r => !r.value)) { err.textContent = "Fill in a value for every condition, or remove the empty ones."; return; }
+  const id = editingTab ? editingTab.id : Math.random().toString(36).slice(2, 10);
+  const tab = {id, name, match: document.getElementById("tMatch").value, rules};
+  const list = editingTab ? views.map(v => v.id === id ? tab : v) : views.concat([tab]);
+  if (await saveViews(list, id)) tabDlg.close();
+});
+document.getElementById("tDelete").addEventListener("click", async () => {
+  if (!editingTab || !confirm(`Delete the "${editingTab.name}" tab? The computers in it aren't affected.`)) return;
+  if (await saveViews(views.filter(v => v.id !== editingTab.id), "all")) tabDlg.close();
+});
+async function moveTab(d) {
+  if (!editingTab) return;
+  const i = views.findIndex(v => v.id === editingTab.id), j = i + d;
+  if (i < 0 || j < 0 || j >= views.length) return;
+  const list = views.slice(); [list[i], list[j]] = [list[j], list[i]];
+  await saveViews(list);
+}
+document.getElementById("tLeft").addEventListener("click", () => moveTab(-1));
+document.getElementById("tRight").addEventListener("click", () => moveTab(1));
+
+// ---- Export / import ----
+const bkDlg = document.getElementById("bkDlg");
+document.getElementById("backupBtn").addEventListener("click", () => {
+  document.getElementById("bkStatus").textContent = ""; document.getElementById("bkExportNote").textContent = "";
+  document.getElementById("bkFile").value = ""; document.getElementById("bkImport").disabled = true;
+  bkDlg.showModal();
+});
+document.getElementById("bkExport").addEventListener("click", async e => {
+  const b = e.target, note = document.getElementById("bkExportNote");
+  b.disabled = true; note.textContent = "Preparing…";
+  try {
+    const r = await fetch("api/export", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    const blob = await r.blob();
+    const name = (/filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "") || [])[1] || "rollcall-export.zip";
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    note.textContent = `Downloaded ${name} (${Math.max(1, Math.round(blob.size / 1024))} KB).`;
+  } catch (err) { note.textContent = "Export failed (" + err.message + ")."; }
+  b.disabled = false;
+});
+document.getElementById("bkFile").addEventListener("change", e => { document.getElementById("bkImport").disabled = !e.target.files.length; });
+document.getElementById("bkImport").addEventListener("click", async e => {
+  const f = document.getElementById("bkFile").files[0], st = document.getElementById("bkStatus");
+  if (!f || !confirm(`Replace everything on this install with ${f.name}? The add-on restarts afterwards.`)) return;
+  e.target.disabled = true; st.textContent = "Uploading and checking…";
+  try {
+    const r = await fetch("api/import?options=" + (document.getElementById("bkOptions").checked ? 1 : 0),
+      {method: "POST", headers: {"Content-Type": "application/zip"}, body: f});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { st.textContent = d.error || `Import failed (${r.status})`; e.target.disabled = false; return; }
+    const m = d.manifest || {};
+    st.textContent = `Accepted: ${m.hosts ?? "?"} computers, ${m.agents ?? "?"} agents` + (m.addon_version ? `, exported from version ${m.addon_version}` : "") +
+      (d.options ? `. Settings ${d.options}` : "") + (d.restarting ? ". Restarting the add-on; this page reloads when it's back…" : ". Now restart the add-on to finish.");
+    if (d.restarting) {
+      await new Promise(res => setTimeout(res, 5000));
+      for (let i = 0; i < 60; i++) {
+        try { const s2 = await fetch("api/status", {cache: "no-store"}); if (s2.ok) { location.reload(); return; } } catch (x) {}
+        await new Promise(res => setTimeout(res, 2000));
+      }
+      st.textContent += " It's taking a while: reload the page in a minute.";
+    }
+  } catch (err) { st.textContent = "Import failed: " + err.message; e.target.disabled = false; }
+});
+
+async function load() {
+  try {
+    const r = await fetch("api/status", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+    const viewOnly = data.can_edit === false;
+    const pend = data.agents_pending || 0, badge = document.getElementById("pendBadge");
+    badge.hidden = !pend; badge.textContent = pend;
+    badge.title = pend ? `${pend} server(s) waiting for approval` : "";
+    document.body.classList.toggle("view-only", viewOnly);
+    if (viewOnly && document.getElementById("dlg").open) document.getElementById("dlg").close();
+    document.getElementById("err").hidden = true;
+    render();
+  } catch (e) {
+    document.getElementById("err").hidden = false;
+  }
+}
+
+async function resetUptime(key, name) {
+  const what = key ? `uptime history for ${name}` : "uptime history for ALL hosts";
+  if (!confirm(`Clear ${what}? This can't be undone.`)) return;
+  const r = await fetch(key ? "api/reset/" + encodeURIComponent(key) : "api/reset", {method: "POST"});
+  if (!r.ok) alert("Reset failed (" + r.status + ")");
+  load();
+}
+document.getElementById("resetAll").addEventListener("click", () => resetUptime(null));
+
+document.getElementById("rows").addEventListener("click", async e => {
+  const db = e.target.closest("[data-details]");
+  if (db) return openDetails(db.dataset.details);
+  const eb = e.target.closest("button[data-edit]");
+  if (eb) return openDialog(data.hosts.find(h => h.key === eb.dataset.edit));
+  const pb = e.target.closest("button[data-pause]");
+  if (pb) {
+    const ans = prompt(`Pause alerts for ${pb.dataset.name}?\n\nIt keeps being pinged and resumes automatically once it goes down and replies again. ` +
+      `If it isn't back by the time limit, you'll be alerted.\n\nTime limit (minutes):`, data.maintenance_minutes);
+    if (ans === null) return;
+    const minutes = parseInt(ans, 10);
+    if (!(minutes >= 1 && minutes <= 1440)) return alert("Enter a number of minutes between 1 and 1440.");
+    const r = await fetch("api/maintenance/" + encodeURIComponent(pb.dataset.pause),
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({minutes})});
+    if (!r.ok) alert("Pause failed (" + r.status + ")");
+    return load();
+  }
+  const sb = e.target.closest("button[data-resume]");
+  if (sb) {
+    sb.disabled = true;
+    await fetch("api/resume/" + encodeURIComponent(sb.dataset.resume), {method: "POST"});
+    setTimeout(load, 1500); setTimeout(load, 6000);
+    return;
+  }
+  const btn = e.target.closest("button[data-key]");
+  if (!btn) return;
+  btn.disabled = true; btn.textContent = "Queued";
+  await fetch("api/check/" + encodeURIComponent(btn.dataset.key), {method: "POST"});
+  setTimeout(load, 1500); setTimeout(load, 6000);
+});
+// ---- Server details (Windows agent) ----
+const detDlg = document.getElementById("detDlg");
+let detKey = null;
+const when = iso => iso ? new Date(iso).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"}) : "—";
+const dur = sec => sec == null ? "—" : sec < 3600 ? Math.round(sec / 60) + " min" : sec < 86400 ? Math.round(sec / 3600) + " h" : Math.floor(sec / 86400) + " days";
+const tbl = (head, rows) => rows.length
+  ? `<table class="small"><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>` : "";
+const sect = (title, inner) => inner ? `<div class="sect"><h3>${title}</h3>${inner}</div>` : "";
+
+async function openDetails(key) {
+  if (key !== detKey) { diskEditing = null; document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`; }
+  detKey = key;
+  if (!detDlg.open) detDlg.showModal();
+  try {
+    const r = await fetch("api/hosts/" + encodeURIComponent(key) + "/details", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    lastDetails = await r.json();
+    renderDetails(lastDetails);
+  } catch (e) {
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
+  }
+}
+document.getElementById("detRefresh").addEventListener("click", () => detKey && openDetails(detKey));
+
+function renderDetails(d) {
+  const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
+  const st = d.settings || {ignore: [], global_ignore: [], config_ignore: [], disks: {}, defaults: {warn: 15, crit: 5}};
+  detSettings = st;
+  document.getElementById("detTitle").textContent = d.name;
+  document.getElementById("detSub").textContent = d.received
+    ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^Python/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
+    : "No report from the agent yet. It reports every 5 minutes once approved.";
+  if (!d.received) { document.getElementById("detBody").innerHTML = ""; return; }
+
+  // Ignore helpers: an item can be ignored on this server, on all servers, or in the add-on's Configuration.
+  const linux = r.os_family === "linux";
+  const diskKey = v => { const t = String(v || "").trim();
+    return t.startsWith("/") ? (t.replace(/\/+$/, "") || "/") : t.replace(/[\\\/]+$/, "").replace(/:$/, "").toUpperCase() + ":"; };
+  const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
+  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm"];
+    const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
+  const findIgnore = (kind, v) => {
+    for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
+      for (const e of list || []) { const [k, val] = parse(e); if (k === kind && norm(k, val) === norm(kind, v)) return {scope, entry: e}; }
+    }
+    return null;
+  };
+  const ignBtn = (kind, v, label) => {
+    const hit = findIgnore(kind, v);
+    if (hit) return `<span class="ignored" title="${hit.scope === "config" ? "Ignored in the add-on's Configuration tab" : "Ignored " + (hit.scope === "all" ? "on all servers" : "on this server")}">Ignored${hit.scope === "all" ? " (all)" : hit.scope === "config" ? " (config)" : ""}</span>`;
+    return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>`;
+  };
+  const rowCls = (bad, kind, v) => bad ? (findIgnore(kind, v) ? "dim" : "hl") : "";
+
+  let html = "";
+  html += sect("Checks", `<div class="checklist">${(d.checks || []).map(x =>
+    `<div><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small></span></div>`).join("")}</div>`);
+  const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
+  html += sect("System", `<div class="kv">
+    <div><span>Operating system</span>${esc(r.os || "—")}</div>
+    <div><span>Name</span>${esc(r.fqdn || r.hostname || "—")}</div>
+    <div><span>IP address</span>${esc((r.ips || []).join(", ") || "—")}</div>
+    <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
+    <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""}</div>
+    <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
+    <div><span>Last update installed</span>${esc(r.last_patch_kb || "—")} ${r.last_patch ? "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>
+    <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
+    ${r.updates_pending != null ? `<div><span>Updates available</span>${r.updates_pending}${r.security_updates ? ` <b class='old'>(${r.security_updates} security)</b>` : ""}</div>` : ""}
+    <div><span>Reboot pending</span>${r.pending_reboot ? "<b class='old'>Yes</b>" + ((r.reboot_packages || []).length ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>` : "") : "No"}</div></div>`);
+  if ((r.roles || []).length) html += sect("Roles found", `<div class="pills">${r.roles.map(x => `<span class="pill">${esc(x)}</span>`).join("")}</div>`);
+
+  // Disks, each with its own thresholds.
+  const def = st.defaults || {warn: 15, crit: 5};
+  const disksHtml = (r.disks || []).map(v => {
+    const k = diskKey(v.name), o = (st.disks || {})[k] || {};
+    const warn = o.warn != null ? o.warn : def.warn, crit = o.crit != null ? o.crit : def.crit;
+    const custom = o.warn != null || o.crit != null;
+    const pctUsed = v.size_gb ? Math.round(100 * (v.size_gb - v.free_gb) / v.size_gb) : 0, free = v.size_gb ? 100 * v.free_gb / v.size_gb : 100;
+    const ignored = findIgnore("disk", v.name);
+    const cls = ignored ? "" : free < crit ? "red" : free < warn ? "amber" : "";
+    const editing = diskEditing === k;
+    return `<div class="diskrow"><b>${esc(v.name)}</b><div class="bar" title="${pctUsed}% used"><i class="${cls}" style="width:${pctUsed}%"></i></div>
+      <span>${v.free_gb} GB free of ${v.size_gb} GB <small class="muted">(${free.toFixed(1)}%)</small></span></div>
+      <div class="diskset">${editing
+        ? `<label>Amber below <input type="number" min="0" max="95" step="0.5" id="dWarn" value="${o.warn != null ? o.warn : ""}" placeholder="${def.warn}">%</label>
+           <label>Red below <input type="number" min="0" max="95" step="0.5" id="dCrit" value="${o.crit != null ? o.crit : ""}" placeholder="${def.crit}">%</label>
+           <button type="button" class="mini primary" data-disk-save="${esc(k)}">Save</button>
+           ${custom ? `<button type="button" class="mini" data-disk-reset="${esc(k)}">Use defaults</button>` : ""}
+           <button type="button" class="mini" data-disk-cancel="1">Cancel</button>
+           <small class="muted">Blank uses the default (${def.warn}% / ${def.crit}%). 0 turns that level off.</small>`
+        : `<small class="${custom ? "" : "muted"}">${ignored ? "Not monitored" : `Amber below ${warn}% · red below ${crit}%${custom ? " (custom)" : ""}`}</small>
+           ${ignored ? "" : `<button type="button" class="mini edit-only" data-disk-edit="${esc(k)}">Change</button>`}
+           ${ignBtn("disk", v.name, "disk " + v.name)}`}</div>`;
+  }).join("");
+  html += sect("Disks", disksHtml);
+
+  const sv = r.services || {};
+  html += sect(linux ? "Watched services and containers" : "Role services", tbl(["Service", "Role", "State", ""], (sv.watched || []).filter(x => !(c.containers && c.containers.some(k => k.name === x.name))).map(x =>
+    `<tr class="${rowCls(x.state !== "Running", "service", x.name)}"><td>${esc(x.display)}<br><small class="muted">${esc(x.name)}</small></td><td>${esc(x.role)}</td><td>${esc(x.state)}</td>
+     <td>${x.state !== "Running" || findIgnore("service", x.name) ? ignBtn("service", x.name, x.display) : ""}</td></tr>`)) ||
+    `<p class="empty-note">No role services found.</p>`);
+  if ((sv.stopped_auto || []).length) html += sect(linux ? "Failed systemd units" : "Other automatic services not running",
+    tbl(["Service", "State", ""], sv.stopped_auto.map(x => `<tr class="${rowCls(true, "service", x.name)}"><td>${esc(x.display)} <small class="muted">${esc(x.name)}</small></td><td>${esc(x.state)}</td><td>${ignBtn("service", x.name, x.display)}</td></tr>`)));
+  if (c.iis) html += sect("IIS", tbl(["App pool / site", "State", ""],
+    [...(c.iis.app_pools || []).map(p => `<tr class="${rowCls(p.state !== "Started", "apppool", p.name)}"><td>App pool: ${esc(p.name)}</td><td>${esc(p.state)}</td><td>${p.state !== "Started" ? ignBtn("apppool", p.name) : ""}</td></tr>`),
+     ...(c.iis.sites || []).map(p => {
+       const bad = !["Started", "Unknown"].includes(p.state);
+       const ftp = (p.protocols || []).length && (p.protocols || []).every(x => x === "ftp");
+       return `<tr class="${rowCls(bad, "site", p.name)}"><td>${ftp ? "FTP site" : "Site"}: ${esc(p.name)}</td><td>${esc(p.state)}${p.state === "Unknown" ? ` <small class="muted">(IIS can't report this one's state)</small>` : ""}</td><td>${bad ? ignBtn("site", p.name) : ""}</td></tr>`;
+     })]));
+  if (c.ad) html += sect("Active Directory", `<p class="empty-note">${c.ad.partners} replication link(s) · SYSVOL ${c.ad.sysvol_shared ? "shared" : "<b>not shared</b>"} · NETLOGON ${c.ad.netlogon_shared ? "shared" : "<b>not shared</b>"}</p>` +
+    tbl(["Partner", "Partition", "Failures", "Last error", "Last success"], (c.ad.replication || []).map(x =>
+      `<tr class="hl"><td>${esc(x.partner)}</td><td>${esc(x.naming_context)}</td><td>${x.failures}</td><td>${esc(x.last_error)}</td><td>${esc(x.last_success)}</td></tr>`)));
+  if (c.dhcp) html += sect("DHCP scopes", tbl(["Scope", "Name", "In use", "Free", "State", ""], c.dhcp.map(x => {
+    const bad = x.active && x.in_use_pct >= 85;
+    return `<tr class="${rowCls(bad, "dhcp", x.scope)}"><td>${esc(x.scope)}</td><td>${esc(x.name)}</td><td>${x.in_use_pct}%</td><td>${x.free}</td><td>${x.active ? "Active" : "Inactive"}</td><td>${bad ? ignBtn("dhcp", x.scope, "scope " + x.scope) : ""}</td></tr>`;
+  })));
+  if (c.hyperv) html += sect("Hyper-V virtual machines", tbl(["VM", "State", "Status", ""], c.hyperv.map(x => {
+    const bad = /critical/i.test(x.state);
+    return `<tr class="${rowCls(bad, "vm", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.state)}</td><td>${esc(x.status)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
+  })));
+  if (c.printers) html += sect("Shared printers", tbl(["Printer", "Status", "Jobs", ""], c.printers.map(x => {
+    const bad = x.status !== "Normal";
+    return `<tr class="${rowCls(bad, "printer", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.status)}</td><td>${x.jobs}</td><td>${bad ? ignBtn("printer", x.name) : ""}</td></tr>`;
+  })));
+  if (c.containers) html += sect(`Docker containers (${c.containers.length})`, tbl(["Container", "Image", "State", "Restarts", ""], c.containers.map(x => {
+    const bad = x.watched && x.state !== "Running";
+    return `<tr class="${rowCls(bad, "service", x.name)}"><td>${esc(x.name)}${x.project ? `<br><small class="muted">stack ${esc(x.project)}</small>` : ""}</td><td><small>${esc(x.image)}</small></td>
+      <td>${esc(x.state)}${x.watched ? "" : ` <small class="muted">(not watched)</small>`}</td><td>${x.restarts || 0}</td><td>${bad || findIgnore("service", x.name) ? ignBtn("service", x.name, "container " + x.name) : ""}</td></tr>`;
+  })) || `<p class="empty-note">No containers.</p>`);
+  if (c.immich) {
+    const im = c.immich, stt = im.stats || {}, sto = im.storage || {};
+    html += sect("Immich", `<div class="kv">
+      <div><span>API</span>${im.ping ? "Answering" : "<b class='old'>Not answering</b>"} <small class="muted">${esc(im.url || "")}</small>${im.error ? `<br><small class="old">${esc(im.error)}</small>` : ""}</div>
+      <div><span>Version</span>${esc(im.version || "—")}</div>
+      ${stt.photos != null ? `<div><span>Library</span>${stt.photos.toLocaleString()} photos, ${(stt.videos || 0).toLocaleString()} videos (${stt.usage_gb} GB)</div>` : ""}
+      ${sto.size ? `<div><span>Storage</span>${esc(sto.free)} free of ${esc(sto.size)} (${sto.used_pct}% used)</div>` : ""}</div>` +
+      (im.api_error ? `<p class="hint old">${esc(im.api_error)}</p>` : "") +
+      ((im.queues || []).length ? tbl(["Job queue", "Active", "Waiting", "Failed", ""], im.queues.map(q =>
+        `<tr class="${q.failed || q.paused ? "hl" : ""}"><td>${esc(q.name)}</td><td>${q.active}</td><td>${q.waiting + (q.delayed || 0)}</td><td>${q.failed}</td><td>${q.paused ? "Paused" : ""}</td></tr>`))
+        : im.ping && !im.api_error ? `<p class="hint">Add an Immich admin API key when installing (<code>--immich-api-key</code>) to see job queues and library statistics.</p>` : ""));
+  }
+  if (c.rds) html += sect("Remote Desktop sessions", `<p class="empty-note">${c.rds.active} active, ${c.rds.disconnected} disconnected</p>`);
+  if (c.defender) html += sect("Microsoft Defender", `<p class="empty-note">Mode: ${esc(c.defender.mode || "?")} · real-time protection ${c.defender.realtime ? "on" : "<b>off</b>"} · definitions ${c.defender.signature_age_days} day(s) old</p>`);
+  const dets = (hist.detections || []).slice().reverse();
+  if (dets.length) html += sect("Defender detections (24 h)", tbl(["Time", "Threat", "File", "Result"], dets.map(x =>
+    `<tr class="hl"><td>${when(x.time)}</td><td>${esc(x.threat)}</td><td class="msg">${esc(x.resource)}</td><td>${x.action_success ? "Dealt with" : "<b>Not removed</b>"}</td></tr>`)));
+  const evs = (hist.events || []).slice().reverse();
+  html += sect(linux ? "Journal errors (last 24 h)" : "System and Application errors (last 24 h)", tbl(["Time", "Log", "Level", "Source", "ID", "Message", ""], evs.map(x =>
+    `<tr class="${findIgnore("event", x.id) ? "dim" : x.alert ? "hl" : ""}"><td>${when(x.time)}</td><td>${esc(x.log)}</td><td>${esc(x.level)}</td><td>${esc(x.source)}</td><td>${x.id || ""}</td><td class="msg">${esc(x.message)}</td>
+     <td>${x.id ? ignBtn("event", String(x.id), "event ID " + x.id) : ""}</td></tr>`)) ||
+    `<p class="empty-note">No new errors in the last 24 hours.</p>`);
+  if (d.security_visible) {
+    const fl = (hist.failed_logons || []).slice().reverse();
+    html += sect("Failed logons (last 24 h)", tbl(["Reported", "Count", "Top accounts"], fl.map(x =>
+      `<tr class="${x.alert ? "hl" : ""}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}</td><td>${(x.top || []).map(t => `${esc(t.account)} from ${esc(t.source)} (${t.count})`).join("<br>")}</td></tr>`)) ||
+      `<p class="empty-note">None.</p>`);
+    const sec = (hist.security || []).slice().reverse();
+    html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By"], sec.map(x =>
+      `<tr class="${x.alert ? "hl" : ""}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td></tr>`)) ||
+      `<p class="empty-note">No notable security events in the last 24 hours.</p>`);
+  } else {
+    html += sect("Security events", `<p class="empty-note">Only Home Assistant admins can see security events.</p>`);
+  }
+
+  // Everything ignored for this server, so nothing disappears silently.
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM"};
+  const ignRows = [
+    ...(st.ignore || []).map(e => ({e, scope: "host"})),
+    ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
+    ...(st.config_ignore || []).map(e => ({e, scope: "config"}))];
+  if (ignRows.length) html += sect("Ignored on this server", tbl(["What", "Applies to", ""], ignRows.map(({e, scope}) => {
+    const [k, v] = parse(e);
+    return `<tr><td>${KIND[k] || k}: <b>${esc(v)}</b></td><td>${scope === "host" ? "This server" : scope === "all" ? "All servers" : "All servers (Configuration tab)"}</td>
+      <td>${scope === "config" ? `<small class="muted">Change it in the add-on's Configuration</small>` : `<div class="actions">
+        ${scope === "host" ? `<button type="button" class="mini edit-only" data-ign-all="${esc(e)}">Apply to all servers</button>` : ""}
+        <button type="button" class="mini danger edit-only" data-unign="${esc(e)}" data-scope="${scope}">Stop ignoring</button></div>`}</td></tr>`;
+  })));
+  const tm = Object.entries(r.timings || {}).sort((a, b) => b[1] - a[1]);
+  if (tm.length || r.run_ms) {
+    const secs = ms => ms >= 10000 ? Math.round(ms / 1000) + " s" : (ms / 1000).toFixed(1) + " s";
+    const total = Math.max(1, ...tm.map(x => x[1]));
+    html += sect("Agent run", `<p class="empty-note">Took ${r.run_ms ? secs(r.run_ms) : "?"}${linux ? "" : " including PowerShell starting up"} · CPU ${r.cpu_ms != null ? secs(r.cpu_ms) : "?"} · peak memory ${r.peak_mem_mb != null ? r.peak_mem_mb + " MB" : "?"}${r.last_patch_cached ? " · update history from cache" : ""}</p>` +
+      tm.map(([k, v]) => `<div class="diskrow"><b style="font-weight:500;font-size:12px">${esc(k)}</b><div class="bar"><i class="${v >= 30000 ? "red" : v >= 10000 ? "amber" : ""}" style="width:${Math.max(1, 100 * v / total)}%"></i></div><span>${secs(v)}</span></div>`).join(""));
+  }
+  if ((r.errors || []).length) html += sect("Agent warnings", `<ul class="steps">${r.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`);
+  const body = document.getElementById("detBody"), top = body.scrollTop;
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+
+let detSettings = null, diskEditing = null, lastDetails = null;
+async function detPost(path, payload) {
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + path, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+  if (!r.ok) { let m = "That didn't work (" + r.status + ")"; try { m = (await r.json()).error || m; } catch (e) {} alert(m); return false; }
+  await openDetails(detKey); load();
+  return true;
+}
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const splitEntry = v => { const i = v.indexOf(":"); return [v.slice(0, i), v.slice(i + 1)]; };
+  if (b.dataset.ignKind) {
+    b.disabled = true;
+    await detPost("/agent/ignore", {kind: b.dataset.ignKind, value: b.dataset.ignValue, scope: "host"});
+  } else if (b.dataset.ignAll) {
+    const [kind, value] = splitEntry(b.dataset.ignAll);
+    if (confirm(`Ignore ${value} on every server?`)) await detPost("/agent/ignore", {kind, value, scope: "all"});
+  } else if (b.dataset.unign) {
+    const [kind, value] = splitEntry(b.dataset.unign);
+    await detPost("/agent/ignore", {kind, value, scope: b.dataset.scope, remove: true});
+  } else if (b.dataset.diskEdit) {
+    diskEditing = b.dataset.diskEdit; renderDetails(lastDetails);
+    const w = document.getElementById("dWarn"); if (w) w.focus();
+  } else if (b.dataset.diskCancel) {
+    diskEditing = null; renderDetails(lastDetails);
+  } else if (b.dataset.diskSave) {
+    const warn = document.getElementById("dWarn").value, crit = document.getElementById("dCrit").value;
+    if (await detPost("/agent/disk", {disk: b.dataset.diskSave, warn: warn === "" ? null : +warn, crit: crit === "" ? null : +crit})) diskEditing = null;
+    renderDetails(lastDetails);
+  } else if (b.dataset.diskReset) {
+    if (await detPost("/agent/disk", {disk: b.dataset.diskReset, warn: null, crit: null})) diskEditing = null;
+    renderDetails(lastDetails);
+  }
+});
+function prettyAcct(v) { const m = /^CN=((?:[^,\\]|\\.)+)/i.exec(v || ""); return m ? m[1].replace(/\\/g, "") : (v || ""); }
+
+// ---- Agents (admin) ----
+const agDlg = document.getElementById("agDlg");
+let agInfo = null;
+async function openAgents() {
+  document.getElementById("agBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  if (!agDlg.open) agDlg.showModal();
+  await loadAgents();
+}
+async function loadAgents() {
+  try {
+    const r = await fetch("api/agents", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    agInfo = await r.json();
+    renderAgents();
+  } catch (e) {
+    document.getElementById("agBody").innerHTML = `<p class="empty-note">Couldn't load the agent list.</p>`;
+  }
+}
+function defaultServer() {
+  const saved = (() => { try { return localStorage.getItem("pm_agent_server"); } catch (e) { return null; } })();
+  return saved || `${agInfo.ssl ? "https" : "http"}://${location.hostname}:${agInfo.port}`;
+}
+function renderAgents() {
+  const a = agInfo, now = Date.now() / 1000;
+  const staleSec = (a.stale_minutes || 15) * 60;
+  const known = a.agents.concat(a.pending).map(x => (x.fqdn || "").split(".").slice(1).join(".")).find(Boolean);
+  const share = `\\\\${esc(known || "your-domain")}\\NETLOGON`;
+  let html = "";
+  html += sect("1. Get the script", `
+    <div class="row-inline"><input type="text" id="agServer" value="${esc(defaultServer())}" spellcheck="false" aria-label="Address the servers use to reach Home Assistant">
+      <button type="button" class="primary" id="agDownload">Download PingMonitorAgent.ps1</button></div>
+    ${a.ssl ? `<label class="row-inline" style="margin-top:6px;font-size:13px"><input type="checkbox" id="agIgnoreCert"> Accept a self-signed certificate</label>` : ""}
+    <p class="hint">The address your servers use to reach Home Assistant on port ${a.port}. Use the IP if they can't resolve the name.
+    The script has this address and the enrolment key built in.</p>`);
+  html += sect("2. Install it on your Windows servers", `<ol class="steps">
+    <li>Copy <code>PingMonitorAgent.ps1</code> to <code>${share}</code> (or any share the servers can read).</li>
+    <li>Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add
+      <code>powershell.exe</code> with parameters <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\PingMonitorAgent.ps1 -Install</code>.
+      Servers pick it up at their next restart. Re-running is safe and also updates the installed copy.</li>
+    <li>Or, without waiting for a restart, run that same command once on a server as an administrator.</li>
+    <li>Or with MECM: <i>Software Library → Scripts → Create Script</i>, import the downloaded file, approve it, then right-click a device collection → <i>Run Script</i> and set <b>Action</b> to <code>Install</code>. Leave the other parameters as they are.</li>
+    <li>Each server installs a SYSTEM scheduled task that reports every 5 minutes, then appears below for approval.</li></ol>`);
+  html += sect("Linux servers (e.g. Immich on Ubuntu)", `
+    <div class="row-inline"><button type="button" id="agDownloadLinux">Download pingmonitor-agent.py</button>
+      ${a.latest_linux_version ? `<small class="muted">version ${esc(a.latest_linux_version)}</small>` : ""}</div>
+    <ol class="steps">
+    <li>Uses the same address as above. Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code></li>
+    <li>On the server run <code>sudo python3 pingmonitor-agent.py --install</code>. Needs Python 3.8 or later (Ubuntu 20.04 and newer have it); nothing else to install.</li>
+    <li>For Immich job queues and library statistics, add an API key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> and <code>job.read</code> (or <code>queue.read</code>) permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs <code>all</code>):
+      <code>sudo python3 pingmonitor-agent.py --install --immich-api-key KEY</code>. Without one it still checks Immich answers and its containers are healthy.</li>
+    <li>It installs a systemd timer that reports every 5 minutes, then appears below for approval. <code>--report</code> shows what it would send; <code>--uninstall</code> removes it.</li></ol>`);
+  html += sect(`Waiting for approval (${a.pending.length})`, a.pending.length ? tbl(["Server", "Address", "Operating system", "Asked", ""], a.pending.map(p =>
+    `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
+      <td>${esc((p.ips || []).join(", "))}<br><small class="muted">sent from ${esc(p.source_ip || "?")}</small></td><td>${esc(p.os || "")}</td><td>${ago(p.requested_at, now)}</td>
+      <td><div class="actions"><button type="button" class="primary" data-approve="${esc(p.id)}">Approve</button><button type="button" class="danger" data-reject="${esc(p.id)}">Reject</button></div></td></tr>`)) +
+    (a.pending.length > 1 ? `<p><button type="button" id="agApproveAll">Approve all ${a.pending.length}</button></p>` : "")
+    : `<p class="empty-note">None. Servers appear here within 5 minutes of the agent being installed. Check that the address and sender IP look right before approving.</p>`);
+  html += sect(`Approved (${a.agents.length})`, a.agents.length ? tbl(["Server", "On dashboard as", "Last report", "Agent", "Roles", ""], a.agents.map(x => {
+    const age = x.last_report ? now - x.last_report : null;
+    const stale = age == null || age > staleSec;
+    const latest = x.os_family === "linux" ? a.latest_linux_version : a.latest_version;
+    const old = latest && x.version && x.version !== latest;
+    return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
+      <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
+      <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}</td>
+      <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (x.os_family === "linux" ? "download it and run --install again" : "update the script on the share") : ""}">${esc(x.version || "?")} <small class="muted">${x.os_family === "linux" ? "Linux" : "Windows"}</small></td>
+      <td><small>${esc((x.roles || []).join(", "))}</small></td>
+      <td><button type="button" class="danger" data-revoke="${esc(x.id)}" data-name="${esc(x.hostname)}">Revoke</button></td></tr>`;
+  })) : `<p class="empty-note">No servers yet.</p>`);
+  html += sect("Enrolment key", `<div class="row-inline"><span class="mono">${esc(a.key_hint)}</span>
+    <button type="button" class="danger" id="agRotate">Rotate key</button></div>
+    <p class="hint">Built into downloaded scripts, and only lets a server <i>ask</i> to join. Approved servers keep working after a rotation; download the script again for new ones.</p>`);
+  document.getElementById("agBody").innerHTML = html;
+}
+
+document.getElementById("agBody").addEventListener("click", async e => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  const post = async (url, method = "POST") => {
+    const r = await fetch(url, {method});
+    if (!r.ok) alert("That didn't work (" + r.status + ")");
+    await loadAgents(); load();
+  };
+  if (t.id === "agDownload" || t.id === "agDownloadLinux") {
+    const linuxDl = t.id === "agDownloadLinux";
+    const server = document.getElementById("agServer").value.trim().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^\s'"]+$/.test(server)) return alert("Enter the address as http://host:port");
+    try { localStorage.setItem("pm_agent_server", server); } catch (err) {}
+    const ign = document.getElementById("agIgnoreCert");
+    const url = "api/agents/script?server=" + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : "");
+    t.disabled = true;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) { let m = "Download failed (" + r.status + ")"; try { m = (await r.json()).error || m; } catch (x) {} return alert(m); }
+      const blob = await r.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob); link.download = linuxDl ? "pingmonitor-agent.py" : "PingMonitorAgent.ps1";
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    } finally { t.disabled = false; }
+  } else if (t.dataset.approve) {
+    await post("api/agents/approve/" + encodeURIComponent(t.dataset.approve));
+  } else if (t.dataset.reject) {
+    if (confirm("Reject this request? That copy of the agent won't be able to ask again unless it's reinstalled.")) await post("api/agents/reject/" + encodeURIComponent(t.dataset.reject));
+  } else if (t.id === "agApproveAll") {
+    if (confirm(`Approve all ${agInfo.pending.length} servers?`)) await post("api/agents/approve-all");
+  } else if (t.dataset.revoke) {
+    if (confirm(`Revoke the agent on ${t.dataset.name}? Its agent checks disappear from the dashboard. To add it back later, uninstall and reinstall the agent on that server.`))
+      await post("api/agents/" + encodeURIComponent(t.dataset.revoke), "DELETE");
+  } else if (t.id === "agRotate") {
+    if (confirm("Rotate the enrolment key? Approved servers keep working. Scripts you've already downloaded won't be able to add new servers.")) await post("api/agents/rotate-key");
+  }
+});
+document.getElementById("agentsBtn").addEventListener("click", openAgents);
+
+// ---- Add / Edit computer dialog ----
+const dlg = document.getElementById("dlg");
+const form = document.getElementById("hostForm");
+const fName = document.getElementById("fName"), fHost = document.getElementById("fHost");
+let PRESETS = null, ALIASES = {}, editing = null;
+
+async function loadPresets() {
+  if (PRESETS) return;
+  const j = await (await fetch("api/presets")).json();
+  PRESETS = j.presets; ALIASES = j.aliases || {};
+  const aliasOf = {};
+  for (const [a, t] of Object.entries(ALIASES)) (aliasOf[t] = aliasOf[t] || []).push(a);
+  const groups = [...new Set(PRESETS.map(p => p.group))];
+  document.getElementById("presetGroups").innerHTML = groups.map(g =>
+    `<div class="pgroup"><div class="group-title">${esc(g)}</div><div class="presets">` +
+    PRESETS.filter(p => p.group === g).map(p => {
+      const words = [p.name, p.title, p.summary, g, ...(aliasOf[p.name] || [])].join(" ").toLowerCase();
+      return `<label class="preset" data-search="${esc(words)}"><input type="checkbox" value="${esc(p.name)}">` +
+        `<span><b>${esc(p.title)}</b><small>${esc(p.summary)}</small></span></label>`;
+    }).join("") + `</div></div>`).join("");
+  document.getElementById("presetGroups").addEventListener("change", updatePicked);
+}
+
+function filterPresets() {
+  const q = document.getElementById("presetFilter").value.trim().toLowerCase();
+  let any = false;
+  document.querySelectorAll("#presetGroups .pgroup").forEach(grp => {
+    let shown = 0;
+    grp.querySelectorAll(".preset").forEach(el => {
+      const hit = !q || q.split(/\s+/).every(w => el.dataset.search.includes(w));
+      el.hidden = !hit; if (hit) shown++;
+    });
+    grp.hidden = shown === 0; if (shown) any = true;
+  });
+  document.getElementById("noMatch").hidden = any;
+}
+
+function updatePicked() {
+  const names = [...form.querySelectorAll(".preset input:checked")]
+    .map(cb => cb.closest(".preset").querySelector("b").textContent);
+  document.getElementById("picked").innerHTML = names.length
+    ? `Selected: <b>${names.map(esc).join("</b>, <b>")}</b>` : "Nothing selected yet: ping only.";
+}
+
+// Home Assistant sensor search: one click adds it as a custom check with a sensible condition.
+let haTimer = null, haSeq = 0;
+function haDefault(e) {
+  const id = e.entity_id, num = e.state !== "" && !isNaN(+e.state);
+  const label = /cpu/.test(id) ? "CPU" : /mem/.test(id) ? "Memory" : /temperature/.test(id) ? "Temp" : null;
+  const cond = /cpu|mem/.test(id) && num ? ">90" : /temperature/.test(id) && num ? ">80" : "";
+  return (label ? label + "=" : "") + "ha:" + id + cond;
+}
+async function haSearch() {
+  const q = document.getElementById("haSearch").value.trim(), box = document.getElementById("haResults"), seq = ++haSeq;
+  if (!q) { box.innerHTML = ""; return; }
+  box.innerHTML = `<p class="hint">Searching…</p>`;
+  try {
+    const r = await fetch("api/ha/entities?q=" + encodeURIComponent(q), {cache: "no-store"});
+    const d = await r.json();
+    if (seq !== haSeq) return;
+    if (d.error) { box.innerHTML = `<p class="hint">${esc(d.error)}</p>`; return; }
+    const used = new Set([...form.querySelectorAll(".custom input")].map(i => (i.value.match(/ha:([a-z_]+\.[a-z0-9_]+)/i) || [])[1]));
+    box.innerHTML = d.entities.length ? d.entities.map(e => `<div class="harow"><span>${esc(e.name)}<small>${esc(e.entity_id)}</small></span>
+        <span class="val">${esc(e.state)}${e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : ""}</span>
+        ${used.has(e.entity_id) ? `<span class="ignored">Added</span>` : `<button type="button" class="mini" data-ha="${esc(haDefault(e))}">Add</button>`}</div>`).join("") +
+        (d.total > d.entities.length ? `<p class="hint">${d.total - d.entities.length} more: add another word to narrow it down.</p>` : "")
+      : `<p class="hint">No sensors match "${esc(q)}". Try fewer words, or the name the device has in Home Assistant.</p>`;
+  } catch (e) { if (seq === haSeq) box.innerHTML = `<p class="hint">Couldn't search Home Assistant.</p>`; }
+}
+document.getElementById("haSearch").addEventListener("input", () => { clearTimeout(haTimer); haTimer = setTimeout(haSearch, 300); });
+document.getElementById("haSearch").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(haTimer); haSearch(); } });
+document.getElementById("haResults").addEventListener("click", e => {
+  const b = e.target.closest("[data-ha]"); if (!b) return;
+  addCustomRow(b.dataset.ha);
+  b.outerHTML = `<span class="ignored">Added</span>`;
+});
+
+function addCustomRow(value = "") {
+  const row = document.createElement("div");
+  row.className = "custom";
+  row.innerHTML = `<input value="${esc(value)}" placeholder="e.g. tcp:5985" spellcheck="false" autocomplete="off">` +
+    `<button type="button" class="danger" title="Remove this check" aria-label="Remove">✕</button>`;
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  document.getElementById("customList").append(row);
+  return row.querySelector("input");
+}
+
+async function openDialog(h) {
+  try { await loadPresets(); } catch (e) { return alert("Couldn't load the list of checks. Is the add-on running?"); }
+  editing = h || null;
+  document.getElementById("dlgTitle").textContent = h ? `Edit ${h.name}` : "Add computer";
+  fName.value = h ? h.name : "";
+  fHost.value = h ? h.host : "";
+  form.querySelectorAll(".preset input").forEach(cb => cb.checked = false);
+  document.getElementById("customList").innerHTML = "";
+  const presetNames = new Set(PRESETS.map(p => p.name));
+  for (const c of (h ? h.checks : [])) {
+    const k = ALIASES[c.toLowerCase()] || c.toLowerCase();
+    const cb = presetNames.has(k) && form.querySelector(`.preset input[value="${CSS.escape(k)}"]`);
+    if (cb) cb.checked = true; else addCustomRow(c);
+  }
+  document.getElementById("presetFilter").value = "";
+  document.getElementById("haSearch").value = h ? h.name : "";
+  document.getElementById("haResults").innerHTML = "";
+  if (h) haSearch();
+  filterPresets();
+  updatePicked();
+  document.getElementById("editOnly").style.visibility = h ? "visible" : "hidden";
+  document.getElementById("formErr").textContent = "";
+  document.getElementById("saveDlg").disabled = false;
+  dlg.showModal();
+  fName.focus();
+}
+
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = document.getElementById("formErr");
+  const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
+    .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
+  const body = {name: fName.value.trim(), host: fHost.value.trim(), checks};
+  if (!body.name) { err.textContent = "Name is required."; return fName.focus(); }
+  if (!body.host) { err.textContent = "Enter an IP address or hostname."; return fHost.focus(); }
+  const save = document.getElementById("saveDlg");
+  save.disabled = true; err.textContent = "";
+  try {
+    const r = await fetch(editing ? "api/hosts/" + encodeURIComponent(editing.key) : "api/hosts", {
+      method: editing ? "PUT" : "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let msg = "Save failed (" + r.status + ")";
+      try { msg = (await r.json()).error || msg; } catch (_) {}
+      err.textContent = msg;
+      return;
+    }
+    dlg.close();
+    load(); setTimeout(load, 3000);
+  } catch (e2) {
+    err.textContent = "Couldn't reach the add-on.";
+  } finally {
+    save.disabled = false;
+  }
+});
+
+document.getElementById("delHost").addEventListener("click", async () => {
+  if (!editing) return;
+  if (!confirm(`Delete ${editing.name}? Its history and sensors are removed too. This can't be undone.`)) return;
+  const r = await fetch("api/hosts/" + encodeURIComponent(editing.key), {method: "DELETE"});
+  if (!r.ok) return alert("Delete failed (" + r.status + ")");
+  dlg.close(); load();
+});
+document.getElementById("resetHost").addEventListener("click", async () => {
+  if (editing) { await resetUptime(editing.key, editing.name); }
+});
+document.getElementById("cancelDlg").addEventListener("click", () => dlg.close());
+document.getElementById("addCustom").addEventListener("click", () => addCustomRow().focus());
+document.getElementById("presetFilter").addEventListener("input", filterPresets);
+document.getElementById("presetFilter").addEventListener("keydown", e => { if (e.key === "Enter") e.preventDefault(); });
+document.getElementById("addHost").addEventListener("click", () => openDialog(null));
+document.getElementById("addFirst").addEventListener("click", () => openDialog(null));
+
+document.getElementById("filter").addEventListener("input", render);
+document.getElementById("head").addEventListener("click", e => {
+  const th = e.target.closest("th[data-sort]");
+  if (th) setSort(th.dataset.sort);
+});
+document.getElementById("sortMobile").addEventListener("change", e => {
+  const [key, dir] = e.target.value.split(":");
+  setSort(key, +dir);
+});
+renderHead();
+loadViews().then(load);
+setInterval(load, 10000);
+setInterval(() => loadViews().then(render), 60000);  // pick up tabs other people have changed
+</script>
+</body>
+</html>
