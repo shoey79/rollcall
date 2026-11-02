@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.1 - 2026-11-02
+
+### Fixed
+- 1.9.0 wouldn't start: its new AppArmor profile blocked the container's start-up program (s6-overlay, `/run/s6/basedir/bin/init: Permission denied`). The profile is removed for now; the security rating is 7 instead of 8. Dropping the `NET_RAW` privilege (the other part of 1.9.0's change) stays.
+
 ## 1.9.0 - 2026-11-02
 
 ### Changed
