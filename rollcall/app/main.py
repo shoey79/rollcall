@@ -1,0 +1,2653 @@
+#!/usr/bin/env python3
+"""Rollcall (formerly Ping Monitor) - Home Assistant add-on.
+
+Pings a list of hosts on a schedule and tracks status:
+  green     last ping succeeded (and all service checks passing)
+  amber     one consecutive ping failure
+  red       two or more consecutive ping failures (notifies)
+  degraded  pings fine, but a service check (TCP port / HTTP) is failing (notifies)
+
+Optional per-host service checks use presets (dc, sql, iis, exchange...) or
+custom tcp:/http: checks, each with its own amber -> red count.
+
+Results go to SQLite (/data) for uptime history, are pushed to Home Assistant
+as sensor.ping_monitor_<name> (and sensor.ping_monitor_<name>_<service>), and
+are shown on an ingress web dashboard.
+"""
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import json
+import logging
+import os
+import re
+import secrets
+import io
+import shutil
+import tempfile
+import zipfile
+import socket
+import sqlite3
+import ssl
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlparse
+
+from aiohttp import ClientSession, ClientTimeout, web
+
+import agents as agentlib
+from agents import AgentStore, clean_enrol_info, evaluate
+
+OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
+DB_PATH = Path(os.environ.get("PM_DB", "/data/ping_monitor.db"))
+WEB_DIR = Path(__file__).parent / "web"
+PORT = int(os.environ.get("PM_PORT", "8099"))
+SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+HA_API = os.environ.get("PM_HA_API", "http://supervisor/core/api")
+SUPERVISOR_API = os.environ.get("PM_SUPERVISOR_API", "http://supervisor")
+HA_WS = os.environ.get("PM_HA_WS", "ws://supervisor/core/websocket")
+
+GREEN, AMBER, RED, UNKNOWN, MAINT, DEGRADED = (
+    "green", "amber", "red", "unknown", "maintenance", "degraded")
+ICONS = {
+    GREEN: "mdi:lan-connect",
+    AMBER: "mdi:lan-pending",
+    RED: "mdi:lan-disconnect",
+    UNKNOWN: "mdi:help-network",
+    MAINT: "mdi:wrench-clock",
+    DEGRADED: "mdi:alert-circle-outline",
+}
+SVC_ICONS = {
+    GREEN: "mdi:check-network",
+    AMBER: "mdi:help-network",
+    RED: "mdi:close-network",
+    UNKNOWN: "mdi:minus-network",
+}
+MAINT_OK = 2  # value stored in checks.ok for checks made during maintenance
+MAINT_PATH = Path(os.environ.get("PM_MAINT", str(DB_PATH.parent / "maintenance.json")))
+HOSTS_PATH = Path(os.environ.get("PM_HOSTS", str(DB_PATH.parent / "hosts.json")))
+IMPORT_MARK = HOSTS_PATH.with_name("imported_options.json")
+AGENTS_PATH = Path(os.environ.get("PM_AGENTS", str(DB_PATH.parent / "agents.json")))
+AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "agent_reports")))
+AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
+AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
+LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
+VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
+AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
+SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
+DAY = 86400
+SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
+BUCKETS = 48  # 24h strip on the dashboard, 30 min per bucket
+
+log = logging.getLogger("ping_monitor")
+
+DEFAULTS = {
+    "interval": 300,
+    "retry_interval": 300,
+    "ping_count": 3,
+    "ping_timeout": 2,
+    "service_timeout": 5,
+    "history_days": 7,
+    "notify_services": [],
+    "persistent_notification": True,
+    "notify_recovery": True,
+    "log_level": "info",
+    "maintenance_minutes": 30,
+    "notification_url": "",
+    "admin_only_changes": True,
+    "editors": [],
+    "agent_stale_minutes": 15,
+    "agent_slow_seconds": 120,
+    "agent_disk_warn": 15,
+    "agent_disk_crit": 5,
+    "agent_failed_logons": 20,
+    "agent_patch_days": 60,
+    "agent_security_alerts": True,
+    "agent_event_alerts": True,
+    "agent_event_watch": list(agentlib.DEFAULT_EVENT_WATCH),
+    "agent_security_alert_ids": list(agentlib.DEFAULT_SECURITY_ALERT_IDS),
+    "agent_watch_services": [],
+    "agent_ignore": [],
+    "agent_auto_add": True,
+    "agent_ssl": False,
+    "agent_certfile": "fullchain.pem",
+    "agent_keyfile": "privkey.pem",
+    "hosts": [],
+}
+
+# --------------------------------------------------------------------------
+# Service check presets
+# --------------------------------------------------------------------------
+# HTTP checks pass on any response below 500: a 401 from Windows auth or a 302
+# to a login page still means the app is answering. 5xx (e.g. a stopped IIS
+# app pool's 503), timeouts and refused connections fail.
+# One row per preset: (name, title shown in the form, group, [(label, check)...]).
+# Groups and rows appear in the Add/Edit form in this order. Where an app has
+# its own health/status endpoint that's used; otherwise its default port.
+# Ports are the defaults - use a custom check if yours differs.
+_W, _DB, _MAIL, _REM, _VIRT, _NET, _HOME, _MEDIA, _DL, _MON, _OTHER = (
+    "Windows & Microsoft", "Databases", "Mail & files", "Remote access",
+    "Virtualisation & storage", "Network & infrastructure", "Home & automation",
+    "Media", "Downloads", "Monitoring & development", "Other")
+PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
+    # Windows & Microsoft
+    ("dc", "Domain controller", _W, [("DNS", "tcp:53"), ("Kerberos", "tcp:88"), ("LDAP", "tcp:389"),
+                                     ("SMB", "tcp:445"), ("GC", "tcp:3268")]),
+    ("dns", "DNS server", _W, [("DNS", "tcp:53")]),
+    ("ldap", "LDAP", _W, [("LDAP", "tcp:389")]),
+    ("ldaps", "LDAPS (secure LDAP)", _W, [("LDAPS", "tcp:636")]),
+    ("fileserver", "File server (SMB)", _W, [("SMB", "tcp:445")]),
+    ("rds", "Remote Desktop / Terminal Server", _W, [("RDP", "tcp:3389")]),
+    ("sql", "SQL Server", _W, [("SQL", "tcp:1433")]),
+    ("iis", "IIS (HTTP)", _W, [("HTTP", "http:80/")]),
+    ("iis-https", "IIS (HTTPS)", _W, [("HTTPS", "https:443/")]),
+    ("sharepoint", "SharePoint", _W, [("SharePoint", "https:443/")]),
+    ("exchange", "Exchange", _W, [("OWA", "https:443/owa"), ("SMTP", "tcp:25")]),
+    ("wsus", "WSUS", _W, [("WSUS", "tcp:8530")]),
+    ("adfs", "AD FS", _W, [("ADFS", "https:443/FederationMetadata/2007-06/FederationMetadata.xml")]),
+    ("adcs", "Certificate Services (web enrolment)", _W, [("CertSrv", "http:80/certsrv/")]),
+    ("configmgr", "ConfigMgr / SCCM management point", _W, [("MP", "http:80/sms_mp/.sms_aut?mplist")]),
+    ("kms", "KMS activation", _W, [("KMS", "tcp:1688")]),
+    ("winrm", "WinRM / PowerShell remoting", _W, [("WinRM", "tcp:5985")]),
+    ("veeam", "Veeam Backup & Replication", _W, [("Veeam", "tcp:9392")]),
+    # Databases
+    ("mysql", "MySQL / MariaDB", _DB, [("MySQL", "tcp:3306")]),
+    ("postgres", "PostgreSQL", _DB, [("PostgreSQL", "tcp:5432")]),
+    ("mongodb", "MongoDB", _DB, [("MongoDB", "tcp:27017")]),
+    ("redis", "Redis", _DB, [("Redis", "tcp:6379")]),
+    ("oracle", "Oracle", _DB, [("Oracle", "tcp:1521")]),
+    ("elasticsearch", "Elasticsearch", _DB, [("Elasticsearch", "http:9200/")]),
+    ("influxdb", "InfluxDB", _DB, [("InfluxDB", "http:8086/ping")]),
+    # Mail & files
+    ("smtp", "SMTP relay / mail server", _MAIL, [("SMTP", "tcp:25")]),
+    ("imap", "IMAP (secure)", _MAIL, [("IMAPS", "tcp:993")]),
+    ("pop3", "POP3 (secure)", _MAIL, [("POP3S", "tcp:995")]),
+    ("ftp", "FTP", _MAIL, [("FTP", "tcp:21")]),
+    ("nextcloud", "Nextcloud", _MAIL, [("Nextcloud", "https:443/status.php")]),
+    # Remote access
+    ("ssh", "SSH / SFTP", _REM, [("SSH", "tcp:22")]),
+    ("vnc", "VNC", _REM, [("VNC", "tcp:5900")]),
+    ("telnet", "Telnet (switches, old kit)", _REM, [("Telnet", "tcp:23")]),
+    # Virtualisation & storage
+    ("proxmox", "Proxmox VE", _VIRT, [("Proxmox", "https:8006/")]),
+    ("pbs", "Proxmox Backup Server", _VIRT, [("PBS", "https:8007/")]),
+    ("esxi", "VMware ESXi", _VIRT, [("ESXi", "https:443/")]),
+    ("vcenter", "VMware vCenter", _VIRT, [("vCenter", "https:443/ui/")]),
+    ("synology", "Synology DSM", _VIRT, [("DSM", "https:5001/")]),
+    ("qnap", "QNAP QTS", _VIRT, [("QTS", "http:8080/")]),
+    ("truenas", "TrueNAS", _VIRT, [("TrueNAS", "https:443/")]),
+    ("unraid", "Unraid", _VIRT, [("Unraid", "http:80/")]),
+    ("portainer", "Portainer", _VIRT, [("Portainer", "https:9443/")]),
+    # Network & infrastructure
+    ("unifi", "UniFi Network, old controller (8443)", _NET, [("UniFi", "https:8443/"), ("Inform", "tcp:8080")]),
+    ("unifi-os", "UniFi OS console, e.g. Cloud Key or UDM (443)", _NET, [("UniFi", "https:443/")]),
+    ("unifi-os-server", "UniFi OS Server, self-hosted (11443)", _NET, [("UniFi", "https:11443/"), ("Inform", "tcp:8080")]),
+    ("idrac", "Dell iDRAC / server BMC", _NET, [("iDRAC", "https:443/")]),
+    ("pihole", "Pi-hole", _NET, [("DNS", "tcp:53"), ("Pi-hole", "http:80/admin/")]),
+    ("adguard", "AdGuard Home", _NET, [("DNS", "tcp:53"), ("AdGuard", "http:80/")]),
+    ("npm", "Nginx Proxy Manager", _NET, [("NPM", "http:81/")]),
+    ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
+    ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
+    ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
+    # Home & automation
+    ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
+    ("nodered", "Node-RED", _HOME, [("Node-RED", "http:1880/")]),
+    ("mqtt", "MQTT broker (Mosquitto)", _HOME, [("MQTT", "tcp:1883")]),
+    ("frigate", "Frigate NVR", _HOME, [("Frigate", "http:5000/api/version")]),
+    ("vaultwarden", "Vaultwarden", _HOME, [("Vaultwarden", "http:80/alive")]),
+    ("paperless", "Paperless-ngx", _HOME, [("Paperless", "http:8000/")]),
+    ("uptimekuma", "Uptime Kuma", _HOME, [("Uptime Kuma", "http:3001/")]),
+    # Media
+    ("plex", "Plex", _MEDIA, [("Plex", "http:32400/identity")]),
+    ("jellyfin", "Jellyfin", _MEDIA, [("Jellyfin", "http:8096/health")]),
+    ("emby", "Emby", _MEDIA, [("Emby", "http:8096/emby/System/Info/Public")]),
+    ("immich", "Immich", _MEDIA, [("Immich", "http:2283/api/server/ping")]),
+    ("audiobookshelf", "Audiobookshelf", _MEDIA, [("Audiobookshelf", "http:13378/")]),
+    ("navidrome", "Navidrome", _MEDIA, [("Navidrome", "http:4533/")]),
+    ("tautulli", "Tautulli", _MEDIA, [("Tautulli", "http:8181/")]),
+    ("overseerr", "Overseerr / Jellyseerr", _MEDIA, [("Overseerr", "http:5055/api/v1/status")]),
+    # Downloads
+    ("sonarr", "Sonarr", _DL, [("Sonarr", "http:8989/ping")]),
+    ("radarr", "Radarr", _DL, [("Radarr", "http:7878/ping")]),
+    ("lidarr", "Lidarr", _DL, [("Lidarr", "http:8686/ping")]),
+    ("prowlarr", "Prowlarr", _DL, [("Prowlarr", "http:9696/ping")]),
+    ("sabnzbd", "SABnzbd", _DL, [("SABnzbd", "http:8080/")]),
+    ("qbittorrent", "qBittorrent", _DL, [("qBittorrent", "http:8080/")]),
+    ("transmission", "Transmission", _DL, [("Transmission", "http:9091/transmission/web/")]),
+    # Monitoring & development
+    ("grafana", "Grafana", _MON, [("Grafana", "http:3000/api/health")]),
+    ("prometheus", "Prometheus", _MON, [("Prometheus", "http:9090/-/healthy")]),
+    ("gitea", "Gitea / Forgejo", _MON, [("Gitea", "http:3000/api/healthz")]),
+    ("jenkins", "Jenkins", _MON, [("Jenkins", "http:8080/login")]),
+    # Other
+    ("http", "Web server (HTTP)", _OTHER, [("HTTP", "http:80/")]),
+    ("https", "Web server (HTTPS)", _OTHER, [("HTTPS", "https:443/")]),
+]
+PRESETS: dict[str, list[tuple[str, str]]] = {n: checks for n, _t, _g, checks in PRESET_TABLE}
+PRESET_INFO = [(n, t, g) for n, t, g, _c in PRESET_TABLE]
+ALIASES = {
+    "smb": "fileserver", "file": "fileserver", "rdp": "rds", "terminal": "rds",
+    "domain": "dc", "mssql": "sql", "owa": "exchange",
+    "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
+    "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
+    "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
+    "mecm": "configmgr", "sftp": "ssh", "pve": "proxmox", "vmware": "esxi", "dsm": "synology",
+    "nvr": "camera", "rtsp": "camera", "ha": "homeassistant", "node-red": "nodered",
+    "mosquitto": "mqtt", "bitwarden": "vaultwarden", "kuma": "uptimekuma",
+    "jellyseerr": "overseerr", "forgejo": "gitea", "pi-hole": "pihole",
+}
+
+
+def preset_summary(name: str) -> str:
+    """Short description of what a preset checks, e.g. 'TCP 1433' or 'DNS 53 · LDAP 389'."""
+    checks = PRESETS[name]
+    if len(checks) == 1:
+        spec = checks[0][1]
+        return f"TCP {spec[4:]}" if spec.startswith("tcp:") else spec
+    return " · ".join(f"{label} {spec[4:] if spec.startswith('tcp:') else spec}"
+                      for label, spec in checks)
+
+
+_LABELLED = re.compile(r"^([^=:/]+)=(.+)$")
+_TCP = re.compile(r"^tcp:(\d{1,5})$", re.I)
+_REL_HTTP = re.compile(r"^(https?):(\d{1,5})(/.*)?$", re.I)
+# A Home Assistant entity, optionally with a condition: ha:sensor.office_ap_cpu_utilization>90
+_HA = re.compile(r"^ha:([a-z_]+\.[a-z0-9_]+)\s*(?:(>=|<=|!=|>|<|=)\s*(\S.{0,60}))?$", re.I)
+HA_OPS = {">": "above", ">=": "at or above", "<": "below", "<=": "at or below", "=": "is", "!=": "isn't"}
+
+
+def ha_label(entity: str) -> str:
+    """'sensor.office_ap_cpu_utilization' -> 'CPU'; falls back to the last words of the id."""
+    e = entity.split(".", 1)[1]
+    for word, label in (("cpu", "CPU"), ("memory", "Memory"), ("mem_", "Memory"), ("temperature", "Temp"),
+                        ("uptime", "Uptime"), ("clients", "Clients"), ("state", "State"), ("load", "Load")):
+        if word in e:
+            return label
+    return " ".join(e.split("_")[-2:]).capitalize()
+
+
+def parse_check(entry: str, label: str | None = None) -> list[dict]:
+    """Turn one `checks:` entry into one or more service definitions.
+
+    Accepts a preset (`sql`), `tcp:PORT`, `http:PORT/path`, `https:PORT/path`,
+    a full URL, and an optional `Label=` prefix on any of the non-preset forms.
+    """
+    entry = str(entry).strip()
+    low = entry.lower()
+    m = _LABELLED.match(entry)
+    if m and not low.startswith(("http://", "https://")):
+        return parse_check(m.group(2), m.group(1).strip())
+    name = ALIASES.get(low, low)
+    if name in PRESETS:
+        items = PRESETS[name]
+        return [d for lab, spec in items
+                for d in parse_check(spec, label if label and len(items) == 1 else lab)]
+    if m := _TCP.match(entry):
+        port = int(m.group(1))
+        if not 1 <= port <= 65535:
+            raise ValueError(f"port out of range in '{entry}'")
+        return [{"label": label or f"TCP {port}", "kind": "tcp", "port": port,
+                 "url": None, "desc": f"tcp/{port}"}]
+    if m := _REL_HTTP.match(entry):
+        scheme, port, path = m.group(1).lower(), int(m.group(2)), m.group(3) or "/"
+        if not 1 <= port <= 65535:
+            raise ValueError(f"port out of range in '{entry}'")
+        return [{"label": label or f"{scheme.upper()} {port}", "kind": "http", "port": port,
+                 "url": f"{scheme}://{{host}}:{port}{path}", "desc": f"{scheme}:{port}{path}",
+                 "fallback": True}]
+    if m := _HA.match(entry):
+        entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
+        if op in (">", ">=", "<", "<="):
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError(f"'{entry}': {op} needs a number")
+        cond = f" {op} {value}" if op else ""
+        return [{"label": label or ha_label(entity), "kind": "ha", "port": None, "url": None,
+                 "desc": f"ha:{entity}{cond}", "entity": entity, "op": op, "value": value or None}]
+    if low.startswith(("http://", "https://")):
+        u = urlparse(entry)
+        if not u.netloc:
+            raise ValueError(f"bad URL '{entry}'")
+        return [{"label": label or u.netloc, "kind": "http", "port": u.port,
+                 "url": entry, "desc": entry}]
+    raise ValueError(f"unknown check '{entry}' (presets: {', '.join(sorted(PRESETS))})")
+
+
+def validate_entry(raw: dict) -> dict:
+    """Check a host entry from the dashboard or the Configuration tab.
+
+    Returns {"name", "host", "checks"} with preset names normalised, or raises
+    ValueError with a message suitable to show the user.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("Expected an object")
+    name = str(raw.get("name") or "").strip()
+    host = str(raw.get("host") or "").strip()
+    if not name:
+        raise ValueError("Name is required")
+    if len(name) > 64:
+        raise ValueError("Name must be 64 characters or fewer")
+    if not host or len(host) > 253 or any(c.isspace() for c in host) or "/" in host:
+        raise ValueError("Enter a valid IP address or hostname (no spaces, no http://)")
+    checks = raw.get("checks") or []
+    if isinstance(checks, str):
+        checks = re.split(r"[,\s]+", checks)
+    if not isinstance(checks, list):
+        raise ValueError("Checks must be a list")
+    out, seen, errors = [], set(), []
+    for c in checks:
+        c = str(c).strip()
+        if not c:
+            continue
+        canonical = ALIASES.get(c.lower(), c.lower())
+        if canonical in PRESETS:
+            c = canonical
+        try:
+            parse_check(c)
+        except ValueError as err:
+            if "unknown check" in str(err):
+                errors.append(f"'{c}' isn't a valid check. Use tcp:PORT, http:PORT/path, "
+                              f"https:PORT/path, a full URL or ha:sensor.entity_id")
+            else:
+                errors.append(str(err))
+            continue
+        if c.lower() not in seen:
+            seen.add(c.lower())
+            out.append(c)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return {"name": name, "host": host, "checks": out}
+
+
+def load_options() -> dict:
+    opts = dict(DEFAULTS)
+    try:
+        opts.update(json.loads(OPTIONS_PATH.read_text()))
+    except FileNotFoundError:
+        log.warning("No options file at %s, using defaults", OPTIONS_PATH)
+    return opts
+
+
+def slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "host"
+
+
+def fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    d, rem = divmod(seconds, 86400)
+    h, rem = divmod(rem, 3600)
+    m, _ = divmod(rem, 60)
+    parts = [f"{d}d"] if d else []
+    if h or d:
+        parts.append(f"{h}h")
+    parts.append(f"{m}m")
+    return " ".join(parts)
+
+
+def iso(ts: float | None) -> str | None:
+    if ts is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(ts))
+
+
+# --------------------------------------------------------------------------
+# Storage
+# --------------------------------------------------------------------------
+class Store:
+    """Check results. `host` is the host key, or `<host>__<service>` for services."""
+
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS checks ("
+            " host TEXT NOT NULL, ts REAL NOT NULL, ok INTEGER NOT NULL, latency REAL)"
+        )
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_checks ON checks(host, ts)")
+        self.db.commit()
+
+    def add(self, key: str, ts: float, ok: bool | int, latency: float | None) -> None:
+        self.db.execute(
+            "INSERT INTO checks (host, ts, ok, latency) VALUES (?, ?, ?, ?)",
+            (key, ts, int(ok), latency),
+        )
+        self.db.commit()
+
+    def prune(self, before: float) -> None:
+        cur = self.db.execute("DELETE FROM checks WHERE ts < ?", (before,))
+        self.db.commit()
+        if cur.rowcount:
+            log.debug("Pruned %d old check rows", cur.rowcount)
+
+    def clear(self, host: str | None = None) -> int:
+        """Delete history for one host (and its services), or everything."""
+        if host is None:
+            cur = self.db.execute("DELETE FROM checks")
+        else:
+            prefix = host + "__"
+            cur = self.db.execute(
+                "DELETE FROM checks WHERE host = ? OR substr(host, 1, ?) = ?",
+                (host, len(prefix), prefix),
+            )
+        self.db.commit()
+        return cur.rowcount
+
+    def rows(self, key: str, since: float) -> list[tuple[float, int]]:
+        """Checks since `since`, plus the one just before it (state carried in)."""
+        prev = self.db.execute(
+            "SELECT ts, ok FROM checks WHERE host = ? AND ts < ? ORDER BY ts DESC LIMIT 1",
+            (key, since),
+        ).fetchall()
+        rest = self.db.execute(
+            "SELECT ts, ok FROM checks WHERE host = ? AND ts >= ? ORDER BY ts",
+            (key, since),
+        ).fetchall()
+        return prev + rest
+
+    def recent(self, key: str, n: int = 2) -> list[tuple[float, int, float | None]]:
+        return self.db.execute(
+            "SELECT ts, ok, latency FROM checks WHERE host = ? ORDER BY ts DESC LIMIT ?",
+            (key, n),
+        ).fetchall()
+
+
+def coverage(rows, start: float, end: float, max_gap: float) -> tuple[float, float, float]:
+    """Seconds (up, down, maintenance) between start and end.
+
+    Each check's result is assumed to hold until the next check, capped at
+    max_gap so periods when the add-on wasn't running aren't extrapolated.
+    """
+    up = down = maint = 0.0
+    for i, (ts, ok) in enumerate(rows):
+        seg_start = max(ts, start)
+        seg_end = rows[i + 1][0] if i + 1 < len(rows) else end
+        seg_end = min(seg_end, end, ts + max_gap)
+        if seg_end <= seg_start:
+            continue
+        d = seg_end - seg_start
+        if ok == MAINT_OK:
+            maint += d
+        elif ok:
+            up += d
+        else:
+            down += d
+    return up, down, maint
+
+
+def uptime_pct(rows, start: float, end: float, max_gap: float) -> float | None:
+    """Time-weighted % up. Maintenance time counts as neither up nor down."""
+    up, down, _ = coverage(rows, start, end, max_gap)
+    if up + down <= 0:
+        return None
+    return round(100.0 * up / (up + down), 2)
+
+
+# --------------------------------------------------------------------------
+# Probing
+# --------------------------------------------------------------------------
+RTT_RE = re.compile(r"=\s*[\d.]+/([\d.]+)/")
+
+
+async def resolve(host: str) -> str | None:
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+        )
+        return infos[0][4][0] if infos else None
+    except (socket.gaierror, OSError) as err:
+        log.debug("Could not resolve %s: %s", host, err)
+        return None
+
+
+async def ping(ip: str, count: int, timeout: int) -> tuple[bool, float | None]:
+    cmd = ["ping", "-n", "-c", str(count), "-W", str(timeout), "-i", "0.5", ip]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+        )
+    except FileNotFoundError:
+        log.error("ping binary not found")
+        return False, None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=count * (timeout + 1) + 5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return False, None
+    ok = proc.returncode == 0
+    match = RTT_RE.search(out.decode(errors="replace"))
+    return ok, (round(float(match.group(1)), 1) if ok and match else None)
+
+
+async def tcp_check(ip: str, port: int, timeout: float) -> tuple[bool, float | None, str]:
+    t0 = time.monotonic()
+    try:
+        _reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout)
+    except asyncio.TimeoutError:
+        return False, None, "timed out"
+    except ConnectionRefusedError:
+        return False, None, "connection refused"
+    except OSError as err:
+        return False, None, (err.strerror or type(err).__name__).lower()
+    ms = round((time.monotonic() - t0) * 1000, 1)
+    writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), 2)
+    except Exception:  # noqa: BLE001
+        pass
+    return True, ms, "port open"
+
+
+_STATUS_LINE = re.compile(rb"^HTTP/\d(?:\.\d)?\s+(\d{3})")
+_tls_ctx: ssl.SSLContext | None = None
+
+
+def health_tls_context() -> ssl.SSLContext:
+    """A deliberately permissive TLS context for health checks.
+
+    We only want to know whether the web service answers, not whether it's
+    secure, so this accepts self-signed certs, small keys, TLS 1.0 and the old
+    ciphers and renegotiation that devices like Dell iDRAC 6 still use.
+    """
+    global _tls_ctx
+    if _tls_ctx is None:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        except (ValueError, AttributeError):
+            pass
+        for ciphers in ("ALL:@SECLEVEL=0", "ALL", "DEFAULT"):
+            try:
+                ctx.set_ciphers(ciphers)
+                break
+            except ssl.SSLError:
+                continue
+        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+        _tls_ctx = ctx
+    return _tls_ctx
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+async def _http_once(scheme: str, host: str, port: int, path: str,
+                     timeout: float) -> tuple[bool | None, float | None, str]:
+    """One GET request, reading only the status line.
+
+    Returns (ok, ms, detail). ok is None when the port answered but not with
+    HTTP over this scheme (TLS failure, connection dropped, garbage), which is
+    the case where trying the other scheme is worthwhile.
+    """
+    t0 = time.monotonic()
+    tls = health_tls_context() if scheme == "https" else None
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=tls,
+                                    server_hostname=(None if not tls or _is_ip(host) else host)),
+            timeout)
+    except asyncio.TimeoutError:
+        return False, None, "timed out"
+    except ConnectionRefusedError:
+        return False, None, "connection refused"
+    except ssl.SSLError as err:
+        return None, None, f"TLS handshake failed ({err.reason or type(err).__name__})".replace("_", " ").lower()
+    except (ConnectionResetError, asyncio.IncompleteReadError):
+        return None, None, "connection reset"
+    except OSError as err:
+        return False, None, (err.strerror or type(err).__name__).lower()
+    try:
+        host_header = host if port == (443 if tls else 80) else f"{host}:{port}"
+        writer.write((f"GET {path} HTTP/1.1\r\nHost: {host_header}\r\n"
+                      "User-Agent: HA-Ping-Monitor\r\nAccept: */*\r\nConnection: close\r\n\r\n").encode())
+        await writer.drain()
+        remaining = max(0.5, timeout - (time.monotonic() - t0))
+        line = await asyncio.wait_for(reader.readline(), remaining)
+    except asyncio.TimeoutError:
+        return False, None, "no response (timed out)"
+    except (ssl.SSLError, OSError, asyncio.IncompleteReadError):
+        return None, None, "connection closed"
+    finally:
+        try:
+            writer.close()
+        except Exception:  # noqa: BLE001
+            pass
+    m = _STATUS_LINE.match(line)
+    if not m:
+        return None, None, "no HTTP response" if not line else "not an HTTP response"
+    code = int(m.group(1))
+    ms = round((time.monotonic() - t0) * 1000, 1)
+    # Anything below 500 means the app answered: 401 (Windows auth) and
+    # redirects to a login page count as up. 5xx (e.g. a stopped IIS app pool) fails.
+    return (code < 500), (ms if code < 500 else None), f"HTTP {code}"
+
+
+async def http_check(url: str, timeout: float, fallback: bool = False,
+                     preferred: str | None = None) -> tuple[bool, float | None, str, str]:
+    """Check a URL. Returns (ok, ms, detail, scheme_that_answered).
+
+    With fallback, if the port answers but not with HTTP over the given scheme,
+    the other scheme is tried (e.g. Plex with "secure connections required"
+    answers only HTTPS on 32400).
+    """
+    u = urlparse(url)
+    scheme = (preferred or u.scheme).lower()
+    host = u.hostname or ""
+    port = u.port or (443 if u.scheme == "https" else 80)
+    path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+    order = [scheme] + ([("http" if scheme == "https" else "https")] if fallback else [])
+    first = None
+    for i, sch in enumerate(order):
+        ok, ms, detail = await _http_once(sch, host, port, path, timeout)
+        if ok is not None:
+            if sch != u.scheme:
+                detail += f" via {sch}"
+            return ok, ms, detail, sch
+        first = first or detail
+    return False, None, first or "no HTTP response", scheme
+
+
+# --------------------------------------------------------------------------
+# Home Assistant
+# --------------------------------------------------------------------------
+class HomeAssistant:
+    def __init__(self, session: ClientSession):
+        self.session = session
+        self.enabled = bool(SUPERVISOR_TOKEN)
+        if not self.enabled:
+            log.warning("SUPERVISOR_TOKEN not set; Home Assistant updates disabled")
+
+    async def call(self, method: str, path: str, payload: dict | None = None) -> None:
+        if not self.enabled:
+            return
+        try:
+            async with self.session.request(
+                method,
+                HA_API + path,
+                json=payload,
+                headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"},
+            ) as resp:
+                if resp.status >= 400:
+                    body = (await resp.text())[:200]
+                    log.warning("HA API %s %s -> %s %s", method, path, resp.status, body)
+        except Exception as err:  # noqa: BLE001
+            log.warning("HA API %s %s failed: %s", method, path, err)
+
+    async def set_state(self, entity_id: str, state: str, attributes: dict) -> None:
+        await self.call("POST", f"/states/{entity_id}", {"state": state, "attributes": attributes})
+
+    async def service(self, domain: str, service: str, data: dict) -> None:
+        await self.call("POST", f"/services/{domain}/{service}", data)
+
+    async def fire(self, event: str, data: dict) -> None:
+        await self.call("POST", f"/events/{event}", data)
+
+    async def delete_state(self, entity_id: str) -> None:
+        await self.call("DELETE", f"/states/{entity_id}")
+
+    async def clear_option_hosts(self) -> None:
+        """Empty the Configuration tab's hosts once they've been imported."""
+        if not self.enabled:
+            return
+        try:
+            raw = json.loads(OPTIONS_PATH.read_text())
+            raw["hosts"] = []
+            async with self.session.post(
+                f"{SUPERVISOR_API}/addons/self/options",
+                json={"options": raw},
+                headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"},
+            ) as resp:
+                if resp.status >= 400:
+                    log.warning("Couldn't clear hosts from the Configuration tab (%s). They're imported; "
+                                "you can delete them from the Configuration tab yourself.", resp.status)
+                else:
+                    log.info("Cleared hosts from the Configuration tab; manage them on the dashboard now")
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't clear hosts from the Configuration tab: %s", err)
+
+    async def restore_options(self, saved: dict) -> str:
+        """Put an export's Configuration-tab settings on this install (keeping its own host list)."""
+        if not self.enabled:
+            return "not changed (no Supervisor access)"
+        try:
+            current = json.loads(OPTIONS_PATH.read_text())
+        except (OSError, ValueError):
+            current = {}
+        merged = {**current, **{k: v for k, v in saved.items() if k in DEFAULTS and k != "hosts"}}
+        merged["hosts"] = current.get("hosts") or []
+        try:
+            async with self.session.post(f"{SUPERVISOR_API}/addons/self/options", json={"options": merged},
+                                         headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status >= 400:
+                    body = (await resp.text())[:200]
+                    log.warning("Couldn't apply the exported settings (%s): %s", resp.status, body)
+                    return f"not applied ({resp.status}); set them in the Configuration tab"
+            log.info("Applied the exported Configuration-tab settings")
+            return "applied"
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't apply the exported settings: %s", err)
+            return "not applied; set them in the Configuration tab"
+
+    async def restart_self(self) -> bool:
+        """Ask the Supervisor to restart this add-on (shortly, so the reply gets out first)."""
+        if not self.enabled:
+            return False
+
+        async def later():
+            await asyncio.sleep(1.5)
+            try:
+                async with self.session.post(f"{SUPERVISOR_API}/addons/self/restart",
+                                             headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                    if resp.status >= 400:
+                        log.warning("Couldn't restart to apply the import (%s); restart the add-on yourself", resp.status)
+            except Exception as err:  # noqa: BLE001
+                log.warning("Couldn't restart to apply the import (%s); restart the add-on yourself", err)
+        asyncio.get_running_loop().create_task(later())
+        return True
+
+    async def get_json(self, path: str):
+        """GET from HA's REST API; None if unavailable."""
+        if not self.enabled:
+            return None
+        try:
+            async with self.session.get(HA_API + path, headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"},
+                                        timeout=ClientTimeout(total=10)) as resp:
+                if resp.status == 404:
+                    return {"_missing": True}
+                if resp.status >= 400:
+                    log.warning("HA API GET %s -> %s", path, resp.status)
+                    return None
+                return await resp.json()
+        except Exception as err:  # noqa: BLE001
+            log.warning("HA API GET %s failed: %s", path, err)
+            return None
+
+    async def list_users(self) -> list[dict] | None:
+        """Home Assistant's user list (id, name, username, admin flags), via the websocket API."""
+        if not self.enabled:
+            return None
+        try:
+            async with self.session.ws_connect(HA_WS, timeout=10, heartbeat=None) as ws:
+                msg = await ws.receive_json(timeout=10)
+                if msg.get("type") == "auth_required":
+                    await ws.send_json({"type": "auth", "access_token": SUPERVISOR_TOKEN})
+                    msg = await ws.receive_json(timeout=10)
+                if msg.get("type") != "auth_ok":
+                    log.warning("HA websocket auth failed: %s", msg.get("message") or msg.get("type"))
+                    return None
+                await ws.send_json({"id": 1, "type": "config/auth/list"})
+                while True:
+                    msg = await ws.receive_json(timeout=10)
+                    if msg.get("id") == 1:
+                        break
+                if not msg.get("success"):
+                    log.warning("Couldn't read HA users: %s", (msg.get("error") or {}).get("message"))
+                    return None
+                return msg.get("result") or []
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't read HA users: %s", err)
+            return None
+
+    async def addon_slug(self) -> str | None:
+        """This add-on's slug from the Supervisor (e.g. local_ping_monitor)."""
+        if not self.enabled:
+            return None
+        try:
+            async with self.session.get(
+                f"{SUPERVISOR_API}/addons/self/info",
+                headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"},
+            ) as resp:
+                if resp.status >= 400:
+                    log.debug("Supervisor self info -> %s", resp.status)
+                    return None
+                return (await resp.json()).get("data", {}).get("slug")
+        except Exception as err:  # noqa: BLE001
+            log.debug("Supervisor self info failed: %s", err)
+            return None
+
+
+# --------------------------------------------------------------------------
+# Monitor
+# --------------------------------------------------------------------------
+@dataclass
+class Service:
+    key: str
+    label: str
+    kind: str                 # "tcp" or "http"
+    port: int | None
+    url: str | None           # http only; may contain {host}
+    desc: str                 # human-readable target, e.g. tcp/1433 or https:443/owa
+    fallback: bool = False    # http(s):PORT checks may try the other scheme
+    scheme_pref: str | None = None  # the scheme that last answered, tried first next time
+    entity: str | None = None       # ha only: the Home Assistant entity to read
+    op: str | None = None           # ha only: >, <, =, ... (None: just needs to be available)
+    value: str | None = None        # ha only: what the state is compared with
+    status: str = UNKNOWN
+    failures: int = 0
+    latency: float | None = None
+    detail: str | None = None
+    last_check: float | None = None
+    last_change: float | None = None
+
+
+@dataclass
+class Host:
+    key: str
+    name: str
+    host: str
+    ip: str | None = None
+    status: str = UNKNOWN
+    failures: int = 0
+    latency: float | None = None
+    last_check: float | None = None
+    last_change: float | None = None
+    down_since: float | None = None
+    next_due: float = 0.0
+    checking: bool = False
+    maint_until: float | None = None   # set while paused for maintenance
+    maint_seen_down: bool = False      # has it stopped replying since the pause began?
+    maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
+    checks: list[str] = field(default_factory=list)   # as configured
+    services: list[Service] = field(default_factory=list)
+    removed: bool = False              # deleted while a check was in flight
+    agent_id: str | None = None        # linked Windows agent
+    agent_checks: list[Service] = field(default_factory=list)
+    agent_report: dict | None = None   # latest report from the agent
+    agent_seen: float | None = None    # when it arrived
+    agent_history: dict = field(default_factory=lambda: {"events": [], "security": [], "detections": [], "failed_logons": []})
+
+    @property
+    def entity_id(self) -> str:
+        return f"sensor.ping_monitor_{self.key}"
+
+
+def svc_key(h: Host, s: Service) -> str:
+    return f"{h.key}__{s.key}"
+
+
+def svc_entity(h: Host, s: Service) -> str:
+    return f"sensor.ping_monitor_{h.key}_{s.key}"
+
+
+class Monitor:
+    def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
+        self.opts = opts
+        self.store = store
+        self.ha = ha
+        self.interval = int(opts["interval"])
+        self.retry_interval = int(opts["retry_interval"])
+        self.svc_timeout = float(opts.get("service_timeout") or 5)
+        self.max_gap = max(self.interval, self.retry_interval) * 2 + 60
+        self.click_url: str | None = None   # set in main() once the slug is known
+        self.sem = asyncio.Semaphore(32)
+        self.tasks: set[asyncio.Task] = set()
+        self.hosts: dict[str, Host] = {}
+        self.imported = 0  # hosts taken from the Configuration tab this start
+        self.agents: AgentStore | None = None  # set by attach_agents()
+        self.started = time.time()  # agents get a full stale period after a restart
+        self.agent_settings = {"global_ignore": [], "hosts": {}}
+        try:
+            self.agent_settings.update(json.loads(AGENT_SETTINGS.read_text()))
+        except FileNotFoundError:
+            pass
+        except Exception as err:  # noqa: BLE001
+            log.error("Could not read %s: %s", AGENT_SETTINGS, err)
+        self._notice = 0
+
+        now = time.time()
+        for i, entry in enumerate(self._load_host_entries(opts.get("hosts") or [])):
+            h = self._make_host(entry, now + i * 0.2)
+            self.hosts[h.key] = h
+
+        self._load_maint()
+        if not self.hosts:
+            log.warning("No hosts yet - add some with 'Add computer' on the dashboard")
+        log.info(
+            "Monitoring %d host(s) and %d service check(s), interval %ss, retry %ss",
+            len(self.hosts), sum(len(h.services) for h in self.hosts.values()),
+            self.interval, self.retry_interval,
+        )
+
+    # -- host list ----------------------------------------------------------
+    # The host list lives in /data/hosts.json and is edited from the dashboard.
+    # Anything in the Configuration tab's `hosts` option is merged in at start-up
+    # (matched by name), after which main() clears that option.
+    @staticmethod
+    def _new_id(name: str, taken) -> str:
+        key, n = slugify(name), 2
+        while key in taken:
+            key, n = f"{slugify(name)}_{n}", n + 1
+        return key
+
+    def _load_host_entries(self, from_options: list) -> list[dict]:
+        entries: list[dict] = []
+        exists = HOSTS_PATH.exists()
+        if exists:
+            try:
+                entries = json.loads(HOSTS_PATH.read_text())
+            except Exception as err:  # noqa: BLE001
+                backup = HOSTS_PATH.with_suffix(f".bad-{int(time.time())}.json")
+                HOSTS_PATH.rename(backup)
+                log.error("Could not read %s (%s); moved it to %s", HOSTS_PATH, err, backup.name)
+                entries, exists = [], False
+        # Only import when the Configuration tab's list has changed since the last
+        # import, so dashboard edits aren't overwritten on every restart if the
+        # option couldn't be cleared.
+        signatures = [json.dumps(e, sort_keys=True) for e in from_options]
+        try:
+            seen_before = set(json.loads(IMPORT_MARK.read_text()))
+        except (FileNotFoundError, ValueError):
+            seen_before = set()
+        new_from_options = [e for e, sig in zip(from_options, signatures) if sig not in seen_before]
+        if len(new_from_options) < len(from_options):
+            log.debug("Skipping %d Configuration tab host(s) already imported",
+                      len(from_options) - len(new_from_options))
+        from_options = new_from_options
+        by_name = {e["name"].lower(): e for e in entries}
+        for raw in from_options:
+            try:
+                entry = validate_entry(raw)
+            except ValueError as err:
+                log.warning("Skipping host from Configuration %s: %s", raw, err)
+                continue
+            match = by_name.get(entry["name"].lower())
+            if match:
+                match.update(host=entry["host"], checks=entry["checks"])
+            else:
+                entry = {"id": self._new_id(entry["name"], {e["id"] for e in entries}), **entry}
+                entries.append(entry)
+                by_name[entry["name"].lower()] = entry
+            self.imported += 1
+        if self.imported or not exists:
+            self._write_hosts(entries)
+        if signatures:
+            IMPORT_MARK.write_text(json.dumps(signatures))
+        if self.imported:
+            log.info("Imported %d host(s) from the Configuration tab", self.imported)
+        return entries
+
+    @staticmethod
+    def _write_hosts(entries: list[dict]) -> None:
+        tmp = HOSTS_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(entries, indent=2))
+        tmp.replace(HOSTS_PATH)
+
+    def _save_hosts(self) -> None:
+        self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks}
+                           for h in self.hosts.values()])
+
+    def _make_host(self, entry: dict, due: float) -> Host:
+        h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
+                 checks=list(entry.get("checks") or []), next_due=due)
+        h.services = self._build_services(h.name, h.checks)
+        self._restore(h)
+        return h
+
+    async def add_host(self, entry: dict) -> Host:
+        h = self._make_host({"id": self._new_id(entry["name"], self.hosts), **entry}, 0)
+        self.hosts[h.key] = h
+        self._save_hosts()
+        log.info("Added %s (%s) with checks %s", h.name, h.host, h.checks or "none")
+        return h
+
+    async def update_host(self, h: Host, entry: dict) -> None:
+        if entry["host"] != h.host:
+            h.host, h.ip, h.failures = entry["host"], None, 0
+        h.name = entry["name"]
+        h.checks = entry["checks"]
+        old = {s.desc: s for s in h.services}
+        new = self._build_services(h.name, h.checks)
+        for s in new:
+            prev = old.pop(s.desc, None)
+            if prev:  # same target: keep its key (history) and current state
+                s.key = prev.key
+                for f in ("status", "failures", "latency", "detail", "last_check", "last_change",
+                          "scheme_pref"):
+                    setattr(s, f, getattr(prev, f))
+        for gone in old.values():
+            await self.dismiss(f"ping_monitor_{svc_key(h, gone)}")
+            await self.ha.delete_state(svc_entity(h, gone))
+        h.services = new
+        if h.status == DEGRADED and not any(s.status == RED for s in new):
+            h.status = GREEN
+        h.next_due = 0
+        self._save_hosts()
+        log.info("Updated %s (%s) with checks %s", h.name, h.host, h.checks or "none")
+        await self.publish(h)
+
+    async def delete_host(self, h: Host) -> None:
+        h.removed = True
+        if self.agent_settings["hosts"].pop(h.key, None) is not None:
+            self._save_agent_settings()
+        self.hosts.pop(h.key, None)
+        self._save_hosts()
+        if h.maint_until:
+            self._save_maint()
+        self.store.clear(h.key)
+        await self.dismiss(f"ping_monitor_{h.key}")
+        await self.ha.delete_state(h.entity_id)
+        for s in h.services + h.agent_checks:
+            await self.dismiss(f"ping_monitor_{svc_key(h, s)}")
+            await self.ha.delete_state(svc_entity(h, s))
+        for eid in self._metric_entities(h):
+            await self.ha.delete_state(eid)
+        if h.agent_id and self.agents and h.agent_id in self.agents.agents:
+            a = self.agents.revoke(h.agent_id)
+            log.info("Revoked the Windows agent on %s along with it", a["hostname"])
+        log.info("Deleted %s (%s)", h.name, h.host)
+
+    @staticmethod
+    def _build_services(host_name: str, checks) -> list[Service]:
+        if isinstance(checks, str):
+            checks = [c for c in re.split(r"[,\s]+", checks) if c]
+        services: list[Service] = []
+        for entry in checks:
+            if not str(entry).strip():
+                continue
+            try:
+                defs = parse_check(entry)
+            except ValueError as err:
+                log.warning("%s: skipping check: %s", host_name, err)
+                continue
+            for d in defs:
+                if any(s.desc == d["desc"] for s in services):
+                    continue  # same target already checked (e.g. dc + fileserver both SMB)
+                key, n = slugify(d["label"]), 2
+                while any(s.key == key for s in services):
+                    key, n = f"{slugify(d['label'])}_{n}", n + 1
+                services.append(Service(key=key, **d))
+        return services
+
+    def _recent_state(self, key: str) -> tuple[float, float | None, int] | None:
+        recent = self.store.recent(key, 2)
+        if not recent:
+            return None
+        fails = 0
+        for _, ok, _ in recent:
+            if ok:
+                break
+            fails += 1
+        return recent[0][0], (recent[0][2] if recent[0][1] else None), fails
+
+    def _restore(self, h: Host) -> None:
+        """Pick up the last known status so a restart doesn't re-alert or show blanks."""
+        st = self._recent_state(h.key)
+        if not st:
+            return
+        h.last_check, h.latency, h.failures = st
+        h.status = GREEN if h.failures == 0 else AMBER if h.failures == 1 else RED
+        if h.status == GREEN:
+            for s in h.services:
+                sst = self._recent_state(svc_key(h, s))
+                if sst:
+                    s.last_check, s.latency, s.failures = sst
+                    s.status = GREEN if s.failures == 0 else AMBER if s.failures == 1 else RED
+            if any(s.status == RED for s in h.services):
+                h.status = DEGRADED
+
+    # -- maintenance --------------------------------------------------------
+    def _load_maint(self) -> None:
+        try:
+            saved = json.loads(MAINT_PATH.read_text())
+        except FileNotFoundError:
+            return
+        except Exception as err:  # noqa: BLE001
+            log.warning("Could not read %s: %s", MAINT_PATH, err)
+            return
+        for key, m in saved.items():
+            h = self.hosts.get(key)
+            if h and m.get("until"):
+                h.maint_until = float(m["until"])
+                h.maint_seen_down = bool(m.get("seen_down"))
+                h.status = MAINT
+                for s in h.services:
+                    s.status, s.failures = UNKNOWN, 0
+                log.info("%s: maintenance restored, until %s", h.name, iso(h.maint_until))
+
+    def _save_maint(self) -> None:
+        data = {h.key: {"until": h.maint_until, "seen_down": h.maint_seen_down}
+                for h in self.hosts.values() if h.maint_until}
+        try:
+            MAINT_PATH.write_text(json.dumps(data))
+        except Exception as err:  # noqa: BLE001
+            log.warning("Could not write %s: %s", MAINT_PATH, err)
+
+    async def start_maintenance(self, h: Host, minutes: int) -> None:
+        now = time.time()
+        old = h.status
+        h.maint_until = now + minutes * 60
+        h.maint_seen_down = False
+        h.status = MAINT
+        h.last_change = now
+        h.down_since = None
+        self._save_maint()
+        log.info("%s: paused for maintenance for %d min", h.name, minutes)
+        if old == RED:
+            await self.dismiss(f"ping_monitor_{h.key}")
+        await self.reset_services(h)
+        await self.ha.fire("ping_monitor_status_changed", self._event(h, old, MAINT))
+        await self.publish(h)
+
+    async def resume(self, h: Host) -> None:
+        """Manual resume: check straight away, starting the amber/red count fresh."""
+        if not h.maint_until:
+            return
+        h.maint_until = None
+        h.maint_seen_down = False
+        h.maint_ended = time.time()
+        h.failures = 0
+        h.next_due = 0
+        self._save_maint()
+        log.info("%s: maintenance ended manually", h.name)
+
+    def _event(self, h: Host, old: str, new: str) -> dict:
+        return {"name": h.name, "host": h.host, "ip": h.ip, "old_status": old,
+                "new_status": new, "entity_id": h.entity_id}
+
+    # -- scheduling -------------------------------------------------------
+    async def run(self) -> None:
+        last_publish = last_prune = 0.0
+        while True:
+            now = time.time()
+            for h in self.hosts.values():
+                if not h.checking and now >= h.next_due:
+                    h.checking = True
+                    task = asyncio.create_task(self.check(h))
+                    self.tasks.add(task)
+                    task.add_done_callback(self.tasks.discard)
+            # Re-publish periodically so sensors reappear quickly after an HA restart.
+            if now - last_publish >= 60:
+                last_publish = now
+                for h in self.hosts.values():
+                    if h.status != UNKNOWN:
+                        await self.publish(h)
+            if now - last_prune >= 3600:
+                last_prune = now
+                self.store.prune(now - int(self.opts["history_days"]) * DAY)
+            if self.agents:
+                await self.check_stale_agents(now)
+            await asyncio.sleep(1)
+
+    async def check(self, h: Host) -> None:
+        try:
+            async with self.sem:
+                ip = await resolve(h.host)
+                if ip:
+                    h.ip = ip
+                    ok, latency = await ping(
+                        ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"])
+                    )
+                else:
+                    ok, latency = False, None
+            now = time.time()
+            h.last_check = now
+            h.latency = latency if ok else None
+            h.failures = 0 if ok else h.failures + 1
+            old = h.status
+            reason = "unresolved" if ip is None else "down"
+
+            if h.maint_until:
+                # Paused: keep pinging, but don't alert. End the pause once it has
+                # gone away and come back, or when the window runs out.
+                if not ok and not h.maint_seen_down:
+                    h.maint_seen_down = True
+                    self._save_maint()
+                if ok and h.maint_seen_down:
+                    new, reason = GREEN, "maint_back"
+                elif now >= h.maint_until:
+                    new = GREEN if ok else RED
+                    reason = "maint_quiet" if ok else "maint_timeout"
+                else:
+                    new = MAINT
+                if new != MAINT:
+                    h.maint_until = None
+                    h.maint_seen_down = False
+                    h.maint_ended = now
+                    self._save_maint()
+                    log.info("%s: maintenance ended (%s)", h.name, reason)
+            else:
+                new = GREEN if ok else AMBER if h.failures == 1 else RED
+
+            self.store.add(h.key, now, MAINT_OK if new == MAINT else ok, latency)
+
+            # Services are only checked while the box itself is answering pings.
+            # If it's down or paused, their state is cleared so they start fresh.
+            if new == GREEN:
+                if h.services:
+                    await self.check_services(h, now)
+                if any(s.status == RED for s in h.services + h.agent_checks):
+                    new = DEGRADED
+            elif new in (RED, MAINT):
+                await self.reset_services(h)
+
+            if h.removed:
+                return
+            h.status = new
+            retry = new in (AMBER, MAINT) or any(s.status == AMBER for s in h.services)
+            h.next_due = now + (min(self.retry_interval, self.interval) if retry else self.interval)
+            if new != old:
+                h.last_change = now
+                log.info("%s (%s): %s -> %s", h.name, h.ip or h.host, old, new)
+                await self.on_change(h, old, new, reason)
+            else:
+                log.debug("%s (%s): %s, %s ms", h.name, h.ip or h.host, new, latency)
+            await self.publish(h)
+        except Exception:  # noqa: BLE001
+            log.exception("Check failed for %s", h.name)
+            h.next_due = time.time() + self.interval
+        finally:
+            h.checking = False
+
+    async def check_services(self, h: Host, now: float) -> None:
+        async def run_one(s: Service):
+            if s.kind == "ha":
+                return await self.ha_check(s)
+            async with self.sem:
+                if s.kind == "tcp":
+                    return await tcp_check(h.ip, s.port, self.svc_timeout)
+                ok, ms, detail, scheme = await http_check(
+                    s.url.replace("{host}", h.host), self.svc_timeout, s.fallback, s.scheme_pref)
+                if ok:
+                    s.scheme_pref = scheme
+                return ok, ms, detail
+
+        results = await asyncio.gather(*(run_one(s) for s in h.services), return_exceptions=True)
+        for s, res in zip(h.services, results):
+            if isinstance(res, Exception):
+                log.warning("%s %s: check error: %s", h.name, s.label, res)
+                ok, lat, detail = False, None, type(res).__name__
+            else:
+                ok, lat, detail = res
+            s.last_check = now
+            s.latency = lat if ok else None
+            s.detail = detail
+            s.failures = 0 if ok else s.failures + 1
+            new = GREEN if ok else AMBER if s.failures == 1 else RED
+            self.store.add(svc_key(h, s), now, ok, s.latency)
+            if new != s.status:
+                old, s.status, s.last_change = s.status, new, now
+                log.info("%s %s (%s): %s -> %s [%s]", h.name, s.label, s.desc, old, new, detail)
+                await self.on_service_change(h, s, old, new)
+
+    async def ha_check(self, s: Service) -> tuple[bool, None, str]:
+        """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
+
+        The condition describes a problem, as in "CPU > 90": met means failing."""
+        st = await self.ha.get_json(f"/states/{s.entity}")
+        if st is None:
+            return False, None, "couldn't reach Home Assistant"
+        if st.get("_missing"):
+            return False, None, "not found in Home Assistant"
+        state = str(st.get("state"))
+        unit = (st.get("attributes") or {}).get("unit_of_measurement") or ""
+        shown = f"{state}{'' if unit in ('', None) else ('' if unit == '%' else ' ') + unit}"
+        if state in ("unavailable", "unknown", "None", ""):
+            return False, None, f"{state or 'no value'}"
+        if not s.op:
+            return True, None, shown
+        if s.op in ("=", "!="):
+            hit = state.lower() == str(s.value).lower()
+            bad = hit if s.op == "=" else not hit
+        else:
+            try:
+                v, limit = float(state), float(s.value)
+            except (TypeError, ValueError):
+                return False, None, f"{shown} (not a number)"
+            bad = {">": v > limit, ">=": v >= limit, "<": v < limit, "<=": v <= limit}[s.op]
+        return (not bad), None, shown + (f" ({HA_OPS[s.op]} {s.value})" if bad else "")
+
+    async def reset_services(self, h: Host) -> None:
+        for s in h.services:
+            if s.status == RED:
+                await self.dismiss(f"ping_monitor_{svc_key(h, s)}")
+            s.status, s.failures, s.latency, s.detail = UNKNOWN, 0, None, None
+
+    # -- notifications ----------------------------------------------------
+    async def dismiss(self, notification_id: str) -> None:
+        if self.opts["persistent_notification"]:
+            await self.ha.service("persistent_notification", "dismiss",
+                                  {"notification_id": notification_id})
+
+    async def persist(self, notification_id: str, title: str, message: str) -> None:
+        if self.opts["persistent_notification"]:
+            await self.ha.service("persistent_notification", "create",
+                                  {"notification_id": notification_id,
+                                   "title": title, "message": message})
+
+    async def on_change(self, h: Host, old: str, new: str, reason: str) -> None:
+        await self.ha.fire("ping_monitor_status_changed", self._event(h, old, new))
+        tag = f"ping_monitor_{h.key}"
+        if reason == "maint_back":
+            if self.opts["notify_recovery"]:
+                await self.notify(
+                    f"✅ {h.name} is back online",
+                    f"{h.name} ({h.ip or h.host}) is responding again. Maintenance ended and monitoring has resumed.",
+                    tag,
+                )
+            return
+        if new == RED and old != RED:
+            h.down_since = h.last_check
+            why = {
+                "unresolved": "Hostname could not be resolved.",
+                "maint_timeout": "It did not reply before the maintenance window ended.",
+            }.get(reason, "No reply to ping on two consecutive checks.")
+            msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
+            await self.notify(f"🔴 {h.name} is down", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} is down", msg)
+        elif old == RED and new in (GREEN, DEGRADED):
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                dur = f" after {fmt_duration(h.last_check - h.down_since)}" if h.down_since else ""
+                await self.notify(
+                    f"🟢 {h.name} is back up",
+                    f"{h.name} ({h.ip or h.host}) is responding again{dur}.",
+                    tag,
+                )
+            h.down_since = None
+
+    async def on_service_change(self, h: Host, s: Service, old: str, new: str) -> None:
+        await self.ha.fire("ping_monitor_service_changed", {
+            "name": h.name, "host": h.host, "ip": h.ip, "service": s.label, "target": s.desc,
+            "old_status": old, "new_status": new, "detail": s.detail,
+            "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
+        })
+        tag = f"ping_monitor_{svc_key(h, s)}"
+        if new == RED and s.kind == "ha":
+            msg = f"{s.label} on {h.name} is {s.detail} ({s.entity})."
+            await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} {s.label}", msg)
+        elif old == RED and new == GREEN and s.kind == "ha":
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                await self.notify(f"🟢 {h.name}: {s.label} OK", f"{s.label} on {h.name} is back to {s.detail}.", tag)
+        elif new == RED:
+            msg = (f"{h.name} ({h.ip or h.host}) is up, but {s.label} ({s.desc}) "
+                   f"is not responding: {s.detail}.")
+            await self.notify(f"🟠 {h.name}: {s.label} is down", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} {s.label} is down", msg)
+        elif old == RED and new == GREEN:
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                await self.notify(f"🟢 {h.name}: {s.label} is back up",
+                                  f"{s.label} ({s.desc}) on {h.name} is responding again.", tag)
+
+    async def notify(self, title: str, message: str, tag: str | None = None) -> None:
+        for svc in self.opts.get("notify_services") or []:
+            svc = svc.strip().removeprefix("notify.")
+            if not svc:
+                continue
+            payload = {"title": title, "message": message}
+            # Companion app extras. Only sent to mobile_app_* services, since other
+            # notify platforms (email, Telegram...) may reject unknown data keys.
+            if svc.startswith("mobile_app_"):
+                data = {"group": "Rollcall", "channel": "Rollcall"}
+                if self.click_url:
+                    data["clickAction"] = self.click_url  # Android
+                    data["url"] = self.click_url          # iOS
+                if tag:
+                    data["tag"] = tag  # newer alert for the same thing replaces older
+                payload["data"] = data
+            await self.ha.service("notify", svc, payload)
+
+    # -- Windows agents -----------------------------------------------------
+    LEVEL_STATUS = {agentlib.OK: GREEN, agentlib.WARN: AMBER, agentlib.CRIT: RED}
+
+    async def attach_agents(self, store: AgentStore) -> None:
+        """Link approved agents to dashboard entries and restore their last reports."""
+        self.agents = store
+        for agent in list(store.agents.values()):
+            h = self.hosts.get(agent.get("host_key") or "") or self._find_host_for(agent)
+            if not h:
+                continue
+            h.agent_id = agent["id"]
+            if agent.get("host_key") != h.key:
+                agent["host_key"] = h.key
+                store.save()
+            saved = store.load_report(agent["id"])
+            if saved and saved.get("report"):
+                h.agent_history = saved.get("history") or h.agent_history
+                await self._apply(h, agent, agentlib.normalize_report(saved["report"]), saved.get("received") or time.time(), restoring=True)
+        n = sum(1 for h in self.hosts.values() if h.agent_id)
+        if store.agents or store.pending:
+            log.info("Windows agents: %d approved (%d on the dashboard), %d waiting for approval",
+                     len(store.agents), n, len(store.pending))
+
+    def _find_host_for(self, agent: dict) -> Host | None:
+        hostname = (agent.get("hostname") or "").lower()
+        fqdn = (agent.get("fqdn") or "").lower()
+        ips = set(agent.get("ips") or [])
+        for h in self.hosts.values():
+            if h.agent_id and h.agent_id != agent.get("id"):
+                continue
+            names = {h.name.lower(), h.host.lower(), h.host.lower().split(".")[0]}
+            if hostname in names or (fqdn and fqdn in names) or h.host in ips or (h.ip and h.ip in ips):
+                return h
+        return None
+
+    async def _link(self, agent: dict, create: bool) -> Host | None:
+        h = self.hosts.get(agent.get("host_key") or "")
+        if h and h.agent_id in (None, agent["id"]):
+            h.agent_id = agent["id"]
+            return h
+        h = self._find_host_for(agent)
+        if not h and create and self.opts.get("agent_auto_add", True):
+            # Prefer the IP: .local AD names often don't resolve from Home Assistant.
+            addr = (agent.get("ips") or [None])[0] or agent.get("fqdn") or agent["hostname"]
+            h = await self.add_host({"name": agent["hostname"], "host": addr, "checks": []})
+            log.info("Added %s to the dashboard for its Windows agent", h.name)
+        if h:
+            h.agent_id = agent["id"]
+            agent["host_key"] = h.key
+            self.agents.save()
+        return h
+
+    async def agent_pending_notice(self, rec: dict) -> None:
+        log.info("Windows agent on %s (%s) is asking to join; approve it in Windows agents",
+                 rec["hostname"], ", ".join(rec.get("ips") or []) or rec.get("source_ip"))
+        what = "replace its existing agent" if rec.get("replaces") else "join"
+        await self.persist(f"ping_monitor_pending_{rec['id']}", "Rollcall: agent waiting for approval",
+                           f"{rec['hostname']} ({', '.join(rec.get('ips') or []) or rec.get('source_ip')}) "
+                           f"wants to {what}. Approve or reject it in Rollcall, under Agents.")
+
+    async def approve_agent(self, pid: str) -> dict:
+        agent = self.agents.approve(pid)
+        await self.dismiss(f"ping_monitor_pending_{pid}")
+        h = await self._link(agent, create=True)
+        log.info("Approved the Windows agent on %s%s", agent["hostname"], f" (dashboard: {h.name})" if h else "")
+        return agent
+
+    async def reject_agent(self, pid: str) -> dict:
+        rec = self.agents.reject(pid)
+        await self.dismiss(f"ping_monitor_pending_{pid}")
+        log.info("Rejected the Windows agent request from %s", rec["hostname"])
+        return rec
+
+    async def revoke_agent(self, aid: str) -> dict:
+        agent = self.agents.revoke(aid)
+        for h in self.hosts.values():
+            if h.agent_id == aid:
+                for s in h.agent_checks:
+                    await self.dismiss(f"ping_monitor_{svc_key(h, s)}")
+                    await self.ha.delete_state(svc_entity(h, s))
+                for eid in self._metric_entities(h):
+                    await self.ha.delete_state(eid)
+                h.agent_id, h.agent_checks, h.agent_report, h.agent_seen = None, [], None, None
+                h.agent_history = {"events": [], "security": [], "detections": [], "failed_logons": []}
+                await self._recompute(h)
+                await self.publish(h)
+        log.info("Revoked the Windows agent on %s", agent["hostname"])
+        return agent
+
+    async def receive_report(self, agent: dict, report: dict, source_ip: str | None) -> None:
+        now = time.time()
+        report = agentlib.normalize_report(report)
+        agent.update(last_report=now, source_ip=source_ip,
+                     agent_version=str(report.get("agent_version") or "")[:20],
+                     os=str(report.get("os") or "")[:120], os_family=report.get("os_family"),
+                     ips=[str(i) for i in (report.get("ips") or [])][:8] or agent.get("ips"),
+                     roles=[str(r) for r in (report.get("roles") or [])][:30])
+        h = await self._link(agent, create=True)
+        self.agents.save()
+        if not h:
+            self.agents.save_report(agent["id"], {"report": report, "received": now})
+            return
+        await self._apply(h, agent, report, now)
+        self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history})
+
+    def _history_add(self, h: Host, kind: str, items: list, received: float) -> None:
+        cutoff = received - DAY
+        hist = [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= cutoff]
+        hist.extend({**i, "_rx": received} for i in items)
+        h.agent_history[kind] = hist[-200:]
+
+    def _recent(self, h: Host, kind: str, now: float) -> list:
+        return [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= now - DAY and i.get("alert", True)]
+
+    # -- per-server agent settings (ignores, disk thresholds) -------------------
+    def _save_agent_settings(self) -> None:
+        tmp = AGENT_SETTINGS.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.agent_settings, indent=2))
+        tmp.replace(AGENT_SETTINGS)
+
+    def _host_settings(self, h: Host) -> dict:
+        hs = self.agent_settings["hosts"].get(h.key) or {}
+        return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
+                "disks": dict(hs.get("disks") or {})}
+
+    async def set_ignore(self, h: Host, item: str, scope: str, remove: bool) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        lst = self.agent_settings.setdefault("global_ignore", []) if scope == "all" else hs.setdefault("ignore", [])
+        if remove:
+            for target in (lst, hs.get("ignore") or []) if scope == "all" else (lst,):
+                while item in target:
+                    target.remove(item)
+        elif item not in lst:
+            lst.append(item)
+            if scope == "all" and item in (hs.get("ignore") or []):
+                hs["ignore"].remove(item)  # now covered globally
+        self._save_agent_settings()
+        log.info("%s %s on %s", "Stopped ignoring" if remove else "Ignoring", item,
+                 "all servers" if scope == "all" else h.name)
+        targets = [x for x in self.hosts.values() if x.agent_report] if scope == "all" else [h]
+        for x in targets:
+            await self.reevaluate(x)
+
+    async def set_disk(self, h: Host, disk: str, warn, crit) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        disks = hs.setdefault("disks", {})
+        key = agentlib.disk_key(disk)
+        if warn is None and crit is None:
+            disks.pop(key, None)
+        else:
+            disks[key] = {"warn": warn, "crit": crit}
+        self._save_agent_settings()
+        log.info("%s %s disk thresholds: %s", h.name, key, disks.get(key) or "defaults")
+        await self.reevaluate(h)
+
+    async def reevaluate(self, h: Host) -> None:
+        """Apply changed settings to the latest report now, without re-alerting events."""
+        if h.agent_report and h.agent_id and self.agents and h.agent_id in self.agents.agents:
+            await self._apply(h, self.agents.agents[h.agent_id], h.agent_report, h.agent_seen or time.time(),
+                              reeval=True)
+
+    async def _apply(self, h: Host, agent: dict, report: dict, received: float, restoring: bool = False,
+                     reeval: bool = False) -> None:
+        settings = self._host_settings(h)
+        result = evaluate(report, self.opts, now=received, settings=settings)
+        h.agent_report, h.agent_seen = report, received
+        notable = result["notable"]
+        # Events ignored since they arrived no longer keep the Events chip amber.
+        ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + settings["ignore"])
+        for e in h.agent_history.get("events", []):
+            if ign.has("event", e.get("id")):
+                e["alert"] = False
+        if not restoring and not reeval:
+            self._history_add(h, "events", notable["events"], received)
+            self._history_add(h, "security", notable["security"], received)
+            self._history_add(h, "detections", notable["detections"], received)
+            if notable["failed_logons"]:
+                self._history_add(h, "failed_logons", [notable["failed_logons"]], received)
+
+        existing = {s.key: s for s in h.agent_checks}
+        run_s = (report.get("run_ms") or 0) / 1000
+        slow_limit = float(self.opts.get("agent_slow_seconds", 120))
+        timings = report.get("timings") or {}
+        slowest = max(timings.items(), key=lambda kv: kv[1]) if timings else None
+        agent_detail = f"Agent {report.get('agent_version') or '?'} reporting"
+        if run_s:
+            agent_detail += f"; run took {run_s:.0f} s" + (f" (slowest: {slowest[0]} {slowest[1] / 1000:.0f} s)"
+                                                         if slowest and slowest[1] >= 1000 else "")
+        if report.get("errors"):
+            agent_detail += f"; {len(report['errors'])} collector warning(s)"
+        checks = [{"key": "agent", "label": "Agent", "confirm": False, "detail": agent_detail,
+                   "level": agentlib.WARN if slow_limit and run_s > slow_limit else agentlib.OK}]
+        checks += result["checks"]
+        new_list = []
+        for c in checks:
+            key = f"agent_{c['key']}"
+            sv = existing.pop(key, None) or Service(key=key, label=c["label"], kind="agent", port=None, url=None,
+                                                     desc=f"agent: {c['label'].lower()}")
+            level, detail = c["level"], c["detail"]
+            # Event-type checks stay amber for 24h after something alert-worthy.
+            if c["key"] == "events" and level == agentlib.OK:
+                recent = self._recent(h, "events", received)
+                if recent:
+                    last = recent[-1]
+                    level, detail = agentlib.WARN, (f"{len(recent)} alert-worthy event(s) in 24h; latest: "
+                                                    f"{last.get('source')}" + (f" {last.get('id')}" if last.get("id") else ""))
+            if c["key"] == "security" and level == agentlib.OK:
+                recent = self._recent(h, "security", received)
+                if recent:
+                    last = recent[-1]
+                    acct = self._pretty_account(last.get("account"))
+                    level, detail = agentlib.WARN, (f"{len(recent)} notable security event(s) in 24h; latest: "
+                                                    f"{last.get('what')}" + (f" ({acct})" if acct else ""))
+            if level == agentlib.CRIT:
+                if not reeval:
+                    sv.failures += 1
+                elif sv.failures == 0:
+                    # Re-checking after a settings change (e.g. Stop ignoring): the problem
+                    # was already in the report, so don't wait for two more reports.
+                    sv.failures = 2
+                status = AMBER if c.get("confirm") and sv.failures < 2 else RED
+            else:
+                sv.failures = 0
+                status = self.LEVEL_STATUS[level]
+            sv.label, sv.detail, sv.last_check = c["label"], detail, received
+            if not restoring and not reeval:
+                self.store.add(svc_key(h, sv), received, status != RED, None)
+            if status != sv.status:
+                old, sv.status, sv.last_change = sv.status, status, received
+                if not restoring:
+                    log.info("%s %s: %s -> %s [%s]", h.name, sv.label, old, status, detail)
+                    await self.on_agent_check_change(h, sv, old, status)
+            new_list.append(sv)
+        for gone in existing.values():  # e.g. a role was removed from the server
+            await self.dismiss(f"ping_monitor_{svc_key(h, gone)}")
+            await self.ha.delete_state(svc_entity(h, gone))
+        h.agent_checks = new_list
+        if not restoring and not reeval:
+            await self._alert_notables(h, notable)
+        await self._recompute(h, quiet=restoring)
+        if not restoring:
+            await self.publish(h)
+
+    async def _recompute(self, h: Host, quiet: bool = False) -> None:
+        """Agent reports arrive between pings: update Up/Degraded straight away."""
+        if h.status not in (GREEN, DEGRADED):
+            return
+        new = DEGRADED if any(s.status == RED for s in h.services + h.agent_checks) else GREEN
+        if new != h.status:
+            old, h.status, h.last_change = h.status, new, time.time()
+            if not quiet:
+                log.info("%s: %s -> %s", h.name, old, new)
+                await self.on_change(h, old, new, "agent")
+
+    async def on_agent_check_change(self, h: Host, s: Service, old: str, new: str) -> None:
+        await self.ha.fire("ping_monitor_service_changed", {
+            "name": h.name, "host": h.host, "ip": h.ip, "service": s.label, "target": s.desc,
+            "old_status": old, "new_status": new, "detail": s.detail,
+            "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
+        })
+        if h.maint_until:
+            return
+        tag = f"ping_monitor_{svc_key(h, s)}"
+        if new == RED:
+            if s.key == "agent_agent" and h.status == RED:
+                return  # the "down" alert already covers it
+            await self.notify(f"🟠 {h.name}: {s.label}", s.detail or "", tag)
+            await self.persist(tag, f"Rollcall: {h.name} {s.label}", s.detail or "")
+        elif old == RED:
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                word = "OK" if new == GREEN else "no longer critical"
+                await self.notify(f"🟢 {h.name}: {s.label} {word}", s.detail or "", tag)
+
+    @staticmethod
+    def _pretty_account(value) -> str:
+        v = str(value or "").strip()
+        m = re.match(r"^CN=((?:[^,\\]|\\.)+)", v, re.I)
+        return m.group(1).replace("\\", "") if m else v
+
+    def _tag(self, h: Host) -> str:
+        self._notice += 1
+        return f"ping_monitor_{h.key}__note{self._notice}"
+
+    async def _alert_notables(self, h: Host, notable: dict) -> None:
+        if h.maint_until:
+            return
+        sent = 0
+        if self.opts.get("agent_event_alerts", True):
+            for e in [e for e in notable["events"] if e.get("alert")][:5]:
+                what = f"event {e.get('id')}" if e.get("id") else "journal"
+                await self.notify(f"⚠️ {h.name}: {e.get('source')} {what}",
+                                  f"{e.get('level')}: {e.get('message')}", self._tag(h))
+                sent += 1
+        if self.opts.get("agent_security_alerts", True):
+            for i in [i for i in notable["security"] if i.get("alert")][:8]:
+                acct, by, grp = self._pretty_account(i.get("account")), i.get("by") or "?", i.get("group")
+                eid = int(i.get("id") or 0)
+                if eid == 4740:
+                    title, msg = "🔒 account locked out", f"{acct} was locked out" + (f" (from {i['source']})" if i.get("source") else "")
+                elif eid == 1102:
+                    title, msg = "🗑️ Security log cleared", f"The Security log was cleared by {by}"
+                elif eid in (4728, 4732, 4756):
+                    title, msg = "🛡️ added to a security group", f"{acct} was added to {grp} by {by}"
+                elif eid == 4720:
+                    title, msg = "👤 account created", f"{acct} was created by {by}"
+                elif eid == 4726:
+                    title, msg = "👤 account deleted", f"{acct} was deleted by {by}"
+                elif eid == 4719:
+                    title, msg = "🛡️ audit policy changed", f"Audit policy changed by {by}"
+                else:
+                    title, msg = i.get("what") or f"event {eid}", f"{acct} ({by})"
+                icon, _, text = title.partition(" ") if title[:1] in "🔒🗑🛡👤" else ("🔐", "", title)
+                await self.notify(f"{icon} {h.name}: {text}", msg, self._tag(h))
+                sent += 1
+        for d in notable["detections"][:5]:
+            ok = d.get("action_success", True)
+            await self.notify(f"🦠 {h.name}: Defender detected {d.get('threat')}",
+                              f"{d.get('resource') or ''} ({'dealt with' if ok else 'NOT removed: check this server'})",
+                              self._tag(h))
+            sent += 1
+        if sent:
+            log.info("%s: sent %d agent alert(s)", h.name, sent)
+
+    async def check_stale_agents(self, now: float) -> None:
+        limit = float(self.opts.get("agent_stale_minutes", 15)) * 60
+        for h in self.hosts.values():
+            if not h.agent_id or not h.agent_seen or not h.agent_checks:
+                continue
+            if h.maint_until:
+                continue  # paused (e.g. rebooting): the agent can't report, and that's expected
+            chip = h.agent_checks[0]
+            # A fresh stale period after an add-on restart or the end of a pause, so a
+            # rebooted server's agent has time to run again before it's flagged.
+            age = now - max(h.agent_seen, self.started, h.maint_ended or 0)
+            if age > limit and chip.status != RED:
+                old, chip.status, chip.last_change = chip.status, RED, now
+                chip.detail = f"No report for {fmt_duration(now - h.agent_seen)}"
+                log.info("%s: agent stopped reporting (%s)", h.name, chip.detail)
+                await self.on_agent_check_change(h, chip, old, RED)
+                await self._recompute(h)
+                await self.publish(h)
+            elif chip.status == RED and age <= limit:
+                pass  # recovered by the next report
+            elif chip.status == RED:
+                chip.detail = f"No report for {fmt_duration(now - h.agent_seen)}"
+
+    def _agent_summary(self, h: Host) -> dict | None:
+        if not h.agent_id:
+            return None
+        r = h.agent_report or {}
+        mem = None
+        if r.get("mem_total_mb"):
+            mem = round(100 * (1 - (r.get("mem_free_mb") or 0) / r["mem_total_mb"]), 1)
+        return {"id": h.agent_id, "last_seen": h.agent_seen, "version": r.get("agent_version"),
+                "roles": r.get("roles") or [], "os": r.get("os"), "uptime_s": r.get("uptime_s"),
+                # Before the first report, the OS comes from the enrolment request.
+                "os_family": r.get("os_family") or ((self.agents.agents.get(h.agent_id) if self.agents else None) or {}).get("os_family") or "windows",
+                "load": r.get("load"),
+                "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot")}
+
+    def _metrics(self, h: Host) -> list[tuple[str, str, dict]]:
+        r = h.agent_report
+        if not r:
+            return []
+        out = []
+        base = f"sensor.ping_monitor_{h.key}"
+        common = {"unit_of_measurement": "%", "state_class": "measurement"}
+        if r.get("cpu_pct") is not None:
+            out.append((f"{base}_cpu", str(r["cpu_pct"]), {**common, "friendly_name": f"{h.name} CPU", "icon": "mdi:cpu-64-bit"}))
+        if r.get("mem_total_mb"):
+            used = round(100 * (1 - (r.get("mem_free_mb") or 0) / r["mem_total_mb"]), 1)
+            out.append((f"{base}_memory", str(used), {**common, "friendly_name": f"{h.name} memory used", "icon": "mdi:memory"}))
+        for d in r.get("disks") or []:
+            try:
+                size, free = float(d.get("size_gb") or 0), float(d.get("free_gb") or 0)
+            except (TypeError, ValueError):
+                continue
+            if size < 0.5:
+                continue
+            name = str(d.get("name") or "disk")
+            letter = "root" if name == "/" else slugify(name)
+            out.append((f"{base}_disk_{letter}_free", str(round(100 * free / size, 1)),
+                        {**common, "friendly_name": f"{h.name} {d.get('name')} free", "icon": "mdi:harddisk",
+                         "free_gb": free, "size_gb": size}))
+        return out
+
+    def _metric_entities(self, h: Host) -> list[str]:
+        return [eid for eid, _v, _a in self._metrics(h)]
+
+    def details(self, h: Host, include_security: bool) -> dict:
+        r = dict(h.agent_report or {})
+        if not include_security:
+            r.pop("security", None)
+        hist = {k: [{**{kk: vv for kk, vv in i.items() if kk != "_rx"}, "received": i.get("_rx")} for i in v[-100:]]
+                for k, v in h.agent_history.items() if include_security or k in ("events", "detections")}
+        hs = self.agent_settings["hosts"].get(h.key) or {}
+        settings = {"ignore": hs.get("ignore") or [], "global_ignore": self.agent_settings.get("global_ignore") or [],
+                    "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
+                    "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
+        return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
+                "settings": settings,
+                "received": h.agent_seen, "security_visible": include_security,
+                "checks": [{"label": s.label, "status": s.status,
+                            "detail": s.detail if include_security or s.key != "agent_security" else SECURITY_HIDDEN}
+                           for s in h.agent_checks]}
+
+    # -- reporting --------------------------------------------------------
+    def uptime_24h(self, key: str) -> float | None:
+        now = time.time()
+        return uptime_pct(self.store.rows(key, now - DAY), now - DAY, now, self.max_gap)
+
+    def history(self, key: str) -> list[str]:
+        now = time.time()
+        rows = self.store.rows(key, now - DAY)
+        size = DAY / BUCKETS
+        out = []
+        for b in range(BUCKETS):
+            start = now - DAY + b * size
+            up, down, maint = coverage(rows, start, start + size, self.max_gap)
+            if up + down <= 0:
+                out.append("m" if maint > 0 else "n")
+            else:
+                out.append("g" if down == 0 else "r" if up == 0 else "a")
+        return out
+
+    async def publish(self, h: Host) -> None:
+        await self.ha.set_state(
+            h.entity_id,
+            h.status,
+            {
+                "friendly_name": h.name,
+                "icon": ICONS[h.status],
+                "host": h.host,
+                "ip": h.ip,
+                "uptime_24h": self.uptime_24h(h.key),
+                "latency_ms": h.latency,
+                "consecutive_failures": h.failures,
+                "last_check": iso(h.last_check),
+                "last_change": iso(h.last_change),
+                "maintenance_until": iso(h.maint_until),
+                "services": {s.label: s.status for s in h.services + h.agent_checks},
+            },
+        )
+        for s in h.services + h.agent_checks:
+            await self.ha.set_state(
+                svc_entity(h, s),
+                s.status,
+                {
+                    "friendly_name": f"{h.name} {s.label}",
+                    "icon": SVC_ICONS.get(s.status, SVC_ICONS[UNKNOWN]),
+                    "host": h.host,
+                    "target": s.desc,
+                    "detail": s.detail,
+                    "uptime_24h": self.uptime_24h(svc_key(h, s)),
+                    "latency_ms": s.latency,
+                    "last_check": iso(s.last_check),
+                    "last_change": iso(s.last_change),
+                },
+            )
+        for eid, value, attrs in self._metrics(h):
+            await self.ha.set_state(eid, value, attrs)
+
+    def snapshot(self) -> dict:
+        hosts = []
+        for h in self.hosts.values():
+            hosts.append({
+                "key": h.key, "name": h.name, "host": h.host, "ip": h.ip,
+                "status": h.status, "failures": h.failures, "latency_ms": h.latency,
+                "uptime_24h": self.uptime_24h(h.key), "history": self.history(h.key),
+                "last_check": h.last_check, "last_change": h.last_change,
+                "next_check": h.next_due, "checking": h.checking,
+                "entity_id": h.entity_id,
+                "maint_until": h.maint_until, "maint_seen_down": h.maint_seen_down,
+                "checks": h.checks,
+                "services": [{
+                    "key": s.key, "label": s.label, "target": s.desc, "status": s.status, "kind": s.kind,
+                    "latency_ms": s.latency, "detail": s.detail,
+                    "uptime_24h": self.uptime_24h(svc_key(h, s)),
+                    "last_check": s.last_check, "last_change": s.last_change,
+                    "agent": s.kind == "agent",
+                } for s in h.services + h.agent_checks],
+                "agent": self._agent_summary(h),
+            })
+        return {"now": time.time(), "interval": self.interval,
+                "retry_interval": self.retry_interval,
+                "maintenance_minutes": int(self.opts["maintenance_minutes"]),
+                "hosts": hosts}
+
+
+# --------------------------------------------------------------------------
+# Access control
+# --------------------------------------------------------------------------
+class Access:
+    """Decides who may change things (add/edit/delete/pause/reset).
+
+    Home Assistant's ingress proxy tells us who is viewing (X-Remote-User-*
+    headers) but not whether they're an admin, so the admin list is read from
+    HA's user list and cached. Names in the `editors` option can always make
+    changes. If the user list can't be read and no editors are set, everyone
+    can make changes (the behaviour before this was added), with a warning.
+    """
+    REFRESH = 300
+
+    def __init__(self, opts: dict, ha: HomeAssistant):
+        self.enabled = bool(opts.get("admin_only_changes", True))
+        self.editors = {str(e).strip().lower() for e in (opts.get("editors") or []) if str(e).strip()}
+        self.ha = ha
+        self.admins: set[str] | None = None
+        self.loaded_at = 0.0
+        self.lock = asyncio.Lock()
+        self.warned = False
+
+    async def _refresh(self, force: bool = False) -> None:
+        async with self.lock:
+            if not force and time.time() - self.loaded_at < self.REFRESH:
+                return
+            self.loaded_at = time.time()
+            users = await self.ha.list_users()
+            if users is None:
+                if self.admins is None and not self.warned:
+                    self.warned = True
+                    log.warning("Couldn't read the Home Assistant user list, so admins can't be "
+                                "identified. %s", "Only names in 'editors' can make changes."
+                                if self.editors else "Everyone can make changes until it can be "
+                                "read; add usernames to the 'editors' option to restrict it.")
+                return
+            self.admins = {u["id"] for u in users if u.get("id") and (
+                u.get("is_admin") or u.get("is_owner") or "system-admin" in (u.get("group_ids") or []))}
+            log.debug("Loaded %d HA admin user(s)", len(self.admins))
+
+    async def who(self, req) -> dict:
+        uid = req.headers.get("X-Remote-User-Id", "")
+        name = req.headers.get("X-Remote-User-Name", "")
+        display = req.headers.get("X-Remote-User-Display-Name", "") or name
+        return {"id": uid, "name": name, "display": display, "can_edit": await self._can_edit(uid, name, display)}
+
+    async def _can_edit(self, uid: str, name: str, display: str) -> bool:
+        if not self.enabled:
+            return True
+        if not SUPERVISOR_TOKEN:
+            return True  # running outside Home Assistant (development)
+        if not uid:
+            return False  # not via HA ingress
+        if name.lower() in self.editors or display.lower() in self.editors:
+            return True
+        await self._refresh()
+        # Someone just made an admin shouldn't wait 5 minutes; recheck (at most every 30s).
+        if self.admins is not None and uid not in self.admins and time.time() - self.loaded_at > 30:
+            await self._refresh(force=True)
+        if self.admins is None:
+            return not self.editors
+        return uid in self.admins
+
+
+# --------------------------------------------------------------------------
+# Web
+# --------------------------------------------------------------------------
+def build_app(monitor: Monitor, access: Access) -> web.Application:
+    def editor_only(handler):
+        async def wrapped(req):
+            user = await access.who(req)
+            if not user["can_edit"]:
+                log.info("Blocked change by %s: %s %s", user["display"] or "unknown user",
+                         req.method, req.path)
+                raise web.HTTPForbidden(
+                    text=json.dumps({"error": "Only Home Assistant admins can make changes here."}),
+                    content_type="application/json")
+            return await handler(req)
+        return wrapped
+
+    async def index(_req):
+        # Always revalidate, so an add-on update shows the new page straight away.
+        return web.FileResponse(WEB_DIR / "index.html", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
+
+    async def status(req):
+        snap = monitor.snapshot()
+        user = await access.who(req)
+        snap["user"] = user["display"] or None
+        snap["can_edit"] = user["can_edit"]
+        if user["can_edit"] and monitor.agents:
+            snap["agents_pending"] = len(monitor.agents.pending)
+        if not user["can_edit"]:
+            for h in snap["hosts"]:
+                for sv in h["services"]:
+                    if sv["key"] == "agent_security":
+                        sv["detail"] = SECURITY_HIDDEN
+        return web.json_response(snap)
+
+    async def export_data(_req):
+        data = await asyncio.to_thread(make_backup, os.environ.get("PM_VERSION"))
+        name = time.strftime("rollcall-export-%Y%m%d-%H%M.zip")
+        log.info("Exported data (%d KB)", len(data) // 1024)
+        return web.Response(body=data, content_type="application/zip",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    async def import_data(req):
+        data = await req.read()
+        try:
+            manifest = await asyncio.to_thread(stage_restore, data)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        log.info("Import staged (%s hosts, %s agents, exported from version %s); restarting to apply it",
+                 manifest.get("hosts"), manifest.get("agents"), manifest.get("addon_version"))
+        options_note = None
+        if req.query.get("options") == "1" and (RESTORE_DIR / "options.json").exists():
+            options_note = await monitor.ha.restore_options(json.loads((RESTORE_DIR / "options.json").read_text()))
+        restarting = await monitor.ha.restart_self()
+        return web.json_response({"ok": True, "manifest": manifest, "restarting": restarting, "options": options_note})
+
+    async def ha_entities(req):
+        """Home Assistant sensors for the Edit dialog's search, best matches first."""
+        q = (req.query.get("q") or "").strip().lower()
+        states = await monitor.ha.get_json("/states")
+        if not isinstance(states, list):
+            return web.json_response({"error": "Couldn't read Home Assistant's entities", "entities": []})
+        words = [w for w in re.split(r"[\s_.\-]+", q) if w]
+        out = []
+        for st in states:
+            eid = str(st.get("entity_id") or "")
+            if not eid.startswith(("sensor.", "binary_sensor.")) or eid.startswith("sensor.ping_monitor_"):
+                continue
+            attrs = st.get("attributes") or {}
+            name = str(attrs.get("friendly_name") or eid)
+            hay = (eid + " " + name).lower().replace("_", " ")
+            if words and not all(w in hay for w in words):
+                continue
+            score = sum(k in hay for k in ("cpu", "memory", "temperature", "uptime", "load"))
+            out.append({"entity_id": eid, "name": name, "state": st.get("state"),
+                        "unit": attrs.get("unit_of_measurement") or "", "score": score})
+        out.sort(key=lambda e: (-e["score"], e["entity_id"]))
+        return web.json_response({"entities": out[:60], "total": len(out)})
+
+    async def views_get(_req):
+        return web.json_response({"views": load_views()})
+
+    async def views_put(req):
+        try:
+            body = await req.json()
+            views = clean_views(body.get("views") if isinstance(body, dict) else None)
+        except (json.JSONDecodeError, ValueError) as err:
+            msg = str(err) if isinstance(err, ValueError) and not isinstance(err, json.JSONDecodeError) else "Invalid JSON"
+            return web.json_response({"error": msg}, status=400)
+        save_views(views)
+        log.info("Saved %d dashboard tab(s)", len(views))
+        return web.json_response({"views": views})
+
+    async def host_details(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        user = await access.who(req)
+        return web.json_response(monitor.details(h, include_security=user["can_edit"]))
+
+    async def agent_ignore(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        try:
+            item = agentlib.clean_ignore_item(body.get("kind"), body.get("value"))
+        except (ValueError, AttributeError) as err:
+            return web.json_response({"error": str(err)}, status=400)
+        scope = "all" if body.get("scope") == "all" else "host"
+        await monitor.set_ignore(h, item, scope, bool(body.get("remove")))
+        return web.json_response({"ok": True, "item": item, "scope": scope})
+
+    async def agent_disk(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        disk = str(body.get("disk") or "").strip()
+        if not re.match(r"^([A-Za-z]:?\\?|/[^\x00-\x1f]{0,200})$", disk):
+            return web.json_response({"error": "invalid disk"}, status=400)
+
+        def num(v):
+            if v in (None, ""):
+                return None
+            v = float(v)
+            if not 0 <= v <= 95:
+                raise ValueError("thresholds must be between 0 and 95%")
+            return v
+        try:
+            warn, crit = num(body.get("warn")), num(body.get("crit"))
+        except (TypeError, ValueError) as err:
+            return web.json_response({"error": str(err) if "between" in str(err) else "thresholds must be numbers"}, status=400)
+        if warn is not None and crit is not None and warn and crit > warn:
+            return web.json_response({"error": "the red level can't be above the amber level"}, status=400)
+        await monitor.set_disk(h, disk, warn, crit)
+        return web.json_response({"ok": True})
+
+    # -- Windows agents (admin) ---------------------------------------------
+    def _agent_row(a):
+        h = monitor.hosts.get(a.get("host_key") or "")
+        return {"id": a["id"], "hostname": a["hostname"], "fqdn": a.get("fqdn"), "ips": a.get("ips") or [],
+                "os": a.get("os"), "version": a.get("agent_version"), "roles": a.get("roles") or [],
+                "os_family": a.get("os_family") or "windows",
+                "approved_at": a.get("approved_at"), "last_report": a.get("last_report"),
+                "host_key": h.key if h else None, "host_name": h.name if h else None}
+
+    async def agents_list(_req):
+        st = monitor.agents
+        return web.json_response({
+            "port": AGENT_PORT, "ssl": bool(monitor.opts.get("agent_ssl")),
+            "stale_minutes": monitor.opts.get("agent_stale_minutes", 15),
+            "key_hint": "…" + st.enrol_key[-4:],
+            "agents": sorted((_agent_row(a) for a in st.agents.values()), key=lambda r: r["hostname"]),
+            "pending": sorted(({k: p.get(k) for k in ("id", "hostname", "fqdn", "ips", "os", "agent_version",
+                                                       "requested_at", "source_ip", "os_family")}
+                               | {"replaces": bool(p.get("replaces"))} for p in st.pending.values()),
+                              key=lambda r: r["requested_at"]),
+            "latest_version": _script_version(),
+            "latest_linux_version": _linux_script_version(),
+        })
+
+    async def agents_approve(req):
+        pid = req.match_info["pid"]
+        if pid not in monitor.agents.pending:
+            raise web.HTTPNotFound()
+        a = await monitor.approve_agent(pid)
+        return web.json_response({"approved": a["id"]})
+
+    async def agents_approve_all(_req):
+        ids = list(monitor.agents.pending)
+        for pid in ids:
+            await monitor.approve_agent(pid)
+        return web.json_response({"approved": len(ids)})
+
+    async def agents_reject(req):
+        pid = req.match_info["pid"]
+        if pid not in monitor.agents.pending:
+            raise web.HTTPNotFound()
+        await monitor.reject_agent(pid)
+        return web.json_response({"rejected": pid})
+
+    async def agents_revoke(req):
+        aid = req.match_info["aid"]
+        if aid not in monitor.agents.agents:
+            raise web.HTTPNotFound()
+        await monitor.revoke_agent(aid)
+        return web.json_response({"revoked": aid})
+
+    async def agents_rotate(_req):
+        monitor.agents.rotate_key()
+        log.info("Rotated the Windows agent enrolment key")
+        return web.json_response({"key_hint": "…" + monitor.agents.enrol_key[-4:]})
+
+    async def agents_script(req):
+        server = (req.query.get("server") or "").strip().rstrip("/")
+        if not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]+$", server):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Enter the address as http://host:port"}),
+                                     content_type="application/json")
+        if req.query.get("os") == "linux":
+            text = LINUX_AGENT_SCRIPT.read_text(encoding="utf-8")
+            text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
+            text = text.replace('ENROL_KEY = "__PM_ENROL_KEY__"', f'ENROL_KEY = "{monitor.agents.enrol_key}"', 1)
+            if req.query.get("ignore_cert") == "1":
+                text = text.replace("IGNORE_CERT = False", "IGNORE_CERT = True", 1)
+            return web.Response(body=text.encode("utf-8"), content_type="application/octet-stream", headers={
+                "Content-Disposition": 'attachment; filename="pingmonitor-agent.py"'})
+        text = AGENT_SCRIPT.read_text(encoding="utf-8")
+        text = text.replace("[string]$Server = '__PM_SERVER__'", f"[string]$Server = '{server}'", 1)
+        text = text.replace("[string]$EnrolKey = '__PM_ENROL_KEY__'",
+                            f"[string]$EnrolKey = '{monitor.agents.enrol_key}'", 1)
+        if req.query.get("ignore_cert") == "1":
+            text = text.replace("[switch]$IgnoreCertificate,", "[switch]$IgnoreCertificate = $true,", 1)
+        # Windows PowerShell 5.1 reads BOM-less scripts as ANSI; add a BOM so it's read as UTF-8.
+        body = b"\xef\xbb\xbf" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+        return web.Response(body=body, content_type="application/octet-stream", headers={
+            "Content-Disposition": 'attachment; filename="PingMonitorAgent.ps1"'})
+
+    async def check_now(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        h.next_due = 0
+        return web.json_response({"queued": h.key})
+
+    async def reset(req):
+        key = req.match_info.get("key")
+        if key is not None and key not in monitor.hosts:
+            raise web.HTTPNotFound()
+        targets = [monitor.hosts[key]] if key else list(monitor.hosts.values())
+        removed = monitor.store.clear(key) if key else monitor.store.clear()
+        for h in targets:
+            h.last_change = None
+            for s in h.services:
+                s.last_change = None
+            await monitor.publish(h)
+        log.info("Reset uptime history for %s (%d rows removed)",
+                 targets[0].name if key else "all hosts", removed)
+        return web.json_response({"reset": key or "all", "rows": removed})
+
+    async def maintenance(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json() if req.can_read_body else {}
+        except json.JSONDecodeError:
+            body = {}
+        try:
+            raw = body.get("minutes")
+            minutes = int(monitor.opts["maintenance_minutes"] if raw is None else raw)
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="minutes must be a whole number")
+        if not 1 <= minutes <= 1440:
+            raise web.HTTPBadRequest(text="minutes must be between 1 and 1440")
+        await monitor.start_maintenance(h, minutes)
+        return web.json_response({"paused": h.key, "until": h.maint_until})
+
+    async def resume(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        await monitor.resume(h)
+        return web.json_response({"resumed": h.key})
+
+    async def presets(_req):
+        return web.json_response({
+            "presets": [{"name": n, "title": t, "group": g, "summary": preset_summary(n)}
+                        for n, t, g in PRESET_INFO],
+            "aliases": ALIASES,
+        })
+
+    async def read_entry(req) -> dict:
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Invalid JSON"}),
+                                     content_type="application/json")
+        try:
+            return validate_entry(body)
+        except ValueError as err:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}),
+                                     content_type="application/json")
+
+    async def add_host(req):
+        entry = await read_entry(req)
+        h = await monitor.add_host(entry)
+        return web.json_response({"added": h.key}, status=201)
+
+    async def update_host(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        await monitor.update_host(h, await read_entry(req))
+        return web.json_response({"updated": h.key})
+
+    async def delete_host(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        await monitor.delete_host(h)
+        return web.json_response({"deleted": h.key})
+
+    @web.middleware
+    async def no_store(req, handler):
+        resp = await handler(req)
+        if req.path.startswith("/api/") and "Cache-Control" not in resp.headers:
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    app = web.Application(middlewares=[no_store], client_max_size=512 * 1024 * 1024)  # imports
+    app.router.add_get("/api/presets", presets)
+    app.router.add_post("/api/hosts", editor_only(add_host))
+    app.router.add_put("/api/hosts/{key}", editor_only(update_host))
+    app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
+    app.router.add_get("/", index)
+    app.router.add_get("/api/status", status)
+    app.router.add_get("/api/views", views_get)
+    app.router.add_get("/api/export", editor_only(export_data))
+    app.router.add_post("/api/import", editor_only(import_data))
+    app.router.add_get("/api/ha/entities", editor_only(ha_entities))
+    app.router.add_put("/api/views", editor_only(views_put))
+    app.router.add_post("/api/check/{key}", check_now)  # harmless, so open to all viewers
+    app.router.add_post("/api/reset", editor_only(reset))
+    app.router.add_post("/api/reset/{key}", editor_only(reset))
+    app.router.add_post("/api/maintenance/{key}", editor_only(maintenance))
+    app.router.add_post("/api/resume/{key}", editor_only(resume))
+    app.router.add_get("/api/hosts/{key}/details", host_details)
+    app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
+    app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
+    app.router.add_get("/api/agents", editor_only(agents_list))
+    app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))
+    app.router.add_post("/api/agents/approve/{pid}", editor_only(agents_approve))
+    app.router.add_post("/api/agents/reject/{pid}", editor_only(agents_reject))
+    app.router.add_delete("/api/agents/{aid}", editor_only(agents_revoke))
+    app.router.add_post("/api/agents/rotate-key", editor_only(agents_rotate))
+    app.router.add_get("/api/agents/script", editor_only(agents_script))
+    return app
+
+
+# --------------------------------------------------------------------------
+# Dashboard tabs ("views"): saved filters shared by everyone who opens the panel
+# --------------------------------------------------------------------------
+VIEW_FIELDS = {
+    "name": {"begins", "contains", "ends", "is", "not", "notcontains", "regex"},
+    "address": {"begins", "contains", "ends", "is", "not", "notcontains", "regex"},
+    "ip": {"in", "notin"},
+    "os": {"is", "not"},
+    "status": {"is", "not"},
+    "role": {"contains", "notcontains"},
+    "check": {"contains", "notcontains"},
+    "uptime": {"below", "above"},
+}
+VIEW_OS = {"windows", "linux", "none"}
+VIEW_STATUS = {"green", "amber", "red", "degraded", "maintenance", "unknown", "problem"}
+IP_RANGE_RE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}(/\d{1,2}|-\d{1,3}(\.\d{1,3}){3}|-\d{1,3})?|\d{1,3}(\.(\d{1,3}|\*)){1,3})$")
+
+
+def clean_views(raw) -> list[dict]:
+    """Validate the tab list sent by the dashboard."""
+    if not isinstance(raw, list) or len(raw) > 50:
+        raise ValueError("expected a list of up to 50 tabs")
+    out, ids = [], set()
+    for v in raw:
+        if not isinstance(v, dict):
+            raise ValueError("invalid tab")
+        name = str(v.get("name") or "").strip()
+        if not name or len(name) > 40:
+            raise ValueError("each tab needs a name of up to 40 characters")
+        vid = str(v.get("id") or "").strip() or secrets.token_hex(4)
+        if not re.match(r"^[a-z0-9]{1,16}$", vid) or vid in ids:
+            vid = secrets.token_hex(4)
+        ids.add(vid)
+        rules = v.get("rules") or []
+        if not isinstance(rules, list) or len(rules) > 20:
+            raise ValueError(f"'{name}': up to 20 conditions")
+        clean = []
+        for r in rules:
+            if not isinstance(r, dict):
+                raise ValueError(f"'{name}': invalid condition")
+            field, op = str(r.get("field") or ""), str(r.get("op") or "")
+            value = str(r.get("value") if r.get("value") is not None else "").strip()
+            if field not in VIEW_FIELDS or op not in VIEW_FIELDS[field]:
+                raise ValueError(f"'{name}': unknown condition {field} {op}")
+            if not value or len(value) > 200:
+                raise ValueError(f"'{name}': every condition needs a value")
+            if field == "ip":
+                for part in re.split(r"[,\s]+", value):
+                    if part and not IP_RANGE_RE.match(part):
+                        raise ValueError(f"'{name}': '{part}' isn't an IP range (use 10.0.1.0/24, 10.0.1.10-50 or 10.0.1.*)")
+            if field == "os" and value not in VIEW_OS:
+                raise ValueError(f"'{name}': unknown OS '{value}'")
+            if field == "status" and value not in VIEW_STATUS:
+                raise ValueError(f"'{name}': unknown status '{value}'")
+            if field == "uptime":
+                try:
+                    if not 0 <= float(value) <= 100:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError(f"'{name}': uptime must be a percentage")
+            if op == "regex":
+                try:
+                    re.compile(value)
+                except re.error:
+                    raise ValueError(f"'{name}': '{value}' isn't a valid pattern")
+            clean.append({"field": field, "op": op, "value": value})
+        out.append({"id": vid, "name": name, "match": "any" if v.get("match") == "any" else "all", "rules": clean})
+    return out
+
+
+def load_views() -> list[dict]:
+    try:
+        return clean_views(json.loads(VIEWS_PATH.read_text()))
+    except FileNotFoundError:
+        return []
+    except Exception as err:  # noqa: BLE001
+        log.error("Could not read %s: %s", VIEWS_PATH, err)
+        return []
+
+
+def save_views(views: list[dict]) -> None:
+    tmp = VIEWS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(views, indent=2))
+    tmp.replace(VIEWS_PATH)
+
+
+# --------------------------------------------------------------------------
+# Export / import: everything the add-on has learnt, to move it to a new install
+# --------------------------------------------------------------------------
+BACKUP_FORMAT = "ping_monitor_backup"
+RESTORE_DIR = DB_PATH.parent / "restore_pending"
+REPORT_NAME = re.compile(r"^agent_reports/[0-9a-f]{6,32}\.json$")
+
+
+def backup_files() -> dict[str, Path]:
+    return {"hosts.json": HOSTS_PATH, "maintenance.json": MAINT_PATH, "agents.json": AGENTS_PATH,
+            "agent_settings.json": AGENT_SETTINGS, "views.json": VIEWS_PATH, "imported_options.json": IMPORT_MARK}
+
+
+def make_backup(version: str | None) -> bytes:
+    """A zip of the host list, tabs, agent enrolments and settings, last reports and check history."""
+    buf = io.BytesIO()
+    counts = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, path in backup_files().items():
+            if path.exists():
+                z.write(path, name)
+        for f in sorted(AGENT_REPORTS.glob("*.json")) if AGENT_REPORTS.exists() else []:
+            if re.match(r"^[0-9a-f]{6,32}\.json$", f.name):
+                z.write(f, "agent_reports/" + f.name)
+        with tempfile.TemporaryDirectory() as tmp:
+            # sqlite's backup API gives a consistent copy while the monitor keeps writing.
+            snap = Path(tmp) / "history.db"
+            src, dst = sqlite3.connect(DB_PATH), sqlite3.connect(snap)
+            try:
+                src.backup(dst)
+                counts["history_rows"] = dst.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
+            finally:
+                src.close()
+                dst.close()
+            z.write(snap, "history.db")
+        try:
+            raw = json.loads(OPTIONS_PATH.read_text())
+            raw.pop("hosts", None)
+            z.writestr("options.json", json.dumps(raw, indent=2))
+        except (OSError, ValueError):
+            pass
+        try:
+            counts["hosts"] = len(json.loads(HOSTS_PATH.read_text()))
+            counts["agents"] = len(json.loads(AGENTS_PATH.read_text()).get("agents") or {})
+        except (OSError, ValueError, AttributeError):
+            pass
+        z.writestr("manifest.json", json.dumps({"format": BACKUP_FORMAT, "version": 1, "addon_version": version,
+                                                "created": time.time(), **counts}, indent=2))
+    return buf.getvalue()
+
+
+def stage_restore(data: bytes) -> dict:
+    """Check an export and unpack it to be applied at the next start. Returns its manifest."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ValueError("That isn't an export file from this add-on (not a zip)")
+    with z:
+        names = z.namelist()
+        try:
+            manifest = json.loads(z.read("manifest.json"))
+        except (KeyError, ValueError):
+            raise ValueError("That isn't an export file from this add-on (no manifest)")
+        if manifest.get("format") != BACKUP_FORMAT:
+            raise ValueError("That isn't an export file from this add-on")
+        allowed = set(backup_files()) | {"manifest.json", "history.db", "options.json"}
+        for n in names:
+            if n not in allowed and not REPORT_NAME.match(n):
+                raise ValueError(f"Unexpected file in the export: {n}")
+        if sum(i.file_size for i in z.infolist()) > 1024 ** 3:
+            raise ValueError("The export is too large")
+        for n in names:
+            if n.endswith(".json"):
+                try:
+                    json.loads(z.read(n))
+                except ValueError:
+                    raise ValueError(f"{n} in the export is damaged")
+        if "agents.json" in names and not json.loads(z.read("agents.json")).get("enrol_key"):
+            raise ValueError("agents.json in the export is damaged")
+        shutil.rmtree(RESTORE_DIR, ignore_errors=True)
+        RESTORE_DIR.mkdir(parents=True)
+        for n in names:
+            target = RESTORE_DIR / n
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(z.read(n))
+    if (RESTORE_DIR / "history.db").exists():
+        try:
+            con = sqlite3.connect(RESTORE_DIR / "history.db")
+            ok = con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            con.execute("SELECT COUNT(*) FROM checks").fetchone()
+            con.close()
+        except sqlite3.Error:
+            ok = False
+        if not ok:
+            shutil.rmtree(RESTORE_DIR, ignore_errors=True)
+            raise ValueError("The history in the export is damaged")
+    (RESTORE_DIR / "ready").write_text(str(time.time()))
+    return manifest
+
+
+def apply_pending_restore() -> None:
+    """At start-up, before anything is loaded: swap in an imported export.
+
+    The data it replaces is kept in before_import_<time>/ in the data folder."""
+    if not (RESTORE_DIR / "ready").exists():
+        return
+    keep = DB_PATH.parent / time.strftime("before_import_%Y%m%d_%H%M%S")
+    keep.mkdir(parents=True, exist_ok=True)
+    targets = {**backup_files(), "history.db": DB_PATH}
+    for name, path in targets.items():
+        if path.exists():
+            shutil.move(str(path), keep / name)
+        for extra in ("-wal", "-shm", "-journal"):
+            side = Path(str(path) + extra)
+            if side.exists():
+                side.unlink()
+        staged = RESTORE_DIR / name
+        if staged.exists():
+            shutil.move(str(staged), path)
+    if AGENT_REPORTS.exists():
+        shutil.move(str(AGENT_REPORTS), keep / "agent_reports")
+    if (RESTORE_DIR / "agent_reports").exists():
+        shutil.move(str(RESTORE_DIR / "agent_reports"), AGENT_REPORTS)
+    shutil.rmtree(RESTORE_DIR, ignore_errors=True)
+    print(f"Imported an export; the previous data is kept in {keep}", flush=True)
+
+
+def _linux_script_version() -> str | None:
+    try:
+        m = re.search(r'^AGENT_VERSION = "([^"]+)"', LINUX_AGENT_SCRIPT.read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def _script_version() -> str | None:
+    try:
+        m = re.search(r"\$AgentVersion = '([^']+)'", AGENT_SCRIPT.read_text(encoding="utf-8"))
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def build_agent_app(monitor: Monitor) -> web.Application:
+    """The small API the Windows agents talk to, on its own LAN port.
+
+    Only enrol and report live here; the dashboard stays behind HA ingress.
+    """
+    store = monitor.agents
+
+    async def read_json(req) -> dict:
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(text="invalid JSON")
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="expected an object")
+        return body
+
+    async def enrol(req):
+        body = await read_json(req)
+        if not store.check_key(body.get("enrol_key")):
+            log.warning("Agent enrolment from %s refused: wrong enrolment key", req.remote)
+            return web.json_response({"error": "wrong enrolment key"}, status=403)
+        token = str(body.get("token") or "")
+        if not agentlib.TOKEN_RE.match(token):
+            raise web.HTTPBadRequest(text="invalid token")
+        try:
+            info = clean_enrol_info(body)
+        except ValueError as err:
+            raise web.HTTPBadRequest(text=str(err))
+        state, rec = store.request(info, token, req.remote)
+        if state == "approved":
+            return web.json_response({"status": "approved"})
+        if state == "rejected":
+            return web.json_response({"status": "rejected"}, status=410)
+        if state == "new":
+            await monitor.agent_pending_notice(rec)
+        return web.json_response({"status": "pending"}, status=202)
+
+    async def report(req):
+        auth = req.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        state, agent = store.lookup(token)
+        if state == "pending":
+            return web.json_response({"status": "pending"}, status=202)
+        if state != "approved":
+            return web.json_response({"error": "unknown agent"}, status=401)
+        body = await read_json(req)
+        try:
+            await monitor.receive_report(agent, body, req.remote)
+        except Exception as err:  # noqa: BLE001
+            log.exception("Couldn't process the report from %s: %s", agent["hostname"], err)
+            try:  # keep a copy to diagnose with
+                (AGENT_REPORTS / f"failed-{agent['id']}.json").write_text(json.dumps(body, indent=1)[:2_000_000])
+            except Exception:  # noqa: BLE001
+                pass
+            return web.json_response({"error": "report could not be processed"}, status=500)
+        watch = [str(x) for x in monitor.opts.get("agent_watch_services") or [] if str(x).strip()]
+        return web.json_response({"ok": True, "watch_services": watch})
+
+    async def ping_view(_req):
+        return web.json_response({"ok": True, "service": "ping-monitor-agent-api"})
+
+    app = web.Application(client_max_size=4 * 1024 * 1024)
+    app.router.add_post("/agent/enrol", enrol)
+    app.router.add_post("/agent/report", report)
+    app.router.add_get("/agent/ping", ping_view)
+    return app
+
+
+def agent_ssl_context(opts: dict) -> ssl.SSLContext | None:
+    if not opts.get("agent_ssl"):
+        return None
+    cert = SSL_DIR / str(opts.get("agent_certfile") or "fullchain.pem")
+    key = SSL_DIR / str(opts.get("agent_keyfile") or "privkey.pem")
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
+async def main() -> None:
+    opts = load_options()
+    logging.basicConfig(
+        level=getattr(logging, str(opts["log_level"]).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+    apply_pending_restore()
+    store = Store(DB_PATH)
+    async with ClientSession(timeout=ClientTimeout(total=15)) as session:
+        ha = HomeAssistant(session)
+        monitor = Monitor(opts, store, ha)
+        if monitor.imported:
+            await ha.clear_option_hosts()
+        url = str(opts.get("notification_url") or "").strip()
+        if not url:
+            slug = await ha.addon_slug() or "local_ping_monitor"
+            url = f"/{slug}"
+        monitor.click_url = url if url.startswith(("/", "http://", "https://")) else "/" + url
+        log.info("Phone notifications will open %s", monitor.click_url)
+        await monitor.attach_agents(AgentStore(AGENTS_PATH, AGENT_REPORTS))
+        access = Access(opts, ha)
+        if access.enabled:
+            log.info("Changes allowed for HA admins%s", f" and {', '.join(sorted(access.editors))}"
+                     if access.editors else "")
+        else:
+            log.info("admin_only_changes is off: anyone who can open the panel can make changes")
+        runner = web.AppRunner(build_app(monitor, access), access_log=None)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", PORT).start()
+        log.info("Dashboard listening on port %d", PORT)
+        try:
+            ctx = agent_ssl_context(opts)
+            agent_runner = web.AppRunner(build_agent_app(monitor), access_log=None)
+            await agent_runner.setup()
+            await web.TCPSite(agent_runner, "0.0.0.0", AGENT_PORT, ssl_context=ctx).start()
+            log.info("Windows agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
+        except Exception as err:  # noqa: BLE001
+            log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
+        await monitor.run()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,0 +1,464 @@
+# Rollcall (Home Assistant add-on)
+
+*Who's up, and how are they doing?* Formerly **Ping Monitor**.
+
+
+Pings a list of computers on a schedule and, optionally, checks the services running on them (TCP ports and web apps). A Windows agent and a Linux agent can also report what's happening inside each server: disk space, services, Docker containers, event/journal and security logs, and role health (including Immich). Each computer is shown as:
+
+| Status | Meaning |
+|---|---|
+| 🟢 Up | Replied to ping, and all its service checks pass |
+| 🟡 Unresponsive | Missed one ping |
+| 🟠 Degraded | Pings fine, but a service check or agent check has failed. Notification sent |
+| 🔴 Down | Missed two pings in a row. Notification sent |
+| 🔵 Paused | Maintenance mode; still checked, but no alerts |
+
+You get a dashboard in the HA sidebar (status, name, service chips, IP, 24h uptime %, latency, a 24h history strip, Check now / Pause / Reset), sensors for every computer and service, and phone notifications.
+
+## Install
+
+1. In Home Assistant: **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/shoey79/rollcall` and close.
+2. Find **Rollcall** in the store, **Install**, then **Start**, and turn on **Show in sidebar**.
+3. Open **Rollcall** from the sidebar and click **+ Add computer**.
+
+Updates appear on the add-on's page in Home Assistant (or **⋮ → Check for updates** in the store). Turn on **Auto update** to install them automatically.
+
+**Moving from an earlier local copy** (installed by copying the folder into `/addons`): Home Assistant treats the store version as a separate add-on, so use **Export / import** to bring your data across. See [Export and import](#export-and-import).
+
+## Tabs
+
+The dashboard has tabs to split a long list. Each tab is a saved filter, so it updates by itself as computers are added or change. The number on a tab is how many computers it shows; the coloured badge is how many of them need attention (red if any are down).
+
+**Built in:** **All**, **Needs attention** (down, degraded or missed a check), and **Windows**, **Linux** and **No agent**, which appear once you have a mix.
+
+**Your own (admins):** **+ New tab**, give it a name and add conditions. Show computers that match *all* or *any* of them. The box at the bottom lists what matches as you type.
+
+| Condition | Options | Example |
+|---|---|---|
+| Name | begins with, contains, ends with, is, is not, doesn't contain, matches pattern | begins with `SQL` · pattern `^RDS0[1-4]$` |
+| Hostname or IP | same as Name | ends with `.example.local` |
+| IP range | is in, is not in | `10.0.1.0/24`, `10.0.1.10-50`, `10.0.1.10-10.0.2.20`, `10.0.1.*` (several separated by commas) |
+| Operating system | is, is not | Windows, Linux, No agent |
+| Status | is, is not | Needs attention, Down, Degraded, Paused… |
+| Server role (agent) | includes, doesn't include | `Domain controller`, `IIS`, `Immich` (comma-separated means any of them) |
+| Service check | includes, doesn't include | `SQL`, `HTTPS`, `32400` |
+| Uptime (24 h) | is below / above % | below `99` |
+
+**Start from** has ready-made starting points (name, IP range, Windows, Linux, domain controllers, web servers, low uptime). The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones, and they're saved in the add-on's data folder (`views.json`). Each browser remembers which tab it was on. The search box filters within the open tab.
+
+## Adding and editing computers
+
+Computers are managed on the dashboard:
+
+- **+ Add computer** opens a form with the name, the IP or hostname, a checkbox for each service preset (showing the ports it checks), and fields for any custom checks.
+- **Edit** on a row opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
+- Changes apply straight away; there's no add-on restart.
+
+The list is saved in the add-on's data folder (`hosts.json`) and is included in HA backups of the add-on.
+
+**Bulk import from the Configuration tab.** You can still list computers under `hosts:` in the add-on's Configuration tab, as shown below. On the next start they're merged into the dashboard list (matched by name, so an existing computer is updated rather than duplicated), and the add-on then clears that option so the dashboard stays the single place to manage them. If HA doesn't allow the option to be cleared, entries that were already imported are ignored on later starts, so they can't overwrite your dashboard changes or bring back a computer you deleted.
+
+## Configuration
+
+```yaml
+interval: 300              # seconds between checks
+retry_interval: 300        # seconds until the re-check after a miss (lower it, e.g. 60, to go red faster)
+ping_count: 3              # packets per check; any reply = up
+ping_timeout: 2            # seconds to wait per packet
+service_timeout: 5         # seconds to wait for a port or web check
+history_days: 7            # how long results are kept
+notify_services:           # notify.* services, without the "notify." prefix
+  - mobile_app_your_phone
+persistent_notification: true   # bell-icon notification in HA while something is down
+notify_recovery: true           # also notify when something comes back
+maintenance_minutes: 30         # default time limit when pausing a host
+admin_only_changes: true        # only HA admins (and editors) can add/edit/pause/reset
+agent_stale_minutes: 15         # agents: alert if no report for this long
+agent_disk_warn: 15             # % free: amber below this
+agent_disk_crit: 5              # % free: red below this
+agent_failed_logons: 20         # failed logons in one report that count as an attack
+agent_patch_days: 60            # amber if no update installed for this long
+agent_ignore: []                # see "Tuning" below
+editors: []                     # HA usernames of non-admins who can also make changes
+notification_url: ""            # where tapping a phone alert goes; blank = this dashboard
+log_level: info
+hosts:                      # optional bulk import; see above
+  - name: DC01
+    host: 10.0.1.10
+    checks: [dc]
+  - name: SQL01
+    host: 10.0.1.20
+    checks: [sql]
+  - name: EXCH01
+    host: 10.0.1.30
+    checks: [exchange]
+  - name: FS01
+    host: 10.0.1.12
+    checks: [fileserver]
+  - name: Plex
+    host: 10.0.5.15
+    checks: [plex]
+  - name: Printer
+    host: 10.0.1.90           # no checks = ping only
+```
+
+`host` can be an IP or a hostname. Hostnames are resolved on every check, so the IP shown follows DNS changes. A name that can't be resolved counts as a failed ping.
+
+## Service checks
+
+Tick presets in the Add/Edit form, or add custom checks there. In the Configuration tab, the equivalent is a `checks:` list on a host. Each entry is a preset or a custom check, and they can be mixed (`[dc, fileserver, tcp:5985]`). Duplicate targets are only checked once.
+
+### Presets
+
+In the Add/Edit form these are checkboxes, grouped as below, with a search box. Ports are each product's defaults; if yours differs, use a custom check instead.
+
+| Preset | Name | Checks |
+|---|---|---|
+| **Windows & Microsoft** | | |
+| `dc` (or `domain`) | Domain controller | DNS 53 · Kerberos 88 · LDAP 389 · SMB 445 · GC 3268 |
+| `dns` | DNS server | TCP 53 |
+| `ldap` | LDAP | TCP 389 |
+| `ldaps` | LDAPS (secure LDAP) | TCP 636 |
+| `fileserver` (or `smb`, `file`) | File server (SMB) | TCP 445 |
+| `rds` (or `rdp`, `terminal`) | Remote Desktop / Terminal Server | TCP 3389 |
+| `sql` (or `mssql`) | SQL Server | TCP 1433 |
+| `iis` | IIS (HTTP) | http:80/ |
+| `iis-https` | IIS (HTTPS) | https:443/ |
+| `sharepoint` | SharePoint | https:443/ |
+| `exchange` (or `owa`) | Exchange | OWA https:443/owa · SMTP 25 |
+| `wsus` | WSUS | TCP 8530 |
+| `adfs` | AD FS | https:443/FederationMetadata/2007-06/FederationMetadata.xml |
+| `adcs` (or `certsrv`) | Certificate Services (web enrolment) | http:80/certsrv/ |
+| `configmgr` (or `sccm`, `mecm`) | ConfigMgr / SCCM management point | http:80/sms_mp/.sms_aut?mplist |
+| `kms` | KMS activation | TCP 1688 |
+| `winrm` | WinRM / PowerShell remoting | TCP 5985 |
+| `veeam` | Veeam Backup & Replication | TCP 9392 |
+| **Databases** | | |
+| `mysql` (or `mariadb`) | MySQL / MariaDB | TCP 3306 |
+| `postgres` (or `postgresql`, `pgsql`) | PostgreSQL | TCP 5432 |
+| `mongodb` (or `mongo`) | MongoDB | TCP 27017 |
+| `redis` | Redis | TCP 6379 |
+| `oracle` | Oracle | TCP 1521 |
+| `elasticsearch` (or `elastic`) | Elasticsearch | http:9200/ |
+| `influxdb` (or `influx`) | InfluxDB | http:8086/ping |
+| **Mail & files** | | |
+| `smtp` | SMTP relay / mail server | TCP 25 |
+| `imap` | IMAP (secure) | TCP 993 |
+| `pop3` | POP3 (secure) | TCP 995 |
+| `ftp` | FTP | TCP 21 |
+| `nextcloud` | Nextcloud | https:443/status.php |
+| **Remote access** | | |
+| `ssh` (or `sftp`) | SSH / SFTP | TCP 22 |
+| `vnc` | VNC | TCP 5900 |
+| `telnet` | Telnet (switches, old kit) | TCP 23 |
+| **Virtualisation & storage** | | |
+| `proxmox` (or `pve`) | Proxmox VE | https:8006/ |
+| `pbs` | Proxmox Backup Server | https:8007/ |
+| `esxi` (or `vmware`) | VMware ESXi | https:443/ |
+| `vcenter` | VMware vCenter | https:443/ui/ |
+| `synology` (or `dsm`) | Synology DSM | https:5001/ |
+| `qnap` | QNAP QTS | http:8080/ |
+| `truenas` | TrueNAS | https:443/ |
+| `unraid` | Unraid | http:80/ |
+| `portainer` | Portainer | https:9443/ |
+| **Network & infrastructure** | | |
+| `unifi` | UniFi Network, old controller (8443) | UniFi https:8443/ · Inform 8080 |
+| `unifi-os` | UniFi OS console, e.g. Cloud Key or UDM (443) | https:443/ |
+| `unifi-os-server` | UniFi OS Server, self-hosted (11443) | UniFi https:11443/ · Inform 8080 |
+| `idrac` (or `ilo`, `bmc`, `ipmi`) | Dell iDRAC / server BMC | https:443/ |
+| `pihole` (or `pi-hole`) | Pi-hole | DNS 53 · Pi-hole http:80/admin/ |
+| `adguard` | AdGuard Home | DNS 53 · AdGuard http:80/ |
+| `npm` | Nginx Proxy Manager | http:81/ |
+| `squid` | Squid / web proxy | TCP 3128 |
+| `printer` | Network printer | TCP 9100 |
+| `camera` (or `nvr`, `rtsp`) | IP camera / NVR (RTSP) | TCP 554 |
+| **Home & automation** | | |
+| `homeassistant` (or `ha`) | Home Assistant | http:8123/ |
+| `nodered` (or `node-red`) | Node-RED | http:1880/ |
+| `mqtt` (or `mosquitto`) | MQTT broker (Mosquitto) | TCP 1883 |
+| `frigate` | Frigate NVR | http:5000/api/version |
+| `vaultwarden` (or `bitwarden`) | Vaultwarden | http:80/alive |
+| `paperless` | Paperless-ngx | http:8000/ |
+| `uptimekuma` (or `kuma`) | Uptime Kuma | http:3001/ |
+| **Media** | | |
+| `plex` | Plex | http:32400/identity |
+| `jellyfin` | Jellyfin | http:8096/health |
+| `emby` | Emby | http:8096/emby/System/Info/Public |
+| `immich` | Immich | http:2283/api/server/ping |
+| `audiobookshelf` | Audiobookshelf | http:13378/ |
+| `navidrome` | Navidrome | http:4533/ |
+| `tautulli` | Tautulli | http:8181/ |
+| `overseerr` (or `jellyseerr`) | Overseerr / Jellyseerr | http:5055/api/v1/status |
+| **Downloads** | | |
+| `sonarr` | Sonarr | http:8989/ping |
+| `radarr` | Radarr | http:7878/ping |
+| `lidarr` | Lidarr | http:8686/ping |
+| `prowlarr` | Prowlarr | http:9696/ping |
+| `sabnzbd` | SABnzbd | http:8080/ |
+| `qbittorrent` | qBittorrent | http:8080/ |
+| `transmission` | Transmission | http:9091/transmission/web/ |
+| **Monitoring & development** | | |
+| `grafana` | Grafana | http:3000/api/health |
+| `prometheus` | Prometheus | http:9090/-/healthy |
+| `gitea` (or `forgejo`) | Gitea / Forgejo | http:3000/api/healthz |
+| `jenkins` | Jenkins | http:8080/login |
+| **Other** | | |
+| `http` | Web server (HTTP) | http:80/ |
+| `https` | Web server (HTTPS) | https:443/ |
+
+### Custom checks
+
+| Form | Example | Checks |
+|---|---|---|
+| `tcp:PORT` | `tcp:5985` | The port accepts a connection |
+| `http:PORT/path` | `http:8080/status` | A web request to this host |
+| `https:PORT/path` | `https:443/owa` | Same over HTTPS |
+| Full URL | `https://mail.example.local/owa` | A specific URL, e.g. a vhost or load-balanced name |
+| `Label=` prefix | `SQL Reporting=tcp:50123` | Any of the above with your own label |
+
+**Web checks** pass on any response below 500. A 401 from Windows authentication or a 302 redirect to a login page still means the app is answering. A 5xx (such as the 503 from a stopped IIS app pool), a timeout or a refused connection fails. Redirects aren't followed. The check only reads the status line, so devices that send untidy headers are fine.
+
+HTTPS checks are deliberately lenient about security, since they only test whether the service answers: self-signed or expired certificates, 1024-bit keys, TLS 1.0 and old ciphers are all accepted. That covers older kit like Dell iDRAC 6.
+
+For `http:PORT/...` and `https:PORT/...` checks (including presets), if the port answers but not with that protocol, the other one is tried, and whichever works is used from then on. The chip shows "via https" when that happens. For example, Plex with "Secure connections: Required" only answers HTTPS on 32400. Full-URL checks always use exactly the scheme you gave.
+
+**SQL named instances** usually listen on a dynamic port, so use `tcp:<port>` with the instance's actual port instead of the `sql` preset.
+
+### Home Assistant sensors
+
+Any sensor in Home Assistant can be a check on a computer, so devices Home Assistant already knows about, such as UniFi access points and switches through the UniFi Network integration, show their CPU, memory and so on alongside the ping. The current value is shown on the chip (e.g. **CPU 12%**).
+
+In **Edit**, search under **Home Assistant sensors** (it starts with the computer's name) and click **Add**. CPU and memory are added as "problem above 90%", temperature above 80; anything else just needs to be available. Edit the line under **Custom checks** to change it:
+
+| Check | Meaning |
+|---|---|
+| `CPU=ha:sensor.office_ap_cpu_utilization>90` | Amber, then red (two checks in a row) while CPU is over 90 |
+| `Memory=ha:sensor.office_ap_memory_utilization>=85` | The same for memory at 85% or more |
+| `ha:sensor.office_ap_state!=Connected` | Red when the state is anything but Connected |
+| `ha:binary_sensor.nas_status` | Only needs to exist and not be unavailable |
+
+The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and like other checks they pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
+
+### How services affect status
+
+- Services are only checked while the computer is answering pings. Each service has its own count: one failure turns its chip amber, and two in a row turns it red.
+- Any red service makes the computer **Degraded** and sends an alert naming the service, for example "🟠 SQL01: SQL is down". Recovery sends "🟢 SQL01: SQL is back up".
+- If the whole computer stops pinging, you get one "down" alert for the computer, not one per service. Its services reset and start counting again once it's back, which gives them time to start after a reboot.
+- Pausing a computer also pauses its services.
+
+## Windows agent
+
+One PowerShell script, the same on every server. Each run (every 5 minutes) it works out what the server does and reports what matters for it. Servers appear on the dashboard by themselves once you approve them.
+
+### What it checks
+
+| Check | Goes amber | Goes red (and alerts) |
+|---|---|---|
+| **Agent** | | No report for `agent_stale_minutes` (15) |
+| **Disk** | A volume under `agent_disk_warn` (15%) free | Under `agent_disk_crit` (5%) free |
+| **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row) |
+| **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off) | |
+| **IIS** | | An app pool or site stopped (two reports) |
+| **AD** (domain controllers) | | Replication failing, or SYSVOL/NETLOGON not shared (two reports) |
+| **DHCP** | A scope 85% or more used | 95% or more used |
+| **Hyper-V** | | A VM in a critical state |
+| **Printers** (print servers) | A shared printer not ready (paper jam, offline…) | |
+| **Defender** | Definitions over 7 days old | Real-time protection off, or malware not removed |
+| **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
+| **Events** | Alert-worthy events in the last 24 h | |
+
+Roles are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
+
+**Alerted as they happen** (phone notification for each):
+- **Security log:** account locked out (4740), account created or deleted (4720/4726), member added to a security group (4728/4732/4756, e.g. Domain Admins), audit policy changed (4719), Security log cleared (1102). The IDs are in `agent_security_alert_ids`.
+- **System log:** unexpected shutdowns and crashes (Kernel-Power 41, EventLog 6008, BugCheck 1001), disk and NTFS errors, plus any Critical-level event. The list is in `agent_event_watch`, as `Source:ID` or just an ID.
+- **Microsoft Defender:** every detection, saying whether it was removed.
+
+**Shown in Details** (the **Details** button on a server's row): system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 h of System/Application errors, and (admins only) failed logons and security events.
+
+### Setting it up
+
+1. In the dashboard, click **Agents** and download **PingMonitorAgent.ps1**. Check the address first: it's what your servers use to reach Home Assistant on port 8100 (use the IP if they can't resolve the name). The script has the address and the enrolment key built in.
+2. Copy it to `\\your-domain\NETLOGON` (or any share the servers can read).
+3. Group Policy for the servers' OU: *Computer Configuration → Policies → Windows Settings → Scripts → Startup*, script `powershell.exe`, parameters `-NoProfile -ExecutionPolicy Bypass -File \\your-domain\NETLOGON\PingMonitorAgent.ps1 -Install`. Or run that command once as an administrator on a server to start straight away.
+   **Or with MECM (Run Scripts):** *Software Library → Scripts → Create Script*, import `PingMonitorAgent.ps1`, then have it approved (by default an author can't approve their own script). Right-click a device collection → **Run Script**, choose it, set **Action** to `Install` and leave the other parameters at their defaults. It runs as SYSTEM straight away, with no restart. MECM shows a warning about the switch parameters (Run Scripts can't pass switches); that's expected, and why `Action` exists. If it fails with a signing error, your client settings' PowerShell execution policy (*Computer Agent*) is set to *All Signed*: either sign the script or use *Bypass* for that collection. To update later, edit the script in MECM with the new version and run it again.
+4. Within 5 minutes each server shows under **Waiting for approval**. Check the name and address, then **Approve** (or **Approve all**).
+5. Approved servers that aren't on the dashboard yet are added automatically (by IP), unless `agent_auto_add` is off. Existing entries are matched by name or IP.
+
+`-Install` (or `-Action Install`) copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent** (the name from before the rename, kept so existing installs update in place), that runs every 5 minutes as SYSTEM. Running it again is safe, and it's how you update: put the new script on the share and it's picked up at the next restart (or run `-Install` again). `-Uninstall` (`-Action Uninstall`) removes it. `-ShowReport` (`-Action Report`) prints what it would send, for troubleshooting. The agent writes a log to `C:\ProgramData\PingMonitor\agent.log`.
+
+Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and port 8100 open from the servers to Home Assistant. Workstations work too; they just have no roles.
+
+**How long a run takes** is in each server's Details, under **Agent run**: total time, CPU, peak memory, and a breakdown by step. The Agent check turns amber if a run takes longer than `agent_slow_seconds` (120). The last-update date is only re-checked every 6 hours or after a restart, because finding it can be slow on some machines.
+
+### Security
+
+- **Nothing runs on the servers at the add-on's request.** The agent only sends reports; it never downloads or runs anything from Home Assistant.
+- **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on only keeps a hash of it.
+- **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
+- **Revoke** stops a server's reports. Deleting a computer from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
+- Security events are only shown to Home Assistant admins.
+- Reports go over HTTP by default, so they're readable on your network. To use HTTPS, set `agent_ssl: true` with a certificate in HA's `/ssl` folder (`agent_certfile`, `agent_keyfile`), and download the script with an `https://` address. Tick **Accept a self-signed certificate** if yours is self-signed.
+
+### Tuning
+
+**From the dashboard (admins):** open a server's **Details**.
+- **Ignore** appears next to anything that's flagged: stopped services (role or otherwise), stopped IIS app pools and sites, printers, VMs in a critical state, busy DHCP scopes, event IDs and whole disks. It applies to that server straight away, clears the alert, and you don't need to wait for the next report.
+- **Ignored on this server** (at the bottom of Details) lists everything being ignored there. **Apply to all servers** makes an item global; **Stop ignoring** undoes it, and anything still wrong goes red again immediately.
+- **Disks → Change** sets that disk's own amber and red levels (% free), e.g. amber below 8%, red below 3% for a large data volume. Leave a box blank to use the default, or enter 0 to turn that level off. **Use defaults** removes the override.
+
+These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
+
+**From the Configuration tab** (all servers):
+- **`agent_disk_warn` / `agent_disk_crit`** are the default disk thresholds.
+- **Last update date** is the newest of: Windows Update history (which includes MECM and WSUS installs), the Setup event log (every package Windows installs, even with the Windows Update service disabled), and the installed-updates list. Details shows which source it came from, and the OS build number. If you'd rather leave patch compliance to MECM, set `agent_patch_days: 0`; a pending reboot is still flagged.
+- **`agent_ignore`** quietens known noise. Use a service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`.
+- **`agent_watch_services`** adds services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
+- **`agent_event_alerts` / `agent_security_alerts`** turn those alert types off.
+- Pausing a computer (maintenance) silences its agent alerts too.
+
+## Linux agent (e.g. Immich on Ubuntu)
+
+One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so nothing to install on Ubuntu 20.04 or newer). It uses the same enrolment, approval, alerts, Details, Ignore buttons and disk thresholds as the Windows agent, and shows as **Linux ✓** on the dashboard.
+
+### What it checks
+
+| Check | Goes amber | Goes red (and alerts) |
+|---|---|---|
+| **Agent** | Run slower than `agent_slow_seconds` | No report for `agent_stale_minutes` |
+| **Disk** | A mount point under its amber level | Under its red level (per mount, e.g. `/` or `/srv/photos`) |
+| **Services** | A failed systemd unit | A Docker container that should be up is stopped, unhealthy or restarting, or docker/containerd/ssh/cron stopped (two reports in a row) |
+| **Updates** | Reboot required, security updates waiting with nothing installed for a week, or nothing installed for `agent_patch_days` | |
+| **Immich** | Job queue paused or with failed jobs | Immich's API not answering (two reports) |
+| **Security** | Notable events in 24 h | `agent_failed_logons` or more failed SSH/sudo logins in one report |
+| **Journal** | Alert-worthy errors in 24 h | |
+
+- **Containers:** every container that's running, has a restart policy, or belongs to a Compose stack is watched (Immich's server, machine learning, Postgres and Redis/Valkey included). A one-off container that exited cleanly isn't. Containers can be ignored like services.
+- **Immich:** found from its container (port 2283 unless mapped elsewhere). It always checks the API answers and reports the version. With an API key it also shows each job queue (active, waiting, failed, paused), the photo and video counts and storage use.
+- **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors and any critical journal entry; users created or deleted (4720/4726) and users added to groups such as `sudo` or `docker` (4732). SSH logins are listed in Details but not alerted.
+- **Updates:** last apt run (from apt's history), packages waiting and how many are security updates (re-checked every 6 hours, after a restart, or straight after apt installs anything), and whether a reboot is required.
+
+### Setting it up
+
+1. In the dashboard, click **Agents** and use **Download pingmonitor-agent.py** (it uses the same address as the Windows script; check that first).
+2. Copy it to the server, e.g. `scp pingmonitor-agent.py lee@immich:`
+3. On the server: `sudo python3 pingmonitor-agent.py --install`
+   For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage` and `job.read` (or `queue.read`) permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`):
+   `sudo python3 pingmonitor-agent.py --install --immich-api-key YOUR_KEY`
+   If Immich isn't in a local container, add `--immich-url http://host:2283`.
+4. Approve it under **Agents → Waiting for approval**.
+
+It installs to `/usr/local/lib/pingmonitor/`, adds a systemd timer (`pingmonitor-agent.timer`, every 5 minutes, low CPU and disk priority) and keeps its token and log in `/var/lib/pingmonitor/` (root only). Settings, including the API key, are in `/etc/pingmonitor/agent.conf` (root only). To update, download the new version and run `--install` again. `--report` prints what it would send; `--uninstall` removes it. `systemctl status pingmonitor-agent` and `/var/lib/pingmonitor/agent.log` show what it's doing.
+
+## Who can see and change things
+
+The **Rollcall** sidebar panel is visible to every Home Assistant user, not just admins.
+
+- **Admins** (and the owner) can do everything: add, edit and delete computers, pause and resume, and reset uptime.
+- **Everyone else** gets a **View only** dashboard, showing status, services, uptime and "Check now". The editing buttons are hidden, and the add-on itself refuses changes from non-admins, so typing the URLs directly doesn't get around it.
+- **`editors`**: HA usernames (or display names) of non-admins who should also be allowed to make changes, e.g. `editors: [sam]`.
+- **`admin_only_changes: false`** lets anyone who can open the panel make changes.
+
+The add-on reads HA's user list to find out who's an admin. If it can't (the log will say so), only names in `editors` can make changes. If `editors` is empty too, everyone can, so you're never locked out of your own add-on.
+
+To hide the panel from some non-admin users entirely, remove it from their sidebar under their **Profile → Change the order and hide items from the sidebar**. That only hides it; anyone who can sign in to HA could still open the view-only page by URL.
+
+## Pausing for reboots (maintenance mode)
+
+Click **Pause** on a row before rebooting or working on a machine. You'll be asked for a time limit (default `maintenance_minutes`, 30).
+
+While paused, the machine is still pinged but shows blue **Paused** and sends no alerts:
+
+- When it has gone down and then replies again, monitoring resumes on its own and you get a "back online" message (if `notify_recovery` is on).
+- If it isn't back by the time limit, it goes red and you're alerted.
+- If it never appeared to go down (a reboot quicker than the check interval), it resumes quietly at the time limit.
+- **Resume** ends the pause early.
+
+Paused time doesn't count towards uptime %, and pauses survive an add-on restart. An agent isn't flagged for not reporting while its server is paused, and gets a full `agent_stale_minutes` after the pause ends to report again.
+
+## Export and import
+
+**Export / import** (admins) moves everything to another install of the add-on, for example when switching from a local copy to one installed from GitHub, which Home Assistant treats as a separate add-on with its own empty data.
+
+- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and enrolment key, ignores and disk thresholds, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe; it contains the enrolment key.
+- **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
+
+Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port (8100). Stop the old copy once the new one is running, since both can't use port 8100.
+
+## The name change
+
+Rollcall was called Ping Monitor until 1.6.0. The visible name changed; the internal names didn't, so nothing already set up breaks:
+- The add-on's ID is still `ping_monitor`, so entities keep their `sensor.ping_monitor_*` names and automations and cards carry on working.
+- The agents keep their file names (`PingMonitorAgent.ps1`, `pingmonitor-agent.py`), folders (`C:\ProgramData\PingMonitor`, `/var/lib/pingmonitor`), scheduled task, systemd timer and port (8100), so installed agents carry on reporting and updating as before. There's no need to redeploy them.
+
+## What it creates in Home Assistant
+
+**Agent sensors** — each agent check as `sensor.ping_monitor_<name>_agent_<check>` (e.g. `sensor.ping_monitor_dc01_agent_disk`), plus graphable numbers: `sensor.ping_monitor_<name>_cpu`, `_memory` and `_disk_<letter>_free` (Linux: `_disk_root_free`, `_disk_srv_photos_free`; all %).
+
+**Computer sensors** — `sensor.ping_monitor_<name>` with state `green` / `amber` / `degraded` / `red` / `maintenance`, and attributes `ip`, `host`, `uptime_24h`, `latency_ms`, `consecutive_failures`, `last_check`, `last_change`, `maintenance_until`, `services` (a map of service label to status).
+
+**Service sensors** — `sensor.ping_monitor_<name>_<service>` (e.g. `sensor.ping_monitor_sql01_sql`) with state `green` / `amber` / `red` / `unknown`, and attributes `target`, `detail` (e.g. `HTTP 503`, `connection refused`), `uptime_24h`, `latency_ms`, `last_check`, `last_change`.
+
+All sensors are refreshed every 60 s, so they come back within a minute of an HA restart. They're pushed via the API, so they can't be renamed or given an area in the UI.
+
+**Events** — `ping_monitor_status_changed` on every computer status change (`name`, `host`, `ip`, `old_status`, `new_status`, `entity_id`), and `ping_monitor_service_changed` on every service change (adds `service`, `target`, `detail`, `host_entity_id`). For example:
+
+```yaml
+automation:
+  - alias: Server down - flash office light
+    trigger:
+      - platform: event
+        event_type: ping_monitor_status_changed
+        event_data:
+          new_status: red
+    action:
+      - service: light.turn_on
+        target: { entity_id: light.office }
+        data: { color_name: red, flash: long }
+```
+
+## Dashboard card (optional)
+
+The add-on's own page is the main dashboard, but this Markdown card shows the computers on any HA dashboard:
+
+```yaml
+type: markdown
+title: Computers
+content: >
+  | | Name | IP | Uptime 24h | Services down |
+  |---|---|---|---|---|
+  {% for s in states.sensor
+       | selectattr('entity_id', 'search', '^sensor\.ping_monitor_')
+       | selectattr('attributes.services', 'defined')
+       | sort(attribute='name') -%}
+  | {{ {'green':'🟢','amber':'🟡','degraded':'🟠','red':'🔴','maintenance':'🔵'}.get(s.state, '⚪') }}
+  | {{ s.name }} | {{ s.attributes.ip or '—' }}
+  | {{ s.attributes.uptime_24h if s.attributes.uptime_24h is not none else '—' }}%
+  | {{ s.attributes.services | dictsort | selectattr(1, 'eq', 'red') | map(attribute=0) | join(', ') or '—' }} |
+  {% endfor %}
+```
+
+## Notes
+
+- **Uptime %** is time-weighted over the last 24 hours. Amber time counts as down. Gaps where the add-on wasn't running are left out rather than guessed. The row's uptime is for ping; each service's own uptime shows when you hover over its chip and in its sensor.
+- **`.local` names**: HA's DNS treats `.local` as mDNS, so AD names like `server.example.local` may not resolve from the add-on. If they don't, use IPs.
+- Checks come from the HA host, so remote sites must be routable from it, and firewalls must allow ICMP echo and the ports you check.
+
+## Files
+
+```
+rollcall/              the add-on (its internal ID is ping_monitor)
+├── config.yaml        add-on manifest, options and schema
+├── build.yaml         base images per architecture
+├── Dockerfile
+├── run.sh
+├── CHANGELOG.md
+├── DOCS.md            this documentation (the add-on's Documentation tab)
+├── icon.png, logo.png
+└── app/
+    ├── main.py        scheduler, ping/port/web checks, SQLite history, HA API, web server
+    ├── agents.py      agent enrolment, tokens and report evaluation
+    ├── agent/PingMonitorAgent.ps1   the Windows agent
+    ├── agent/pingmonitor-agent.py   the Linux agent
+    └── web/index.html dashboard (served via ingress)
+```
