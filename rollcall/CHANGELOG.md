@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.2 - 2026-11-02
+
+### Changed
+- **Security rating 8 (second attempt).** Adds an AppArmor profile based on Home Assistant's example for add-ons that start with s6-overlay, so start-up is allowed this time. It keeps Rollcall within its container: no mounting, no tracing other processes, no extra capabilities beyond ordinary file ownership. If the add-on doesn't start after this update, install 1.9.1 again (it has no profile).
+
 ## 1.9.1 - 2026-11-02
 
 ### Fixed
