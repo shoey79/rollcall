@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0 - 2026-11-02
+
+### Added
+- **Monitoring schedules.** A computer can be monitored only at set times (Edit → Monitoring schedule): one or more windows of days and times, which can run past midnight. Outside them it shows as **Off schedule** and nothing alerts; it's still pinged, and the time doesn't count against uptime. When a window opens it shows **Starting up** for an allowance you choose (15 minutes by default) before a down alert. Times follow Home Assistant's time zone and daylight saving.
+- Off-schedule computers have their own count at the top and a tab condition (Status is Off schedule). The entity gains `off_schedule` and `schedule` attributes.
+
 ## 1.6.2 - 2026-11-02
 
 ### Fixed

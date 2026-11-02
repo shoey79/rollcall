@@ -27,6 +27,8 @@ import io
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import socket
 import sqlite3
 import ssl
@@ -316,6 +318,109 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
     raise ValueError(f"unknown check '{entry}' (presets: {', '.join(sorted(PRESETS))})")
 
 
+# --------------------------------------------------------------------------
+# Monitoring schedules: some computers are only meant to be on at certain times
+# --------------------------------------------------------------------------
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$|^24:00$")
+TZ = None  # Home Assistant's time zone, set at start-up
+
+
+def _mins(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def clean_schedule(raw) -> dict | None:
+    """None means monitored all the time. Otherwise {"windows": [...], "grace": minutes}."""
+    if not raw:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid schedule")
+    wins = raw.get("windows") or []
+    if not isinstance(wins, list) or not 1 <= len(wins) <= 20:
+        raise ValueError("A schedule needs between 1 and 20 time windows")
+    out = []
+    for w in wins:
+        if not isinstance(w, dict):
+            raise ValueError("Invalid time window")
+        days = sorted({int(d) for d in (w.get("days") or []) if str(d).isdigit() and 0 <= int(d) <= 6})
+        start, end = str(w.get("start") or "").strip(), str(w.get("end") or "").strip()
+        if not days:
+            raise ValueError("Pick at least one day for each time window")
+        if not _HHMM.match(start) or not _HHMM.match(end) or start == "24:00":
+            raise ValueError("Times must be HH:MM, e.g. 07:30")
+        if _mins(start) == _mins(end) % 1440:
+            raise ValueError(f"A window can't start and end at the same time ({start})")
+        out.append({"days": days, "start": f"{_mins(start) // 60:02d}:{_mins(start) % 60:02d}", "end": end if end == "24:00" else f"{_mins(end) // 60:02d}:{_mins(end) % 60:02d}"})
+    try:
+        grace = int(raw.get("grace", 15))
+    except (TypeError, ValueError):
+        raise ValueError("The start-up allowance must be a number of minutes")
+    if not 0 <= grace <= 240:
+        raise ValueError("The start-up allowance must be between 0 and 240 minutes")
+    return {"windows": out, "grace": grace}
+
+
+def schedule_intervals(sched: dict, now: float) -> list[tuple[float, float]]:
+    """The schedule's on-periods from yesterday to 8 days ahead, merged, as timestamps."""
+    tz = TZ or datetime.now().astimezone().tzinfo
+    today = datetime.fromtimestamp(now, tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    spans = []
+    for offset in range(-1, 9):
+        day = (today + timedelta(days=offset))
+        midnight = datetime(day.year, day.month, day.day, tzinfo=tz)  # re-localise across DST changes
+        for w in sched["windows"]:
+            if midnight.weekday() not in w["days"]:
+                continue
+            a, b = _mins(w["start"]), _mins(w["end"])
+            if b <= a:
+                b += 1440  # runs past midnight
+            st = midnight + timedelta(minutes=a)
+            en = midnight + timedelta(minutes=b)
+            spans.append((st.timestamp(), en.timestamp()))
+    spans.sort()
+    merged: list[list[float]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(a, b) for a, b in merged]
+
+
+def schedule_state(sched: dict | None, now: float) -> tuple[bool, float | None, float | None]:
+    """(on now?, when the current on-period started, when the state next changes)."""
+    if not sched:
+        return True, None, None
+    for a, b in schedule_intervals(sched, now):
+        if a <= now < b:
+            return True, a, b
+        if a > now:
+            return False, None, a
+    return False, None, None
+
+
+def describe_schedule(sched: dict | None) -> str:
+    if not sched:
+        return "All the time"
+    parts = []
+    for w in sched["windows"]:
+        d = w["days"]
+        if d == list(range(7)):
+            days = "Every day"
+        elif d == [0, 1, 2, 3, 4]:
+            days = "Mon–Fri"
+        elif d == [5, 6]:
+            days = "Sat–Sun"
+        elif len(d) > 2 and d == list(range(d[0], d[-1] + 1)):
+            days = f"{DAY_NAMES[d[0]]}–{DAY_NAMES[d[-1]]}"
+        else:
+            days = ", ".join(DAY_NAMES[i] for i in d)
+        parts.append(f"{days} {w['start']}–{w['end']}")
+    return "; ".join(parts)
+
+
 def validate_entry(raw: dict) -> dict:
     """Check a host entry from the dashboard or the Configuration tab.
 
@@ -359,7 +464,11 @@ def validate_entry(raw: dict) -> dict:
             out.append(c)
     if errors:
         raise ValueError("; ".join(errors))
-    return {"name": name, "host": host, "checks": out}
+    entry = {"name": name, "host": host, "checks": out}
+    sched = clean_schedule(raw.get("schedule"))
+    if sched:
+        entry["schedule"] = sched
+    return entry
 
 
 def load_options() -> dict:
@@ -862,6 +971,9 @@ class Host:
     maint_until: float | None = None   # set while paused for maintenance
     maint_seen_down: bool = False      # has it stopped replying since the pause began?
     maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
+    schedule: dict | None = None       # None: monitored all the time
+    off_schedule: bool = False         # outside its monitoring schedule right now
+    sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
     removed: bool = False              # deleted while a check was in flight
@@ -988,12 +1100,17 @@ class Monitor:
         tmp.replace(HOSTS_PATH)
 
     def _save_hosts(self) -> None:
-        self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks}
+        self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
+                            **({"schedule": h.schedule} if h.schedule else {})}
                            for h in self.hosts.values()])
 
     def _make_host(self, entry: dict, due: float) -> Host:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
                  checks=list(entry.get("checks") or []), next_due=due)
+        try:
+            h.schedule = clean_schedule(entry.get("schedule"))
+        except ValueError as err:
+            log.warning("%s: ignoring its schedule (%s)", h.name, err)
         h.services = self._build_services(h.name, h.checks)
         self._restore(h)
         return h
@@ -1010,6 +1127,7 @@ class Monitor:
             h.host, h.ip, h.failures = entry["host"], None, 0
         h.name = entry["name"]
         h.checks = entry["checks"]
+        h.schedule = entry.get("schedule")
         old = {s.desc: s for s in h.services}
         new = self._build_services(h.name, h.checks)
         for s in new:
@@ -1201,6 +1319,16 @@ class Monitor:
             old = h.status
             reason = "unresolved" if ip is None else "down"
 
+            on, since, _next = schedule_state(h.schedule, now)
+            grace = (h.schedule or {}).get("grace", 15) * 60
+            was_off = h.off_schedule
+            h.off_schedule = not on
+            if on and since and (was_off or h.sched_started is None):
+                h.sched_started = since
+            if not on:
+                h.sched_started = None
+            in_grace = bool(on and since and now < since + grace and h.status in (MAINT, UNKNOWN) and not h.maint_until)
+
             if h.maint_until:
                 # Paused: keep pinging, but don't alert. End the pause once it has
                 # gone away and come back, or when the window runs out.
@@ -1220,7 +1348,16 @@ class Monitor:
                     h.maint_ended = now
                     self._save_maint()
                     log.info("%s: maintenance ended (%s)", h.name, reason)
+            elif not on:
+                # Outside its schedule: keep an eye on it, but it isn't expected to be up.
+                new = MAINT
+            elif in_grace and not ok:
+                # Its window has just started: give it time to start up before alerting.
+                new = MAINT
             else:
+                if was_off or (h.status == MAINT and since):
+                    h.failures = 0 if ok else 2  # past its start-up allowance: alert straight away
+                    reason = "down" if ok else "sched_timeout"
                 new = GREEN if ok else AMBER if h.failures == 1 else RED
 
             self.store.add(h.key, now, MAINT_OK if new == MAINT else ok, latency)
@@ -1238,8 +1375,12 @@ class Monitor:
             if h.removed:
                 return
             h.status = new
-            retry = new in (AMBER, MAINT) or any(s.status == AMBER for s in h.services)
+            retry = (new == AMBER or (new == MAINT and not h.off_schedule)
+                     or any(s.status == AMBER for s in h.services))
             h.next_due = now + (min(self.retry_interval, self.interval) if retry else self.interval)
+            nxt = schedule_state(h.schedule, now)[2] if h.schedule else None
+            if nxt and now < nxt < h.next_due:
+                h.next_due = nxt + 1  # check as soon as its window opens or closes
             if new != old:
                 h.last_change = now
                 log.info("%s (%s): %s -> %s", h.name, h.ip or h.host, old, new)
@@ -1345,6 +1486,7 @@ class Monitor:
             why = {
                 "unresolved": "Hostname could not be resolved.",
                 "maint_timeout": "It did not reply before the maintenance window ended.",
+                "sched_timeout": "It didn't come up after its monitoring window started.",
             }.get(reason, "No reply to ping on two consecutive checks.")
             msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
             await self.notify(f"🔴 {h.name} is down", msg, tag)
@@ -1664,7 +1806,7 @@ class Monitor:
             "old_status": old, "new_status": new, "detail": s.detail,
             "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
         })
-        if h.maint_until:
+        if h.maint_until or h.off_schedule:
             return
         tag = f"ping_monitor_{svc_key(h, s)}"
         if new == RED:
@@ -1689,7 +1831,7 @@ class Monitor:
         return f"ping_monitor_{h.key}__note{self._notice}"
 
     async def _alert_notables(self, h: Host, notable: dict) -> None:
-        if h.maint_until:
+        if h.maint_until or h.off_schedule:
             return
         sent = 0
         if self.opts.get("agent_event_alerts", True):
@@ -1733,12 +1875,12 @@ class Monitor:
         for h in self.hosts.values():
             if not h.agent_id or not h.agent_seen or not h.agent_checks:
                 continue
-            if h.maint_until:
-                continue  # paused (e.g. rebooting): the agent can't report, and that's expected
+            if h.maint_until or h.off_schedule:
+                continue  # paused or off schedule: the agent may not be running, and that's expected
             chip = h.agent_checks[0]
             # A fresh stale period after an add-on restart or the end of a pause, so a
             # rebooted server's agent has time to run again before it's flagged.
-            age = now - max(h.agent_seen, self.started, h.maint_ended or 0)
+            age = now - max(h.agent_seen, self.started, h.maint_ended or 0, h.sched_started or 0)
             if age > limit and chip.status != RED:
                 old, chip.status, chip.last_change = chip.status, RED, now
                 chip.detail = f"No report for {fmt_duration(now - h.agent_seen)}"
@@ -1845,6 +1987,8 @@ class Monitor:
                 "last_check": iso(h.last_check),
                 "last_change": iso(h.last_change),
                 "maintenance_until": iso(h.maint_until),
+                "off_schedule": h.off_schedule,
+                "schedule": describe_schedule(h.schedule),
                 "services": {s.label: s.status for s in h.services + h.agent_checks},
             },
         )
@@ -1878,6 +2022,9 @@ class Monitor:
                 "next_check": h.next_due, "checking": h.checking,
                 "entity_id": h.entity_id,
                 "maint_until": h.maint_until, "maint_seen_down": h.maint_seen_down,
+                "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else None,
+                "off_schedule": h.off_schedule, "schedule_next": schedule_state(h.schedule, time.time())[2],
+                "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "services": [{
                     "key": s.key, "label": s.label, "target": s.desc, "status": s.status, "kind": s.kind,
@@ -2352,7 +2499,7 @@ VIEW_FIELDS = {
     "uptime": {"below", "above"},
 }
 VIEW_OS = {"windows", "linux", "none"}
-VIEW_STATUS = {"green", "amber", "red", "degraded", "maintenance", "unknown", "problem"}
+VIEW_STATUS = {"green", "amber", "red", "degraded", "maintenance", "unknown", "problem", "offschedule"}
 IP_RANGE_RE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}(/\d{1,2}|-\d{1,3}(\.\d{1,3}){3}|-\d{1,3})?|\d{1,3}(\.(\d{1,3}|\*)){1,3})$")
 
 
@@ -2666,6 +2813,14 @@ async def main() -> None:
             url = f"/{slug}"
         monitor.click_url = url if url.startswith(("/", "http://", "https://")) else "/" + url
         log.info("Phone notifications will open %s", monitor.click_url)
+        global TZ
+        cfg = await ha.get_json("/config")
+        try:
+            TZ = ZoneInfo((cfg or {}).get("time_zone") or os.environ.get("TZ") or "UTC")
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't use Home Assistant's time zone (%s); schedules use UTC", err)
+            TZ = ZoneInfo("UTC")
+        log.info("Schedules use the %s time zone", TZ)
         await monitor.attach_agents(AgentStore(AGENTS_PATH, AGENT_REPORTS))
         access = Access(opts, ha)
         if access.enabled:
