@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.3 - 2026-11-04
+
+### Fixed
+- On phones, scrolling past the end of a window (Details, Edit, Agents and the others) carried on scrolling the server list behind it. The page behind a window now stays still while it's open.
+
 ## 1.10.2 - 2026-11-04
 
 ### Fixed
