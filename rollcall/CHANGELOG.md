@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.10.2 - 2026-11-04
+
+### Fixed
+- In server Details, scrolled content showed above the tab bar. The tabs now sit outside the scrolling area, under the server's name, and the Details window keeps one size so it doesn't jump when you switch tabs.
+
 ## 1.10.1 - 2026-11-04
 
 ### Changed
