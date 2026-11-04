@@ -245,6 +245,8 @@ def normalize_report(r) -> dict:
         st = c["storage"] = _as_dict(c["storage"])
         for k in ("physical", "virtual", "volumes", "dyn_disks", "drives"):
             st[k] = [x for x in _as_list(st.get(k)) if isinstance(x, dict)]
+        st["warnings"] = [str(x)[:300] for x in _as_list(st.get("warnings")) if x][:20]
+        st["hardware"] = [x for x in _as_list(st.get("hardware")) if isinstance(x, dict)]
     if "containers" in c:
         c["containers"] = [x for x in _as_list(c["containers"]) if isinstance(x, dict)]
     if "immich" in c:
@@ -324,7 +326,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
         return None
 
 
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware")
 
 
 def disk_key(name) -> str:
@@ -571,6 +573,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
             if ign.has("storage", d.get("name")):
                 continue
             (warn if "pred" in (d.get("status") or "").lower() else crit).append(f"{d.get('name')}: {d.get('status')}")
+        warn += [w for w in st.get("warnings") or [] if not ign.has("storage", w)]
         if crit or warn or total:
             if crit:
                 checks.append(_check("storage", "Storage", CRIT, "; ".join(crit + warn), confirm=True))
@@ -578,6 +581,20 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                 checks.append(_check("storage", "Storage", WARN, "; ".join(warn)))
             else:
                 checks.append(_check("storage", "Storage", OK, f"{total} disk(s) and array(s) healthy"))
+
+    # Server hardware from Dell OpenManage (power supplies, fans, temperatures, memory...).
+    hw = [h for h in ((st or {}).get("hardware") or []) if not ign.has("hardware", h.get("component"))]
+    if hw:
+        # "Hardware Log" is how full the server's event log is, not a fault: shown in
+        # Details, but it doesn't change the check.
+        bad = [h for h in hw if (h.get("severity") or "Ok").lower() not in ("ok", "")
+               and (h.get("component") or "").lower() != "hardware log"]
+        crit_hw = [h for h in bad if (h.get("severity") or "").lower() in ("critical", "non-recoverable")]
+        if bad:
+            checks.append(_check("hardware", "Hardware", CRIT if crit_hw else WARN,
+                                 "; ".join(f"{h.get('component')}: {h.get('severity')}" for h in bad), confirm=bool(crit_hw)))
+        else:
+            checks.append(_check("hardware", "Hardware", OK, f"All {len(hw)} components OK (OpenManage)"))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 

@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.7'
+$AgentVersion = '1.0.8'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -121,7 +121,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -131,6 +131,7 @@ function Read-State {
                 foreach ($p in $raw.cursors.PSObject.Properties) { $state.cursors[$p.Name] = [long]$p.Value }
             }
             if ($raw.watch) { $state.watch = @($raw.watch) }
+            if ($raw.amd_raid) { $state.amd_raid = [string]$raw.amd_raid }
             if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
@@ -705,10 +706,154 @@ function Invoke-DiskPart([string]$Command) {
     }
 }
 
-function Get-StorageHealth {
+function Get-AmdRaidHealth($State) {
+    # AMD RAIDXpert2 writes array and disk events to the System log as "AMD RAID API".
+    # The array state is worked out from them (latest event per logical drive) and kept
+    # in the state file, so an array that went critical long ago is still known.
+    $src = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\System\AMD RAID API'
+    if (-not (Test-Path $src) -and -not $State.amd_raid) { return $null }
+    $drives = @{}
+    if ($State.amd_raid) {
+        try { foreach ($p in ($State.amd_raid | ConvertFrom-Json).PSObject.Properties) { $drives[$p.Name] = @{ state = [string]$p.Value.state; detail = [string]$p.Value.detail; time = [string]$p.Value.time } } } catch { }
+    }
+    $since = (Get-Date).AddDays(-90)
+    $events = @()
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'AMD RAID API'; StartTime = $since } -MaxEvents 2000 -ErrorAction Stop | Sort-Object TimeCreated, RecordId)
+    } catch {
+        if (-not ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -like 'No events were found*')) { throw }
+    }
+    $warnings = @()
+    $recent = (Get-Date).AddHours(-24)
+    $ports = @{}
+    foreach ($e in $events) {
+        $msg = [string]$e.Message
+        if (-not $msg) { try { $msg = [string](([xml]$e.ToXml()).Event.EventData.Data | Select-Object -First 1) } catch { } }
+        $when = ConvertTo-UtcString $e.TimeCreated
+        if ($msg -match 'Logical drive "\s*(.+?)\s*" goes (\w+)') {
+            $name = $Matches[1]; $word = $Matches[2].ToLower()
+            # (not $state: PowerShell variable names ignore case, so it would overwrite $State)
+            $driveState = switch -regex ($word) { '^(online|normal|functional|ready)$' { 'Healthy' } '^(critical|degraded)$' { 'Critical' } default { 'Offline' } }
+            $drives[$name] = @{ state = $driveState; detail = ''; time = $when }
+        } elseif ($msg -match 'Rebuild on logical drive "\s*(.+?)\s*" (.+)$') {
+            $name = $Matches[1]; $what = $Matches[2].Trim().ToLower()
+            if (-not $drives.ContainsKey($name)) { $drives[$name] = @{ state = 'Critical'; detail = ''; time = $when } }
+            if ($what -eq 'completed') { $drives[$name] = @{ state = 'Healthy'; detail = 'rebuild completed'; time = $when } }
+            elseif ($drives[$name].state -ne 'Healthy' -or $what -eq 'started') {
+                $pct = if ($what -match '(\d+)%') { "$($Matches[1])%" } elseif ($what -match 'resumed|started') { $what } else { $what }
+                $drives[$name] = @{ state = 'Rebuilding'; detail = $pct; time = $when }
+                if ($what -match 'paused|aborted|stopped|failed') { $drives[$name].state = 'Critical'; $drives[$name].detail = "rebuild $what" }
+            }
+        } elseif ($e.TimeCreated -ge $recent -and $msg -match '[Pp]ort (\d+) target (\d+)') {
+            $key = "port $($Matches[1]) target $($Matches[2])"
+            if (-not $ports.ContainsKey($key)) { $ports[$key] = @{ down = 0; timeout = 0; bad = 0; unplugged = 0 } }
+            if ($msg -match 'set down') { $ports[$key].down++ }
+            elseif ($msg -match 'timeout') { $ports[$key].timeout++ }
+            elseif ($msg -match 'BSL update') { $ports[$key].bad++ }
+            elseif ($msg -match 'unplugged') { $ports[$key].unplugged++ }
+        }
+    }
+    foreach ($k in $ports.Keys) {
+        $p = $ports[$k]; $bits = @()
+        if ($p.down) { $bits += "dropped out $($p.down) time(s)" }
+        if ($p.unplugged) { $bits += "unplugged" }
+        if ($p.timeout) { $bits += "$($p.timeout) timeout(s)" }
+        if ($p.bad) { $bits += "$($p.bad) bad sector(s) remapped" }
+        if ($bits) { $warnings += "AMD RAID disk on $($k): $($bits -join ', ') in the last 24 h" }
+    }
+    $State.amd_raid = ($drives | ConvertTo-Json -Depth 3 -Compress)
+    $volumes = @(foreach ($n in ($drives.Keys | Sort-Object)) {
+        $d = $drives[$n]
+        $status = switch ($d.state) {
+            'Healthy' { 'Healthy' }
+            'Rebuilding' { "Rebuilding $($d.detail)".Trim() }
+            'Critical' { 'Critical (a disk has failed)' + $(if ($d.detail) { ", $($d.detail)" } else { '' }) }
+            default { 'Offline (failed)' }
+        }
+        [ordered]@{ volume = $n; letter = ''; label = $n; type = 'AMD RAID'; status = $status; info = "since $($d.time)" }
+    })
+    return [ordered]@{ volumes = $volumes; warnings = $warnings }
+}
+
+function Find-OmReport {
+    $c = Get-Command omreport.exe -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    foreach ($p in @("$env:ProgramFiles\Dell\SysMgt\oma\bin\omreport.exe", "${env:ProgramFiles(x86)}\Dell\SysMgt\oma\bin\omreport.exe")) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    return $null
+}
+
+function Invoke-OmReport([string]$Exe, [string[]]$Arguments) {
+    # omreport's semicolon-separated output: tables of "Header;Header" then rows.
+    $outFile = [IO.Path]::GetTempFileName()
+    try {
+        $p = Start-Process -FilePath $Exe -ArgumentList ($Arguments + @('-fmt', 'ssv')) -RedirectStandardOutput $outFile -NoNewWindow -PassThru
+        if (-not $p.WaitForExit(90000)) { try { $p.Kill() } catch { }; throw "omreport $($Arguments -join ' ') timed out" }
+        return ConvertFrom-OmSsv @(Get-Content -Path $outFile -ErrorAction SilentlyContinue)
+    } finally { Remove-Item -Path $outFile -Force -ErrorAction SilentlyContinue }
+}
+
+function ConvertFrom-OmSsv([string[]]$Lines) {
+    $rows = @(); $head = $null; $section = ''
+    foreach ($line in $Lines) {
+        $t = $line.Trim()
+        if (-not $t) { $head = $null; continue }
+        if ($t -notmatch ';') { $section = $t; $head = $null; continue }
+        $cells = @($t.Split(';') | ForEach-Object { $_.Trim() })
+        if (-not $head) { $head = $cells; continue }
+        $row = [ordered]@{ '_section' = $section }
+        for ($i = 0; $i -lt $head.Count; $i++) { $row[$head[$i]] = if ($i -lt $cells.Count) { $cells[$i] } else { '' } }
+        $rows += , $row
+    }
+    return , $rows
+}
+
+function Get-DellOmsaHealth {
+    # Dell OpenManage Server Administrator: PERC controllers, virtual and physical
+    # disks, and the chassis health summary (power, fans, temperatures, memory...).
+    $exe = Find-OmReport
+    if (-not $exe) { return $null }
+    $res = [ordered]@{ physical = @(); volumes = @(); drives = @(); hardware = @() }
+    $ctrls = Invoke-OmReport $exe @('storage', 'controller')
+    foreach ($c in $ctrls) {
+        if (-not $c['ID']) { continue }
+        $cname = $c['Name']
+        if ($c['Status'] -and $c['Status'] -ne 'Ok') {
+            $res.drives += [ordered]@{ name = "Controller $cname"; index = [int]$c['ID']; status = "$($c['Status']) ($($c['State']))" }
+        }
+        foreach ($v in (Invoke-OmReport $exe @('storage', 'vdisk', "controller=$($c['ID'])"))) {
+            if ($null -eq $v['ID'] -or $v['ID'] -eq '') { continue }
+            $st = [string]$v['State']; $sev = [string]$v['Status']
+            $status = if ($st -match 'Degraded') { 'Degraded (a disk has failed)' }
+                      elseif ($st -match 'Failed|Offline') { "Failed ($st)" }
+                      elseif ($st -match 'Rebuild|Resynch|Reconstruct') { $(if ($st -eq 'Rebuilding') { 'Rebuilding' } else { "Rebuilding ($st)" }) }
+                      elseif ($sev -eq 'Critical' -or $sev -eq 'Non-Recoverable') { "Failed ($st, $sev)" }
+                      elseif ($sev -and $sev -ne 'Ok') { "Warning ($st)" }
+                      else { 'Healthy' }
+            $res.volumes += [ordered]@{ volume = "$cname VD $($v['ID'])"; letter = ''; label = $(if ($v['Name']) { $v['Name'] } else { "VD $($v['ID'])" })
+                type = "PERC $($v['Layout'])".Trim(); status = $status; info = [string]$v['Device Name'] }
+        }
+        foreach ($d in (Invoke-OmReport $exe @('storage', 'pdisk', "controller=$($c['ID'])"))) {
+            if (-not $d['ID']) { continue }
+            $sev = [string]$d['Status']; $st = [string]$d['State']
+            $pred = [string]$d['Failure Predicted'] -eq 'Yes'
+            $health = if ($sev -eq 'Critical' -or $sev -eq 'Non-Recoverable' -or $st -match 'Failed|Offline|Removed') { 'Unhealthy' }
+                      elseif ($pred -or ($sev -and $sev -ne 'Ok')) { 'Warning' } else { 'Healthy' }
+            $res.physical += [ordered]@{ name = "Disk $($d['ID'])"; serial = [string]$d['Serial No.']; media = [string]$d['Media']; bus = [string]$d['Bus Protocol']
+                health = $health; status = $(if ($pred) { "Predictive failure, $st" } else { $st }); size_gb = $(if ($d['Capacity'] -match '([\d.,]+)\s*GB') { [Math]::Round([double]($Matches[1] -replace ',', ''), 0) } else { 0 }) }
+        }
+    }
+    foreach ($h in (Invoke-OmReport $exe @('chassis'))) {
+        if ($h['COMPONENT']) { $res.hardware += [ordered]@{ component = [string]$h['COMPONENT']; severity = [string]$h['SEVERITY'] } }
+    }
+    return $res
+}
+
+function Get-StorageHealth($State) {
     # Physical disks and Storage Spaces (Windows 8 / Server 2012 and later), software RAID on
     # dynamic disks (mirrors, RAID-5) from diskpart, and SMART status from the disk drives.
-    $st = [ordered]@{ physical = @(); virtual = @(); volumes = @(); dyn_disks = @(); drives = @() }
+    $st = [ordered]@{ physical = @(); virtual = @(); volumes = @(); dyn_disks = @(); drives = @(); warnings = @(); hardware = @() }
     if (Get-Command Get-PhysicalDisk -ErrorAction SilentlyContinue) {
         try {
             $st.physical = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object {
@@ -728,12 +873,28 @@ function Get-StorageHealth {
                 [ordered]@{ name = [string]$_.Model; index = [int]$_.Index; status = [string]$_.Status }
             })
     } catch { }
+    try {
+        $amd = Get-AmdRaidHealth $State
+        if ($amd) {
+            $st.volumes = @($st.volumes) + @($amd.volumes)
+            $st.warnings = @($amd.warnings)
+        }
+    } catch { Add-CollectorError 'amd raid' $_ }
+    try {
+        $dell = Get-DellOmsaHealth
+        if ($dell) {
+            $st.physical = @($st.physical) + @($dell.physical)
+            $st.volumes = @($st.volumes) + @($dell.volumes)
+            $st.drives = @($st.drives) + @($dell.drives)
+            $st.hardware = @($dell.hardware)
+        }
+    } catch { Add-CollectorError 'dell omsa' $_ }
     $dynamic = $false
     try { $dynamic = [bool](@(Get-CimInstance -ClassName Win32_DiskPartition -ErrorAction Stop | Where-Object { $_.Type -match 'Logical Disk Manager' }).Count) } catch { }
     if ($dynamic) {
         try {
             $vols = ConvertFrom-DiskPartTable (Invoke-DiskPart 'list volume')
-            $st.volumes = @($vols | Where-Object { $_['Type'] -and $_['Type'] -ne 'Partition' -and $_['Type'] -ne 'Removable' -and $_['Type'] -ne 'DVD-ROM' } | ForEach-Object {
+            $st.volumes = @($st.volumes) + @($vols | Where-Object { $_['Type'] -and $_['Type'] -ne 'Partition' -and $_['Type'] -ne 'Removable' -and $_['Type'] -ne 'DVD-ROM' } | ForEach-Object {
                     [ordered]@{ volume = [string]$_['Volume ###']; letter = [string]$_['Ltr']; label = [string]$_['Label']; type = [string]$_['Type']
                         status = [string]$_['Status']; info = [string]$_['Info'] }
                 })
@@ -784,7 +945,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
     $report.checks = Get-RoleChecks $discovery.roles $since $State
     try {
-        $storage = Measure-Step 'storage health' { Get-StorageHealth }
+        $storage = Measure-Step 'storage health' { Get-StorageHealth $State }
         if ($storage) { $report.checks.storage = $storage }
     } catch { Add-CollectorError 'storage' $_ }
     $report.errors = @($script:Errors)
