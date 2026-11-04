@@ -175,6 +175,12 @@ table.small tr.dim td{opacity:.55}
 .dtab.on{color:var(--text);background:var(--bg);border-color:var(--line)}
 .dtab .bad{display:inline-block;min-width:17px;padding:0 5px;border-radius:999px;background:var(--orange);color:#fff;font-size:10.5px;line-height:17px;text-align:center}
 .checklist .jump{cursor:pointer}
+.ackbtn{display:inline-block;margin-top:5px}
+.ackbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;margin:10px 0 4px;border-radius:8px;font-size:13px;
+  background:color-mix(in srgb,var(--amber) 12%,var(--card));border:1px solid color-mix(in srgb,var(--amber) 40%,var(--line))}
+.ackbar.ok{background:var(--bg);border-color:var(--line);color:var(--muted)}
+table.small tr.acked td{opacity:.7}
+table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .checklist .jump:hover,.checklist .jump:focus-visible{border-color:var(--accent);outline:none}
 .sect.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{background:color-mix(in srgb,var(--accent) 14%,transparent)}100%{background:transparent}}
@@ -973,6 +979,18 @@ function renderDetails(d) {
     return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>`;
   };
   const rowCls = (bad, kind, v) => bad ? (findIgnore(kind, v) ? "dim" : "hl") : "";
+  // Acknowledged 24-hour alerts: still listed, no longer amber, until something new arrives.
+  const ackAt = kind => ((st.ack || {})[kind] || {}).at || 0;
+  const newAlerts = kind => (hist[kind] || []).filter(x => x.alert && (x.received || 0) > ackAt(kind)).length;
+  const alertCls = (x, kind) => x.alert ? ((x.received || 0) > ackAt(kind) ? "hl" : "acked") : "";
+  const ackBar = (kind, noun) => {
+    const n = newAlerts(kind), a = (st.ack || {})[kind];
+    if (n) return `<div class="ackbar"><span><b>${n}</b> ${noun} in the last 24 h ${n === 1 ? "is" : "are"} keeping this amber.</span>
+      <button type="button" class="mini primary edit-only" data-ack="${kind}">Acknowledge</button></div>`;
+    if (a && a.at && Date.now() / 1000 - a.at < 86400) return `<div class="ackbar ok"><span>Acknowledged${a.by ? " by " + esc(a.by) : ""} at ${when(new Date(a.at * 1000).toISOString())}. Anything new turns it amber again.</span>
+      <button type="button" class="mini edit-only" data-unack="${kind}">Undo</button></div>`;
+    return "";
+  };
 
   // Sections are built in order and filed under tabs: flush(next) moves what's been
   // built so far into the current tab and starts the next.
@@ -980,7 +998,7 @@ function renderDetails(d) {
   const T = {};
   const flush = next => { if (html) T[curTab] = (T[curTab] || "") + html; html = ""; curTab = next; };
   html += sect("Checks", `<div class="checklist">${(d.checks || []).map(x =>
-    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small></span></div>`).join("")}</div>`);
+    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${x.status === "amber" && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
   const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
   html += sect("System", `<div class="kv">
     <div><span>Operating system</span>${esc(r.os || "—")}</div>
@@ -1100,8 +1118,9 @@ function renderDetails(d) {
     `<tr class="hl"><td>${when(x.time)}</td><td>${esc(x.threat)}</td><td class="msg">${esc(x.resource)}</td><td>${x.action_success ? "Dealt with" : "<b>Not removed</b>"}</td></tr>`)));
   flush("events");
   const evs = (hist.events || []).slice().reverse();
+  html += ackBar("events", "alert-worthy event(s)");
   html += sect(linux ? "Journal errors (last 24 h)" : "System and Application errors (last 24 h)", tbl(["Time", "Log", "Level", "Source", "ID", "Message", ""], evs.map(x =>
-    `<tr class="${findIgnore("event", x.id) ? "dim" : x.alert ? "hl" : ""}"><td>${when(x.time)}</td><td>${esc(x.log)}</td><td>${esc(x.level)}</td><td>${esc(x.source)}</td><td>${x.id || ""}</td><td class="msg">${esc(x.message)}</td>
+    `<tr class="${findIgnore("event", x.id) ? "dim" : alertCls(x, "events")}"><td>${when(x.time)}</td><td>${esc(x.log)}</td><td>${esc(x.level)}</td><td>${esc(x.source)}</td><td>${x.id || ""}</td><td class="msg">${esc(x.message)}</td>
      <td>${x.id ? ignBtn("event", String(x.id), "event ID " + x.id) : ""}</td></tr>`)) ||
     `<p class="empty-note">No new errors in the last 24 hours.</p>`);
   flush("security");
@@ -1111,8 +1130,9 @@ function renderDetails(d) {
       `<tr class="${x.alert ? "hl" : ""}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}</td><td>${(x.top || []).map(t => `${esc(t.account)} from ${esc(t.source)} (${t.count})`).join("<br>")}</td></tr>`)) ||
       `<p class="empty-note">None.</p>`);
     const sec = (hist.security || []).slice().reverse();
+    html += ackBar("security", "notable security event(s)");
     html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By"], sec.map(x =>
-      `<tr class="${x.alert ? "hl" : ""}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td></tr>`)) ||
+      `<tr class="${alertCls(x, "security")}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td></tr>`)) ||
       `<p class="empty-note">No notable security events in the last 24 hours.</p>`);
   } else {
     html += sect("Security events", `<p class="empty-note">Only Home Assistant admins can see security events.</p>`);
@@ -1191,6 +1211,11 @@ document.getElementById("detBody").addEventListener("keydown", e => {
   if (j && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showDetTab(...JUMP[j.dataset.jump]); }
 });
 document.getElementById("detBody").addEventListener("click", async e => {
+  const ack = e.target.closest("[data-ack],[data-unack]");
+  if (ack) {
+    e.stopPropagation(); ack.disabled = true;
+    return detPost("/agent/ack", ack.dataset.ack ? {kind: ack.dataset.ack} : {kind: ack.dataset.unack, undo: true});
+  }
   const j = e.target.closest("[data-jump]");
   if (j) return showDetTab(...JUMP[j.dataset.jump]);
   const b = e.target.closest("button");

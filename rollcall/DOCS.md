@@ -314,6 +314,8 @@ Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and por
 - **Ignored on this server** (at the bottom of Details) lists everything being ignored there. **Apply to all servers** makes an item global; **Stop ignoring** undoes it, and anything still wrong goes red again immediately.
 - **Disks → Change** sets that disk's own amber and red levels (% free), e.g. amber below 8%, red below 3% for a large data volume. Leave a box blank to use the default, or enter 0 to turn that level off. **Use defaults** removes the override.
 
+- **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything: those items stay listed, greyed out, and anything new that arrives afterwards turns the check amber again. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
+
 These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
 
 **From the Configuration tab** (all servers):

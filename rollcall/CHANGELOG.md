@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.11.0 - 2026-11-04
+
+### Added
+- **Acknowledge** for the Events and Security checks' 24-hour amber. It turns them green without ignoring anything: acknowledged items stay listed (greyed), and anything new afterwards turns the check amber again. Available on the check's card in Details → Overview and at the top of the Events and Security tabs, with who acknowledged it and when, and Undo. Admins only.
+
 ## 1.10.3 - 2026-11-04
 
 ### Fixed
