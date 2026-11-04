@@ -1771,8 +1771,27 @@ class Monitor:
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
 
+    def _ack_time(self, h: Host, kind: str) -> float:
+        return float(((self.agent_settings["hosts"].get(h.key) or {}).get("ack") or {}).get(kind, {}).get("at") or 0)
+
     def _recent(self, h: Host, kind: str, now: float) -> list:
-        return [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= now - DAY and i.get("alert", True)]
+        """Alert-worthy items from the last 24 h that haven't been acknowledged."""
+        acked = self._ack_time(h, kind)
+        return [i for i in h.agent_history.get(kind, [])
+                if i.get("_rx", 0) >= now - DAY and i.get("alert", True) and i.get("_rx", 0) > acked]
+
+    async def acknowledge(self, h: Host, kind: str, who: str | None, undo: bool = False) -> None:
+        """Clear the 24-hour amber for events or security items seen so far. Anything that
+        arrives afterwards turns it amber again."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        ack = hs.setdefault("ack", {})
+        if undo:
+            ack.pop(kind, None)
+        else:
+            ack[kind] = {"at": time.time(), "by": who or ""}
+        self._save_agent_settings()
+        log.info("%s: %s %s%s", h.name, "un-acknowledged" if undo else "acknowledged", kind, f" by {who}" if who else "")
+        await self.reevaluate(h)
 
     # -- per-server agent settings (ignores, disk thresholds) -------------------
     def _save_agent_settings(self) -> None:
@@ -2058,6 +2077,7 @@ class Monitor:
                 for k, v in h.agent_history.items() if include_security or k in ("events", "detections")}
         hs = self.agent_settings["hosts"].get(h.key) or {}
         settings = {"ignore": hs.get("ignore") or [], "global_ignore": self.agent_settings.get("global_ignore") or [],
+                    "ack": hs.get("ack") or {},
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
@@ -2372,6 +2392,21 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         await monitor.set_ignore(h, item, scope, bool(body.get("remove")))
         return web.json_response({"ok": True, "item": item, "scope": scope})
 
+    async def agent_ack(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        kind = body.get("kind")
+        if kind not in ("events", "security"):
+            return web.json_response({"error": "kind must be events or security"}, status=400)
+        user = await access.who(req)
+        await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
+        return web.json_response({"ok": True})
+
     async def agent_disk(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -2590,6 +2625,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/hosts/{key}/details", host_details)
     app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
+    app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))
     app.router.add_post("/api/agents/approve/{pid}", editor_only(agents_approve))
