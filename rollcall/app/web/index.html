@@ -160,7 +160,12 @@ table.small tr.dim td{opacity:.55}
 .diskset label{display:inline-flex;align-items:center;gap:4px}
 .diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 .old{color:var(--amber)}
-.dtabs{position:sticky;top:0;z-index:2;display:flex;gap:2px;flex-wrap:wrap;background:var(--card);box-shadow:inset 0 -1px 0 var(--line);margin:0 -20px 4px;padding:4px 20px 0}
+.dtabs{display:flex;gap:2px;flex-wrap:wrap;flex:none;background:var(--card);box-shadow:inset 0 -1px 0 var(--line);padding:8px 20px 0}
+.dtabs[hidden]{display:none}
+/* Details keeps one size, so switching tabs doesn't make the window jump about. */
+#detDlg{height:min(860px,calc(100vh - 24px))}
+#detDlg form{height:100%;max-height:none}
+#detDlg .dlg-body{flex:1}
 .dtab{border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;padding:7px 12px;font-size:13px;font-weight:600;color:var(--muted);background:transparent}
 .dtab:hover{color:var(--text);background:color-mix(in srgb,var(--accent) 6%,transparent)}
 .dtab.on{color:var(--text);background:var(--bg);border-color:var(--line)}
@@ -258,6 +263,7 @@ table.small tr.dim td{opacity:.55}
 <dialog id="detDlg" class="wide">
   <form method="dialog">
     <div class="dlg-head"><h2 id="detTitle">Details</h2><div class="sub" id="detSub"></div></div>
+    <nav class="dtabs" id="detTabs" role="tablist" hidden></nav>
     <div class="dlg-body" id="detBody"></div>
     <div class="dlg-foot"><div></div><div><button type="button" id="detRefresh">Refresh</button><button class="primary">Close</button></div></div>
   </form>
@@ -918,6 +924,7 @@ async function openDetails(key) {
     const h = data && data.hosts.find(x => x.key === key);
     document.getElementById("detTitle").textContent = h ? h.name : "Details";
     document.getElementById("detSub").textContent = "Loading…";
+    document.getElementById("detTabs").hidden = true;
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
   }
   detKey = key;
@@ -941,7 +948,7 @@ function renderDetails(d) {
   document.getElementById("detSub").textContent = d.received
     ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^Python/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
     : "No report from the agent yet. It reports every 5 minutes once approved.";
-  if (!d.received) { document.getElementById("detBody").innerHTML = ""; return; }
+  if (!d.received) { document.getElementById("detBody").innerHTML = ""; document.getElementById("detTabs").hidden = true; return; }
 
   // Ignore helpers: an item can be ignored on this server, on all servers, or in the add-on's Configuration.
   const linux = r.os_family === "linux";
@@ -1137,8 +1144,10 @@ function renderDetails(d) {
   const order = Object.keys(names).filter(k => T[k]);
   if (!order.includes(detTab)) detTab = "overview";
   const body = document.getElementById("detBody"), top = body.scrollTop;
-  body.innerHTML = `<nav class="dtabs" role="tablist">${order.map(k => `<button type="button" role="tab" class="dtab${k === detTab ? " on" : ""}" data-dtab="${k}" aria-selected="${k === detTab}">${names[k]}${bad[k] ? ` <span class="bad">${bad[k]}</span>` : ""}</button>`).join("")}</nav>` +
-    order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
+  const nav = document.getElementById("detTabs");
+  nav.innerHTML = order.map(k => `<button type="button" role="tab" class="dtab${k === detTab ? " on" : ""}" data-dtab="${k}" aria-selected="${k === detTab}">${names[k]}${bad[k] ? ` <span class="bad">${bad[k]}</span>` : ""}</button>`).join("");
+  nav.hidden = false;
+  body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
 }
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
@@ -1151,13 +1160,12 @@ function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");
   if (!body.querySelector(`[data-pane="${tab}"]`)) return;
   detTab = tab;
-  body.querySelectorAll(".dtab").forEach(b => { const on = b.dataset.dtab === tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
+  document.querySelectorAll("#detTabs .dtab").forEach(b => { const on = b.dataset.dtab === tab; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
   body.querySelectorAll(".dpane").forEach(p => p.hidden = p.dataset.pane !== tab);
   const pane = body.querySelector(`[data-pane="${tab}"]`);
   const h = sectionTitle && [...pane.querySelectorAll(".sect h3")].find(x => x.textContent.toLowerCase().startsWith(sectionTitle.toLowerCase()));
   if (h) {
-    const navH = body.querySelector(".dtabs").offsetHeight;
-    body.scrollTop += h.closest(".sect").getBoundingClientRect().top - body.getBoundingClientRect().top - navH - 6;
+    body.scrollTop += h.closest(".sect").getBoundingClientRect().top - body.getBoundingClientRect().top - 6;
     h.closest(".sect").classList.add("flash"); setTimeout(() => h.closest(".sect").classList.remove("flash"), 1200);
   } else body.scrollTop = 0;
 }
@@ -1170,6 +1178,10 @@ async function detPost(path, payload) {
   await openDetails(detKey); load();
   return true;
 }
+document.getElementById("detTabs").addEventListener("click", e => {
+  const t = e.target.closest("[data-dtab]");
+  if (t) showDetTab(t.dataset.dtab);
+});
 document.getElementById("detBody").addEventListener("keydown", e => {
   const j = e.target.closest("[data-jump]");
   if (j && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showDetTab(...JUMP[j.dataset.jump]); }
@@ -1177,8 +1189,6 @@ document.getElementById("detBody").addEventListener("keydown", e => {
 document.getElementById("detBody").addEventListener("click", async e => {
   const j = e.target.closest("[data-jump]");
   if (j) return showDetTab(...JUMP[j.dataset.jump]);
-  const t = e.target.closest("[data-dtab]");
-  if (t) return showDetTab(t.dataset.dtab);
   const b = e.target.closest("button");
   if (!b) return;
   const splitEntry = v => { const i = v.indexOf(":"); return [v.slice(0, i), v.slice(i + 1)]; };
