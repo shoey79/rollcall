@@ -2063,7 +2063,7 @@ class Monitor:
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
                 "settings": settings,
                 "received": h.agent_seen, "security_visible": include_security,
-                "checks": [{"label": s.label, "status": s.status,
+                "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key != "agent_security" else SECURITY_HIDDEN}
                            for s in h.agent_checks]}
 

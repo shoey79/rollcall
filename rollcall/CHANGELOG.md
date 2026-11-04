@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.10.1 - 2026-11-04
+
+### Changed
+- **Server Details has tabs**: Overview (checks, system, roles), Storage (disks, storage health, hardware), Services (services, IIS, containers), Roles (AD, DHCP, Hyper-V, printers, RDS, Defender, Immich; "Apps" on Linux), Events ("Journal" on Linux), Security and Agent (ignored items, run timings, warnings). Tabs only appear when they have something in them, and show a badge for checks needing attention. The open tab is kept when you refresh.
+- The check cards on the Overview are clickable: each opens its tab and scrolls to its section.
+- The Hardware Log row in Details no longer looks like a fault, and RAID controllers are labelled as such.
+
 ## 1.10.0 - 2026-11-04
 
 ### Added
