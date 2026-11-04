@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.0 - 2026-11-04
+
+### Added
+- **Dell PERC and server hardware via OpenManage** (Windows agent 1.0.8). Where OMSA's `omreport` is installed, the Storage check covers every PERC controller, virtual disk and physical disk (degraded or failed is red; rebuilding or predicted failure is amber), and a new **Hardware** check covers OMSA's chassis health: power supplies, fans, temperatures, voltages, memory, batteries and intrusion. Both show in Details.
+- **AMD RAIDXpert2 arrays** (Windows agent 1.0.8), worked out from its "AMD RAID API" events in the System log: critical is red, rebuilding amber with progress, and recent disk drop-outs, timeouts and bad-sector remaps amber. The array state is kept between runs.
+
+Update the Windows agent to get these.
+
 ## 1.9.3 - 2026-11-02
 
 ### Fixed
