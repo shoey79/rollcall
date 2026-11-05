@@ -43,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.4"
+AGENT_VERSION = "1.0.5"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -565,7 +565,36 @@ def http_json(url, api_key=None, timeout=8):
         return json.loads(r.read().decode() or "null")
 
 
-def immich(conts, conf):
+def _version_tuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:3])
+
+
+def immich_latest(url, key, state):
+    """The newest Immich release: from Immich's own version check (admin key, and
+    "Version check" on in its settings), otherwise GitHub, at most every 6 hours."""
+    if key:
+        try:
+            vc = http_json(url + "/api/system-metadata/version-check-state", key)
+            if vc and vc.get("releaseVersion"):
+                return {"latest": str(vc["releaseVersion"]).lstrip("v"), "latest_checked": vc.get("checkedAt"),
+                        "latest_source": "Immich version check"}
+        except Exception:  # noqa: BLE001  (older Immich, or the key lacks the permission)
+            pass
+    cache = state.get("immich_latest") or {}
+    checked = parse_iso(cache.get("checked"))
+    if not (checked and time.time() - checked < 6 * 3600):
+        try:
+            rel = http_json("https://api.github.com/repos/immich-app/immich/releases/latest", timeout=10)
+            cache = {"checked": utc(time.time()), "version": str(rel.get("tag_name") or "").lstrip("v")}
+        except Exception as err:  # noqa: BLE001  (no internet access is fine)
+            cache = {"checked": utc(time.time()), "version": cache.get("version"), "error": limit(str(err), 100)}
+        state["immich_latest"] = cache
+    if cache.get("version"):
+        return {"latest": cache["version"], "latest_checked": cache.get("checked"), "latest_source": "GitHub releases"}
+    return {}
+
+
+def immich(conts, conf, state=None):
     server = next((c for c in conts or [] if c["role"] == "Immich" and "server" in c["name"].lower()
                    and "machine" not in c["name"].lower()), None)
     url = conf.get("immich_url")
@@ -587,6 +616,10 @@ def immich(conts, conf):
     except Exception:  # noqa: BLE001
         pass
     key = conf.get("immich_api_key")
+    try:
+        out.update(immich_latest(url, key, state if state is not None else {}))
+    except Exception as err:  # noqa: BLE001
+        collector_error("immich version check", err)
     if not key:
         return out
     try:
@@ -691,7 +724,7 @@ def build_report(state, conf):
     if conts is not None:
         r["checks"]["containers"] = conts
     with step("immich"):
-        im = immich(conts, conf)
+        im = immich(conts, conf, state)
         if im:
             r["checks"]["immich"] = im
     r["errors"] = list(ERRORS)
