@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.13.0 - 2026-11-05
+
+### Added
+- **"Whenever it's switched on"** monitoring mode, for computers that are usually off (cold storage, monthly backups). Off is normal: shown as **Off**, never alerted, and not counted against uptime. While it's on, it and its checks and agent are monitored as usual.
+- **Never alert for this computer**: no notifications of any kind for it, while the dashboard, entities and events still show its real status. Marked 🔕 on the dashboard. Works with any schedule.
+
 ## 1.12.0 - 2026-11-05
 
 ### Added
