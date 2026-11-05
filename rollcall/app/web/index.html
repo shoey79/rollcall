@@ -204,6 +204,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .days input:checked+span{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .swin input[type=time]{font:inherit;font-size:13px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text)}
 .sched{color:var(--muted);font-size:11.5px;margin-top:2px}
+.quiet{font-size:12px;opacity:.75}
 .dot.offsched{background:var(--grey)}
 .haresults{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .harow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
@@ -374,12 +375,14 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
         <legend>Monitoring schedule</legend>
         <label class="schedopt"><input type="radio" name="schedMode" value="always" checked> <span><b>All the time</b> (24/7)</span></label>
         <label class="schedopt"><input type="radio" name="schedMode" value="times"> <span><b>Only at set times</b>: outside them it shows as <i>Off schedule</i> and never alerts, like a pause</span></label>
+        <label class="schedopt"><input type="radio" name="schedMode" value="ondemand"> <span><b>Whenever it's switched on</b>, e.g. cold storage or a backup server: being off is normal and never alerts; while it's on, it and its checks are monitored as usual</span></label>
         <div id="schedBox" hidden>
           <div id="schedWins"></div>
           <button type="button" id="schedAdd">+ Add time window</button>
           <label class="tabfield">Allow <input type="number" id="schedGrace" min="0" max="240" value="15" style="width:70px"> minutes for it to start up when a window opens, before alerting</label>
           <p class="hint">Times are in Home Assistant's time zone. A window can run past midnight, e.g. 22:00 to 06:00 (it belongs to the day it starts).</p>
         </div>
+        <label class="schedopt" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><input type="checkbox" id="fNoAlerts"> <span><b>Never alert for this computer</b>: no phone or Home Assistant notifications for it at all; the dashboard still shows its status and checks</span></label>
       </fieldset>
     </div>
     <p class="form-err" id="formErr" role="alert"></p>
@@ -396,7 +399,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
   </form>
 </dialog>
 <script>
-const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off schedule"};
+const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off / off schedule"};
 const ORDER = {red: 0, degraded: 1, amber: 2, maintenance: 3, unknown: 4, green: 5};
 const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked"};
 let data = null;
@@ -473,15 +476,16 @@ function cmpVer(a, b) {
 }
 function statusLabel(h) {
   if (h.maint_until) return LABEL[h.status];
-  if (h.off_schedule) return "Off schedule";
+  if (h.off_schedule) return h.expect_off ? "Off" : "Off schedule";
   if (h.starting_up) return "Starting up";
   return LABEL[h.status];
 }
 function schedNote(h) {
-  if (h.maint_until || !h.schedule) return "";
+  if (h.maint_until || !(h.schedule || h.expect_off)) return "";
   const soon = h.schedule_next && h.schedule_next - Date.now() / 1000 < 6 * 86400;
   const at = h.schedule_next ? new Date(h.schedule_next * 1000).toLocaleString([], soon ? {weekday: "short", hour: "2-digit", minute: "2-digit"}
     : {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : null;
+  if (h.off_schedule && h.expect_off) return `<div class="note">Off, as expected · checked whenever it's on</div>`;
   if (h.off_schedule) return `<div class="note">Monitoring resumes ${at ? at : "—"}</div>`;
   if (h.starting_up) return `<div class="note">Window opened; waiting for it to reply</div>`;
   return "";
@@ -556,7 +560,7 @@ function render() {
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status"><span class="dot ${h.off_schedule ? "offsched" : h.status}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div><div class="name">${esc(h.name)}</div>${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
+      <td data-label="Name"><div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -1514,7 +1518,8 @@ async function openDialog(h) {
   document.getElementById("schedWins").innerHTML = "";
   document.getElementById("schedGrace").value = h && h.schedule ? h.schedule.grace : 15;
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
-  setSchedMode(h && h.schedule ? "times" : "always");
+  setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
+  document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -1533,7 +1538,9 @@ form.addEventListener("submit", async e => {
   const err = document.getElementById("formErr");
   const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
-  const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule()};
+  const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
+    expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
+    no_alerts: document.getElementById("fNoAlerts").checked};
   if (body.schedule && !body.schedule.windows.length) { err.textContent = "Add at least one time window, or choose All the time."; return; }
   if (!body.name) { err.textContent = "Name is required."; return fName.focus(); }
   if (!body.host) { err.textContent = "Enter an IP address or hostname."; return fHost.focus(); }

@@ -384,6 +384,14 @@ By default every computer is monitored all the time. For one that's only meant t
 
 Times are in Home Assistant's time zone (Settings → System → General), and follow daylight saving. The schedule shows under the computer's name on the dashboard, and the `sensor.ping_monitor_<name>` entity has `off_schedule` and `schedule` attributes. A tab condition **Status is Off schedule** lists them. A manual **Pause** still works on a scheduled computer and takes priority while it lasts.
 
+### Computers that are usually off
+
+For something that's only switched on now and then (cold storage, a monthly backup target), choose **Whenever it's switched on** under Edit → Monitoring schedule. Being off is then normal: it shows as **Off** (grey), never alerts for it, and off time doesn't count against uptime. While it's on, it's monitored like any other computer, with its service checks and agent, so a failed disk or a stopped service still alerts during that monthly run.
+
+### Never alert
+
+**Never alert for this computer** (Edit → Monitoring schedule) turns off every phone and Home Assistant notification for it: down, service checks, agent checks, events and updates. The dashboard still shows its real status and checks, it still counts in tabs such as Needs attention, and its entities and `ping_monitor_status_changed` events still update, so your own automations keep working. A 🔕 next to its name shows it's set. It can be combined with any schedule.
+
 ## Pausing for reboots (maintenance mode)
 
 Click **Pause** on a row before rebooting or working on a machine. You'll be asked for a time limit (default `maintenance_minutes`, 30).

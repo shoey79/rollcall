@@ -465,9 +465,14 @@ def validate_entry(raw: dict) -> dict:
     if errors:
         raise ValueError("; ".join(errors))
     entry = {"name": name, "host": host, "checks": out}
-    sched = clean_schedule(raw.get("schedule"))
-    if sched:
-        entry["schedule"] = sched
+    if raw.get("expect_off"):
+        entry["expect_off"] = True  # monitored whenever it's on; a schedule doesn't apply
+    else:
+        sched = clean_schedule(raw.get("schedule"))
+        if sched:
+            entry["schedule"] = sched
+    if raw.get("no_alerts"):
+        entry["no_alerts"] = True
     return entry
 
 
@@ -1032,6 +1037,8 @@ class Host:
     maint_seen_down: bool = False      # has it stopped replying since the pause began?
     maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
     schedule: dict | None = None       # None: monitored all the time
+    expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
+    no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
     sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
@@ -1161,12 +1168,15 @@ class Monitor:
 
     def _save_hosts(self) -> None:
         self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
-                            **({"schedule": h.schedule} if h.schedule else {})}
+                            **({"schedule": h.schedule} if h.schedule else {}),
+                            **({"expect_off": True} if h.expect_off else {}),
+                            **({"no_alerts": True} if h.no_alerts else {})}
                            for h in self.hosts.values()])
 
     def _make_host(self, entry: dict, due: float) -> Host:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
                  checks=list(entry.get("checks") or []), next_due=due)
+        h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         try:
             h.schedule = clean_schedule(entry.get("schedule"))
         except ValueError as err:
@@ -1188,6 +1198,9 @@ class Monitor:
         h.name = entry["name"]
         h.checks = entry["checks"]
         h.schedule = entry.get("schedule")
+        h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        if h.no_alerts:
+            await self.dismiss(f"ping_monitor_{h.key}")
         old = {s.desc: s for s in h.services}
         new = self._build_services(h.name, h.checks)
         for s in new:
@@ -1381,6 +1394,10 @@ class Monitor:
             reason = "unresolved" if ip is None else "down"
 
             on, since, _next = schedule_state(h.schedule, now)
+            if h.expect_off:
+                # Only switched on now and then: being off is normal, and it's "on" while it answers.
+                on = bool(ok)
+                since = (h.sched_started or now) if ok else None
             grace = (h.schedule or {}).get("grace", 15) * 60
             was_off = h.off_schedule
             h.off_schedule = not on
@@ -1526,7 +1543,7 @@ class Monitor:
                                   {"notification_id": notification_id})
 
     async def persist(self, notification_id: str, title: str, message: str) -> None:
-        if self.opts["persistent_notification"]:
+        if self.opts["persistent_notification"] and not self._quiet(notification_id):
             await self.ha.service("persistent_notification", "create",
                                   {"notification_id": notification_id,
                                    "title": title, "message": message})
@@ -1589,7 +1606,17 @@ class Monitor:
                 await self.notify(f"🟢 {h.name}: {s.label} is back up",
                                   f"{s.label} ({s.desc}) on {h.name} is responding again.", tag)
 
+    def _quiet(self, tag: str | None) -> bool:
+        """Notifications for a computer set to never alert are dropped here, in one place.
+        Every per-computer tag is ping_monitor_<key> or ping_monitor_<key>__<what>."""
+        if not tag or not tag.startswith("ping_monitor_"):
+            return False
+        h = self.hosts.get(tag[len("ping_monitor_"):].split("__")[0])
+        return bool(h and h.no_alerts)
+
     async def notify(self, title: str, message: str, tag: str | None = None) -> None:
+        if self._quiet(tag):
+            return
         for svc in self.opts.get("notify_services") or []:
             svc = svc.strip().removeprefix("notify.")
             if not svc:
@@ -2142,7 +2169,8 @@ class Monitor:
                 "last_change": iso(h.last_change),
                 "maintenance_until": iso(h.maint_until),
                 "off_schedule": h.off_schedule,
-                "schedule": describe_schedule(h.schedule),
+                "schedule": "whenever it's on" if h.expect_off else describe_schedule(h.schedule),
+                "alerts": not h.no_alerts,
                 "services": {s.label: s.status for s in h.services + h.agent_checks},
             },
         )
@@ -2176,7 +2204,9 @@ class Monitor:
                 "next_check": h.next_due, "checking": h.checking,
                 "entity_id": h.entity_id,
                 "maint_until": h.maint_until, "maint_seen_down": h.maint_seen_down,
-                "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else None,
+                "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else
+                ("Checked whenever it's on" if h.expect_off else None),
+                "expect_off": h.expect_off, "no_alerts": h.no_alerts,
                 "off_schedule": h.off_schedule, "schedule_next": schedule_state(h.schedule, time.time())[2],
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
