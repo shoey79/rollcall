@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.0 - 2026-11-05
+
+### Added
+- **Immich update alerts** (Linux agent 1.0.5). When a newer Immich release is out, the Immich check turns amber and you get one notification per release with a link to its release notes. The newest version comes from Immich's own version check (API key with `systemMetadata.read`), or from GitHub every 6 hours. Details shows "vX available" next to the running version; Ignore there stops flagging Immich updates (`update:immich`).
+
+Update the Linux agent to get this: download it again from **Agents** and run `--install` again.
+
 ## 1.11.0 - 2026-11-04
 
 ### Added

@@ -343,6 +343,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so n
 | **Journal** | Alert-worthy errors in 24 h | |
 
 - **Containers:** every container that's running, has a restart policy, or belongs to a Compose stack is watched (Immich's server, machine learning, Postgres and Redis/Valkey included). A one-off container that exited cleanly isn't. Containers can be ignored like services.
+- **Immich updates:** when a newer Immich release is out, the Immich check turns amber ("update available: v2.2.3 (running v2.1.0)") and you get one notification per new release, with a link to its release notes. The newest release comes from Immich's own version check if the API key can read it (the `systemMetadata.read` permission, and **Version check** on in Immich's Administration → Settings), otherwise from GitHub, at most every 6 hours (the server needs internet access for that). To stop flagging Immich updates, use **Ignore** next to the version in Details (`update:immich`).
 - **Immich:** found from its container (port 2283 unless mapped elsewhere). It always checks the API answers and reports the version. With an API key it also shows each job queue (active, waiting, failed, paused), the photo and video counts and storage use.
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors and any critical journal entry; users created or deleted (4720/4726) and users added to groups such as `sudo` or `docker` (4732). SSH logins are listed in Details but not alerted.
 - **Storage:** software RAID (mdadm) arrays from `/proc/mdstat` and ZFS pools. A degraded array or a failed member is red; an array that's already rebuilding is amber.
@@ -353,7 +354,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so n
 1. In the dashboard, click **Agents** and use **Download pingmonitor-agent.py** (it uses the same address as the Windows script; check that first).
 2. Copy it to the server, e.g. `scp pingmonitor-agent.py lee@immich:`
 3. On the server: `sudo python3 pingmonitor-agent.py --install`
-   For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage` and `job.read` (or `queue.read`) permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`):
+   For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage`, `job.read` (or `queue.read`) and `systemMetadata.read` permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`):
    `sudo python3 pingmonitor-agent.py --install --immich-api-key YOUR_KEY`
    If Immich isn't in a local container, add `--immich-url http://host:2283`.
 4. Approve it under **Agents → Waiting for approval**.

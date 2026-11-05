@@ -465,6 +465,12 @@ function maintNote(h) {
   const phase = h.maint_seen_down ? "Down, waiting for reply" : "Waiting for it to go down";
   return `<div class="note">${phase}<br>until ${until}</div>`;
 }
+function cmpVer(a, b) {
+  const p = v => String(v || "").match(/\d+/g)?.slice(0, 3).map(Number) || [];
+  const x = p(a), y = p(b);
+  for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); }
+  return 0;
+}
 function statusLabel(h) {
   if (h.maint_until) return LABEL[h.status];
   if (h.off_schedule) return "Off schedule";
@@ -965,7 +971,7 @@ function renderDetails(d) {
   const diskKey = v => { const t = String(v || "").trim();
     return t.startsWith("/") ? (t.replace(/\/+$/, "") || "/") : t.replace(/[\\\/]+$/, "").replace(/:$/, "").toUpperCase() + ":"; };
   const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
-  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware"];
+  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update"];
     const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
   const findIgnore = (kind, v) => {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
@@ -1102,7 +1108,9 @@ function renderDetails(d) {
     const im = c.immich, stt = im.stats || {}, sto = im.storage || {};
     html += sect("Immich", `<div class="kv">
       <div><span>API</span>${im.ping ? "Answering" : "<b class='old'>Not answering</b>"} <small class="muted">${esc(im.url || "")}</small>${im.error ? `<br><small class="old">${esc(im.error)}</small>` : ""}</div>
-      <div><span>Version</span>${esc(im.version || "—")}</div>
+      <div><span>Version</span>${esc(im.version || "—")}${im.latest ? (cmpVer(im.latest, im.version) > 0
+        ? ` <b class="old">· v${esc(im.latest)} available</b> <a href="https://github.com/immich-app/immich/releases/tag/v${esc(im.latest)}" target="_blank" rel="noopener">release notes</a> ${ignBtn("update", "immich", "Immich updates")}`
+        : ` <small class="muted">· up to date</small>`) : ""}${im.latest_source ? `<br><small class="muted">latest release from ${esc(im.latest_source)}</small>` : ""}</div>
       ${stt.photos != null ? `<div><span>Library</span>${stt.photos.toLocaleString()} photos, ${(stt.videos || 0).toLocaleString()} videos (${stt.usage_gb} GB)</div>` : ""}
       ${sto.size ? `<div><span>Storage</span>${esc(sto.free)} free of ${esc(sto.size)} (${sto.used_pct}% used)</div>` : ""}</div>` +
       (im.api_error ? `<p class="hint old">${esc(im.api_error)}</p>` : "") +
@@ -1140,7 +1148,7 @@ function renderDetails(d) {
 
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
-  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware"};
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for"};
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
@@ -1307,7 +1315,7 @@ function renderAgents() {
         "Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code>",
         "On the server run <code>sudo python3 pingmonitor-agent.py --install</code>.",
         "It copies itself to <code>/usr/local/lib/pingmonitor</code> and adds a systemd timer that runs as root every 5 minutes, and the server appears below for approval."],
-      options: `Immich job queues and library statistics: add <code>--immich-api-key KEY</code>, a key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> and <code>job.read</code> (or <code>queue.read</code>). Immich elsewhere than a local container: <code>--immich-url http://host:2283</code>.`,
+      options: `Immich job queues and library statistics: add <code>--immich-api-key KEY</code>, a key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> <code>job.read</code> (or <code>queue.read</code>) and <code>systemMetadata.read</code>. Immich elsewhere than a local container: <code>--immich-url http://host:2283</code>.`,
       update: "Download it again and run <code>--install</code> again; settings and approval are kept.",
       remove: "<code>sudo python3 /usr/local/lib/pingmonitor/pingmonitor-agent.py --uninstall</code>, then <b>Revoke</b> below.",
       trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/pingmonitor/agent.log</code>; <code>systemctl status pingmonitor-agent</code>."

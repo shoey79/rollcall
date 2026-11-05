@@ -1771,6 +1771,25 @@ class Monitor:
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
 
+    async def _immich_release(self, h: Host, report: dict) -> None:
+        """One notification per new Immich release (the check stays amber until updated)."""
+        im = (report.get("checks") or {}).get("immich") or {}
+        if not agentlib.immich_update(im):
+            return
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        ignored = {str(x).lower() for x in (hs.get("ignore") or []) + (self.agent_settings.get("global_ignore") or [])
+                   + list(self.opts.get("agent_ignore") or [])}
+        if "update:immich" in ignored or hs.get("immich_notified") == im["latest"]:
+            return
+        hs["immich_notified"] = im["latest"]
+        self._save_agent_settings()
+        if h.maint_until or h.off_schedule:
+            return
+        await self.notify(f"⬆️ {h.name}: Immich v{im['latest']} available",
+                          f"{h.name} is running Immich v{im.get('version')}. Release notes: "
+                          f"https://github.com/immich-app/immich/releases/tag/v{im['latest']}",
+                          f"ping_monitor_{h.key}__immich_update")
+
     def _ack_time(self, h: Host, kind: str) -> float:
         return float(((self.agent_settings["hosts"].get(h.key) or {}).get("ack") or {}).get(kind, {}).get("at") or 0)
 
@@ -1918,6 +1937,7 @@ class Monitor:
         h.agent_checks = new_list
         if not restoring and not reeval:
             await self._alert_notables(h, notable)
+            await self._immich_release(h, report)
         await self._recompute(h, quiet=restoring)
         if not restoring:
             await self.publish(h)

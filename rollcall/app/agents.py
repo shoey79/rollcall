@@ -326,7 +326,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
         return None
 
 
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update")
 
 
 def disk_key(name) -> str:
@@ -351,6 +351,15 @@ def clean_ignore_item(kind: str, value: str) -> str:
     if kind == "disk":
         value = disk_key(value)
     return f"{kind}:{value}"
+
+
+def _vt(v) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:3])
+
+
+def immich_update(im: dict) -> bool:
+    """True when a newer Immich release than the one running is known."""
+    return bool(im.get("latest") and im.get("version") and _vt(im["latest"]) > _vt(im["version"]))
 
 
 def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict | None = None) -> dict:
@@ -524,6 +533,9 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                 bits.append("failed jobs: " + ", ".join(f"{q['name']} ({q['failed']})" for q in failed))
             if im.get("api_error"):
                 bits.append(im["api_error"])
+            if immich_update(im) and not ign.has("update", "immich"):
+                level = max(level, WARN, key=[OK, WARN, CRIT].index)
+                bits.insert(0, f"update available: v{im['latest']} (running v{im.get('version')})")
             if not bits:
                 bits.append(f"{busy} job(s) queued" if qs else "API answering")
             checks.append(_check("immich", "Immich", level, f"Immich{ver}: " + "; ".join(bits)))
