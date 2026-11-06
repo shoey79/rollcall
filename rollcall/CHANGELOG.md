@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.19.0 - 2026-11-06
+
+### Added
+- **SNMP checks** for switches, NAS units and other network kit: tick **SNMP** when adding or editing a device and enter its community (SNMP v2c, read-only). **Details** shows:
+  - every physical port, with its description, speed and errors. Tick **Alert** on the ones that should always be up (uplinks, servers, access points);
+  - PoE power against the budget, plus PoE faults, overloads and short circuits, on switches that support the standard PoE MIB, such as the Netgear GS516TP;
+  - for a Buffalo TeraStation, disk status, SMART health, RAID arrays and fullness, and the NAS's own errors. A degraded or removed disk goes red;
+  - restarts, shown amber for an hour.
+
+  The SNMP client is built in, with no extra dependencies.
+
+### Fixed
+- Details tables on phones are now shown as tables that scroll sideways, rather than one value per line.
+
 ## 1.18.0 - 2026-11-06
 
 ### Added

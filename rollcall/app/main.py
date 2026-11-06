@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 
 import agents as agentlib
+import snmp as snmplib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -194,6 +195,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("npm", "Nginx Proxy Manager", _NET, [("NPM", "http:81/")]),
     ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
     ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
+    ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID (e.g. Netgear, Buffalo)", _NET, [("SNMP", "snmp:device")]),
     ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
     # Home & automation
     ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
@@ -301,6 +303,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or f"{scheme.upper()} {port}", "kind": "http", "port": port,
                  "url": f"{scheme}://{{host}}:{port}{path}", "desc": f"{scheme}:{port}{path}",
                  "fallback": True}]
+    if low == "snmp:device":
+        return [{"label": label or "SNMP", "kind": "snmp", "port": 161, "url": None, "desc": "snmp"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -475,6 +479,12 @@ def validate_entry(raw: dict) -> dict:
             entry["schedule"] = sched
     if raw.get("no_alerts"):
         entry["no_alerts"] = True
+    comm = raw.get("snmp_community")
+    if comm not in (None, ""):
+        comm = str(comm)
+        if len(comm) > 64 or not comm.isprintable():
+            raise ValueError("The SNMP community must be up to 64 ordinary characters")
+        entry["snmp_community"] = comm
     return entry
 
 
@@ -1043,6 +1053,11 @@ class Host:
     no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
+    snmp_community: str | None = None  # SNMP v2c community (None: "public")
+    snmp_watch: list[int] = field(default_factory=list)  # switch ports (ifIndex) that alert when down
+    snmp_data: dict | None = None      # latest SNMP poll
+    snmp_items: list[dict] = field(default_factory=list)  # problems found in it
+    snmp_polled: float | None = None
     sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
@@ -1173,13 +1188,17 @@ class Monitor:
         self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
                             **({"schedule": h.schedule} if h.schedule else {}),
                             **({"expect_off": True} if h.expect_off else {}),
-                            **({"no_alerts": True} if h.no_alerts else {})}
+                            **({"no_alerts": True} if h.no_alerts else {}),
+                            **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
+                            **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {})}
                            for h in self.hosts.values()])
 
     def _make_host(self, entry: dict, due: float) -> Host:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        h.snmp_community = entry.get("snmp_community") or None
+        h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
         try:
             h.schedule = clean_schedule(entry.get("schedule"))
         except ValueError as err:
@@ -1202,6 +1221,8 @@ class Monitor:
         h.checks = entry["checks"]
         h.schedule = entry.get("schedule")
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        if entry.get("snmp_community"):  # blank keeps the one already set
+            h.snmp_community = entry["snmp_community"]
         if h.no_alerts:
             await self.dismiss(f"ping_monitor_{h.key}")
         old = {s.desc: s for s in h.services}
@@ -1480,6 +1501,8 @@ class Monitor:
         async def run_one(s: Service):
             if s.kind == "ha":
                 return await self.ha_check(s)
+            if s.kind == "snmp":
+                return await self.snmp_check(h, now)
             async with self.sem:
                 if s.kind == "tcp":
                     return await tcp_check(h.ip, s.port, self.svc_timeout)
@@ -1495,17 +1518,44 @@ class Monitor:
                 log.warning("%s %s: check error: %s", h.name, s.label, res)
                 ok, lat, detail = False, None, type(res).__name__
             else:
-                ok, lat, detail = res
+                ok, lat, detail = res[:3]
+            warn = not isinstance(res, Exception) and len(res) > 3 and res[3] == "warn"
             s.last_check = now
             s.latency = lat if ok else None
             s.detail = detail
-            s.failures = 0 if ok else s.failures + 1
-            new = GREEN if ok else AMBER if s.failures == 1 else RED
+            s.failures = 0 if ok or warn else s.failures + 1
+            new = GREEN if ok else AMBER if warn or s.failures == 1 else RED
+            ok = ok or warn  # a warning isn't counted as downtime
             self.store.add(svc_key(h, s), now, ok, s.latency)
             if new != s.status:
                 old, s.status, s.last_change = s.status, new, now
                 log.info("%s %s (%s): %s -> %s [%s]", h.name, s.label, s.desc, old, new, detail)
                 await self.on_service_change(h, s, old, new)
+
+    async def snmp_check(self, h: Host, now: float) -> tuple:
+        """Poll the device over SNMP. Warnings (e.g. PoE near its budget) stay amber;
+        problems (a watched port down, a failed disk) go red if they're still there next time."""
+        prev = h.snmp_data
+        try:
+            d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
+                                  port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
+        except (snmplib.SnmpError, OSError) as err:
+            h.snmp_items = [{"level": "crit", "what": "SNMP", "detail": str(err)}]
+            return False, None, str(err)
+        h.snmp_data, h.snmp_polled = d, now
+        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev)
+        h.snmp_items = items
+        if worst == "ok":
+            bits = []
+            if d.get("ports"):
+                bits.append(f"{sum(1 for p in d['ports'] if p['up'])} of {len(d['ports'])} ports up")
+            if d.get("poe") and d["poe"].get("used_w") is not None:
+                bits.append(f"PoE {d['poe']['used_w']}/{d['poe']['power_w']} W")
+            if d.get("nas"):
+                bits.append(f"{len(d['nas'].get('disks') or [])} disks OK")
+            return True, d.get("took_ms"), "; ".join(bits) or "answering"
+        detail = "; ".join(f"{i['what']} {i['detail']}".strip() for i in items if i["level"] == worst)
+        return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
 
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
@@ -1591,6 +1641,16 @@ class Monitor:
             "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
         })
         tag = f"ping_monitor_{svc_key(h, s)}"
+        if new == RED and s.kind == "snmp":
+            msg = f"{h.name} ({h.ip or h.host}): {s.detail}."
+            await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} SNMP", msg)
+            return
+        if old == RED and new == GREEN and s.kind == "snmp":
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                await self.notify(f"🟢 {h.name}: OK again", f"{h.name}: {s.detail}.", tag)
+            return
         if new == RED and s.kind == "ha":
             msg = f"{s.label} on {h.name} is {s.detail} ({s.entity})."
             await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag)
@@ -2277,6 +2337,7 @@ class Monitor:
                 "off_schedule": h.off_schedule, "reachable": h.reachable, "schedule_next": schedule_state(h.schedule, time.time())[2],
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
+                "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "services": [{
                     "key": s.key, "label": s.label, "target": s.desc, "status": s.status, "kind": s.kind,
                     "latency_ms": s.latency, "detail": s.detail,
@@ -2750,6 +2811,37 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         await monitor.update_host(h, await read_entry(req))
         return web.json_response({"updated": h.key})
 
+    async def host_snmp(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        svc = next((s for s in h.services if s.kind == "snmp"), None)
+        return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "polled": h.snmp_polled,
+                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch,
+                                  "status": svc.status if svc else None, "detail": svc.detail if svc else None})
+
+    async def host_snmp_watch(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        try:
+            idx = int(body.get("index"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="index must be a port number")
+        watch = set(h.snmp_watch)
+        (watch.add if body.get("watch") else watch.discard)(idx)
+        h.snmp_watch = sorted(watch)
+        monitor._save_hosts()
+        log.info("%s: port %s %s", h.name, idx, "watched" if body.get("watch") else "no longer watched")
+        if h.snmp_data:  # re-evaluate straight away
+            svc = next((s for s in h.services if s.kind == "snmp"), None)
+            worst, items = snmplib.evaluate(h.snmp_data, watch, None)
+            h.snmp_items = items
+            if svc and svc.status != UNKNOWN:
+                h.next_due = 0
+        return web.json_response({"watch": h.snmp_watch})
+
     async def delete_host(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -2768,6 +2860,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/presets", presets)
     app.router.add_post("/api/hosts", editor_only(add_host))
     app.router.add_put("/api/hosts/{key}", editor_only(update_host))
+    app.router.add_get("/api/hosts/{key}/snmp", host_snmp)
+    app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
     app.router.add_get("/api/status", status)

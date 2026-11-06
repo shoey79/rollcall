@@ -271,6 +271,11 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   .alert .what small{white-space:normal}
   .tile b{font-size:22px}
 }
+.snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}
+.snmpbox .field{max-width:320px}
+tr.bad td{background:color-mix(in srgb,var(--red) 8%,transparent)}
+tr.warn td{background:color-mix(in srgb,var(--amber) 8%,transparent)}
+ul.plain{margin:0;padding-left:18px}
 .tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
 .rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
@@ -285,6 +290,12 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   .diskrow span:last-child{grid-column:2}
   .diskset{margin-left:54px}
   table.small{display:block;overflow-x:auto}
+  /* Detail tables stay tables (scrolling sideways), not the stacked cards the main list uses */
+  table.small thead{display:table-header-group}
+  table.small tbody{display:table-row-group}
+  table.small tr{display:table-row;padding:0;border:none}
+  table.small th,table.small td{display:table-cell;white-space:nowrap}
+  table.small td::before{content:none}
 }
 </style>
 </head>
@@ -404,6 +415,10 @@ tr.flashrow td{animation:flash 1.6s ease-out}
         <div class="picked" id="picked"></div>
         <div id="presetGroups"></div>
         <p class="hint" id="noMatch" hidden>No preset matches. You can add it as a custom check below.</p>
+        <div id="snmpBox" hidden class="snmpbox">
+          <label class="field">SNMP community (v2c, read-only)<input id="fSnmpComm" maxlength="64" autocomplete="off" spellcheck="false" placeholder="public"></label>
+          <p class="hint">Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). Choose which switch ports should alert when they go down from the device's <b>Details</b>.</p>
+        </div>
       </fieldset>
       <fieldset>
         <legend>Home Assistant sensors <small>— e.g. CPU and memory from the UniFi integration</small></legend>
@@ -639,7 +654,8 @@ function render() {
       <td data-label="Since">${ago(h.last_change, now)}</td>
       <td data-label=""><div class="actions">
         <button data-key="${esc(h.key)}" ${h.checking ? "disabled" : ""}>Check now</button>
-        ${h.agent ? `<button data-details="${esc(h.key)}" title="Disks, services, logs and more from the agent">Details</button>` : ""}
+        ${h.agent ? `<button data-details="${esc(h.key)}" title="Disks, services, logs and more from the agent">Details</button>`
+          : h.snmp ? `<button data-snmp="${esc(h.key)}" title="Ports, PoE, disks and more over SNMP">Details</button>` : ""}
         ${h.maint_until
           ? `<button class="edit-only" data-resume="${esc(h.key)}" title="Resume monitoring and alerts now">Resume</button>`
           : `<button class="edit-only" data-pause="${esc(h.key)}" data-name="${esc(h.name)}" title="Pause alerts, e.g. for a reboot">Pause</button>`}
@@ -695,7 +711,7 @@ function renderHome() {
   html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
-      const target = jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
+      const target = a.check && a.check.kind === "snmp" ? "Details" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
       return `<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
         <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
@@ -753,12 +769,13 @@ document.getElementById("home").addEventListener("click", e => {
   if (a) {
     const x = homeAlerts[+a.dataset.alert]; if (!x) return;
     if (x.check && x.check.agent && x.h.agent) return openDetails(x.h.key, JUMP[checkKey(x.check)] || ["overview"]);
+    if (x.check && x.check.kind === "snmp") return openSnmp(x.h.key);
     return showInList(x.h.key);
   }
   const g = e.target.closest("[data-glance]");
   if (g) {
     const h = data.hosts.find(x => x.key === g.dataset.glance);
-    return h && h.agent ? openDetails(h.key) : showInList(g.dataset.glance);
+    return h && h.agent ? openDetails(h.key) : h && h.snmp ? openSnmp(h.key) : showInList(g.dataset.glance);
   }
 });
 
@@ -1088,6 +1105,8 @@ document.getElementById("resetAll").addEventListener("click", () => resetUptime(
 document.getElementById("rows").addEventListener("click", async e => {
   const db = e.target.closest("[data-details]");
   if (db) return openDetails(db.dataset.details);
+  const sn = e.target.closest("[data-snmp]");
+  if (sn) return openSnmp(sn.dataset.snmp);
   const eb = e.target.closest("button[data-edit]");
   if (eb) return openDialog(data.hosts.find(h => h.key === eb.dataset.edit));
   const pb = e.target.closest("button[data-pause]");
@@ -1124,7 +1143,9 @@ const tbl = (head, rows) => rows.length
   ? `<table class="small"><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>` : "";
 const sect = (title, inner) => inner ? `<div class="sect"><h3>${title}</h3>${inner}</div>` : "";
 
+let detMode = "agent";
 async function openDetails(key, jump) {
+  if (detMode !== "agent") { detMode = "agent"; detKey = null; }
   if (key !== detKey || jump) {
     // Clear the previous server's details straight away so they don't flash up.
     diskEditing = null;
@@ -1147,7 +1168,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && openDetails(detKey));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "snmp" ? openSnmp(detKey) : openDetails(detKey)));
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -1392,6 +1413,86 @@ function renderDetails(d) {
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
 }
+// ---- SNMP devices (switches, NAS) ----
+const fmtUp = s => s == null ? "—" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min" : Math.floor(s / 86400) + " days";
+let snmpInfo = null;
+async function openSnmp(key) {
+  if (detMode !== "snmp" || key !== detKey) {
+    const h = data && data.hosts.find(x => x.key === key);
+    document.getElementById("detTitle").textContent = h ? h.name : "Details";
+    document.getElementById("detSub").textContent = "Loading…";
+    document.getElementById("detTabs").hidden = true;
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  }
+  detMode = "snmp"; detKey = key;
+  if (!detDlg.open) detDlg.showModal();
+  try {
+    const r = await fetch("api/hosts/" + encodeURIComponent(key) + "/snmp", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    snmpInfo = await r.json();
+    renderSnmp(snmpInfo);
+  } catch (e) {
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
+  }
+}
+function renderSnmp(x) {
+  const d = x.data, now = Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
+  const canEdit = data && data.can_edit === true;
+  document.getElementById("detTitle").textContent = x.name;
+  document.getElementById("detTabs").hidden = true;
+  document.getElementById("detSub").textContent = d
+    ? [d.descr && d.descr.slice(0, 80), "polled " + ago(x.polled, now), d.uptime_s != null ? "up " + fmtUp(d.uptime_s) : ""].filter(Boolean).join(" · ")
+    : "Not polled yet";
+  let html = "";
+  const items = x.items || [];
+  html += sect("Checks", items.length
+    ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small></span></div>`).join("")}</div>`
+    : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
+  if (!d) { body.innerHTML = html; return; }
+  const nas = d.nas;
+  if (nas) {
+    html += sect("Disks", tbl(["Disk", "Model", "Status", "SMART", "Size"], (nas.disks || []).map(k =>
+      `<tr class="${k.bad ? "bad" : k.spare_missing ? "warn" : ""}"><td>${k.index}</td><td>${esc(k.model || "—")}</td><td>${esc(k.status)}</td><td>${esc(k.smart || "—")}</td><td>${k.capacity_gib ? (k.capacity_gib / 1024).toFixed(1) + " TiB" : "—"}</td></tr>`)) || `<p class="empty-note">No disk information.</p>`);
+    html += sect("RAID arrays", tbl(["Array", "RAID", "Used"], (nas.arrays || []).filter(a => a.configured).map(a =>
+      `<tr><td>${a.index}</td><td>${esc(a.raid)}</td><td>${a.capacity_gib ? `${Math.round(a.used_gib / a.capacity_gib * 100)}% of ${(a.capacity_gib / 1024).toFixed(1)} TiB` : "—"}</td></tr>`)));
+    if ((nas.errors || []).length) html += sect("Reported by the NAS", `<ul class="plain">${nas.errors.map(e => `<li>${esc(e)}</li>`).join("")}</ul>`);
+  }
+  const ports = d.ports || [], watch = new Set(x.watch || []);
+  if (ports.length) {
+    const upN = ports.filter(p => p.up).length;
+    html += sect(`Ports (${upN} of ${ports.length} up)`, `<p class="hint" style="margin:0 0 6px">Tick <b>Alert</b> for ports that should always be up, such as uplinks, servers and access points: they go red if they drop. Other ports are just shown.</p>` +
+      tbl(["Port", "Description", "Status", "Errors in / out", "Alert"], ports.map(p => {
+        const st = !p.admin_up ? "Disabled" : p.up ? `Up${p.speed_mbps ? " · " + (p.speed_mbps >= 1000 ? p.speed_mbps / 1000 + " Gb/s" : p.speed_mbps + " Mb/s") : ""}` : "Down";
+        const w = watch.has(p.index), bad = w && p.admin_up && !p.up;
+        return `<tr class="${bad ? "bad" : ""}"><td><b>${esc(p.name)}</b></td><td>${esc(p.alias || "")}</td><td><span class="dot ${!p.admin_up ? "unknown" : p.up ? "green" : w ? "red" : "unknown"}"></span> ${st}</td>
+          <td class="num">${p.in_errors ?? "—"} / ${p.out_errors ?? "—"}</td>
+          <td><input type="checkbox" data-watch="${p.index}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when port ${esc(p.name)} goes down"></td></tr>`;
+      })));
+  }
+  const poe = d.poe;
+  if (poe) {
+    const pct = poe.power_w ? Math.round((poe.used_w || 0) / poe.power_w * 100) : null;
+    html += sect("PoE", `<p style="margin:0 0 6px">Using <b>${poe.used_w ?? "?"} W</b> of ${poe.power_w ?? "?"} W${pct != null ? ` (${pct}%)` : ""}; alerts at ${poe.threshold_pct ?? "?"}%. Power supply ${esc(poe.status || "?")}.</p>` +
+      tbl(["Port", "State", "Class", "Priority", "Overloads / shorts"], (poe.ports || []).map(p =>
+        `<tr class="${p.fault ? "bad" : ""}"><td>${p.index}</td><td>${!p.enabled ? "PoE off" : esc(p.state)}</td><td>${p.class ?? "—"}</td><td>${esc(p.priority || "—")}</td><td class="num">${p.overload} / ${p.short}</td></tr>`)));
+  }
+  html += sect("System", `<div class="kv">
+    <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
+    ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}</div>
+    <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests</div></div>`);
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+document.getElementById("detBody").addEventListener("change", async e => {
+  const c = e.target.closest("input[data-watch]");
+  if (!c || detMode !== "snmp") return;
+  c.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/watch", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({index: +c.dataset.watch, watch: c.checked})});
+  if (!r.ok) alert("That didn't work (" + r.status + ")");
+  await openSnmp(detKey); setTimeout(load, 2500);
+});
+
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
@@ -1649,6 +1750,8 @@ function filterPresets() {
 }
 
 function updatePicked() {
+  const snmpOn = !!form.querySelector('.preset input[value="snmp"]:checked');
+  document.getElementById("snmpBox").hidden = !snmpOn;
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -1743,6 +1846,8 @@ async function openDialog(h) {
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
   setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
   document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
+  const comm = document.getElementById("fSnmpComm");
+  comm.value = ""; comm.placeholder = h && h.snmp_community_set ? "Unchanged (type a new one to replace it)" : "public";
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -1764,6 +1869,8 @@ form.addEventListener("submit", async e => {
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
+  const commIn = document.getElementById("fSnmpComm").value;
+  if (!document.getElementById("snmpBox").hidden && commIn) body.snmp_community = commIn;
   if (body.schedule && !body.schedule.windows.length) { err.textContent = "Add at least one time window, or choose All the time."; return; }
   if (!body.name) { err.textContent = "Name is required."; return fName.focus(); }
   if (!body.host) { err.textContent = "Enter an IP address or hostname."; return fHost.focus(); }
