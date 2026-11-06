@@ -1648,6 +1648,7 @@ class Monitor:
         prev = h.snmp_data
         try:
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
+                                  per=int((prev or {}).get("per") or 25),  # what worked last time
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:
             h.snmp_items = [{"level": "crit", "what": "SNMP", "detail": str(err)}]

@@ -1492,6 +1492,7 @@ function renderSnmp(x) {
     : "Not polled yet";
   let html = "";
   const items = x.items || [];
+  if (d && (d.missing || []).length) html += `<p class="hint" style="margin:0 0 10px">⚠ The device didn't send its ${esc(d.missing.join(", "))} in time on the last poll. Rollcall tries again at each check.</p>`;
   html += sect("Checks", items.length
     ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small></span></div>`).join("")}</div>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
@@ -1528,7 +1529,8 @@ function renderSnmp(x) {
   html += sect("System", `<div class="kv">
     <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
     ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}</div>
-    <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests</div></div>`);
+    <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests${d.per && d.per < 25 ? `, ${d.per} rows at a time` : ""}</div></div>` +
+    (d.timing ? `<p class="hint" style="margin-top:8px">Time per part: ${Object.entries(d.timing).map(([k, v]) => `${esc(k)} ${v} ms`).join(", ")}</p>` : ""));
   body.innerHTML = html;
   body.scrollTop = top;
 }
