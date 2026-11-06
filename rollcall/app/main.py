@@ -2678,6 +2678,38 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         await monitor.start_maintenance(h, minutes)
         return web.json_response({"paused": h.key, "until": h.maint_until})
 
+    async def _bulk_hosts(req) -> tuple[list, dict]:
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(text="expected JSON")
+        keys = body.get("keys") if isinstance(body, dict) else None
+        if not isinstance(keys, list) or not keys or len(keys) > 1000:
+            raise web.HTTPBadRequest(text="keys must be a list of computers")
+        hosts = [monitor.hosts[k] for k in dict.fromkeys(str(k) for k in keys) if str(k) in monitor.hosts]
+        return hosts, body
+
+    async def maintenance_bulk(req):
+        """Pause several computers at once, e.g. everything in a tab."""
+        hosts, body = await _bulk_hosts(req)
+        try:
+            minutes = int(body.get("minutes") if body.get("minutes") is not None else monitor.opts["maintenance_minutes"])
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="minutes must be a whole number")
+        if not 1 <= minutes <= 1440:
+            raise web.HTTPBadRequest(text="minutes must be between 1 and 1440")
+        for h in hosts:
+            await monitor.start_maintenance(h, minutes)
+        log.info("Paused %d computer(s) together for %d min", len(hosts), minutes)
+        return web.json_response({"paused": [h.key for h in hosts]})
+
+    async def resume_bulk(req):
+        hosts, _ = await _bulk_hosts(req)
+        done = [h for h in hosts if h.maint_until]
+        for h in done:
+            await monitor.resume(h)
+        return web.json_response({"resumed": [h.key for h in done]})
+
     async def resume(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -2746,6 +2778,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/check/{key}", check_now)  # harmless, so open to all viewers
     app.router.add_post("/api/reset", editor_only(reset))
     app.router.add_post("/api/reset/{key}", editor_only(reset))
+    app.router.add_post("/api/maintenance-bulk", editor_only(maintenance_bulk))
+    app.router.add_post("/api/resume-bulk", editor_only(resume_bulk))
     app.router.add_post("/api/maintenance/{key}", editor_only(maintenance))
     app.router.add_post("/api/resume/{key}", editor_only(resume))
     app.router.add_get("/api/hosts/{key}/details", host_details)

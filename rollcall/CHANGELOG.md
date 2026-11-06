@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.0 - 2026-11-06
+
+### Added
+- **Pause a whole tab**: in any tab other than All and Overview, **Pause all N in this tab** pauses every computer it shows in one go, with the same time limit and automatic resume as pausing one, e.g. for a site's patch night. With a search typed, it pauses just the computers shown (this also works on All). **Resume N paused** resumes them all early.
+
 ## 1.16.0 - 2026-11-06
 
 ### Added
