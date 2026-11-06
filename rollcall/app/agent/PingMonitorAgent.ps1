@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.10'
+$AgentVersion = '1.0.11'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -922,14 +922,27 @@ function Get-VboJobs($State) {
     if (-not (Get-Service -Name 'Veeam.Archiver.Service' -ErrorAction SilentlyContinue)) { return $null }
     $nowSecs = [int64]([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
     if ($State.vbo -and $State.vbo_checked -and ($nowSecs - [int64]$State.vbo_checked) -lt 1800) {
-        try { return @($State.vbo | ConvertFrom-Json | ForEach-Object { $o = [ordered]@{}; foreach ($p in $_.PSObject.Properties) { $o[$p.Name] = $(if ($p.Value -is [DateTime]) { ConvertTo-UtcString $p.Value } else { $p.Value }) }; $o }) } catch { }
+        # Windows PowerShell 5.1's ConvertFrom-Json returns a JSON array as one object rather
+        # than one item per job, so unwrap it with foreach instead of the pipeline.
+        try {
+            $cached = ConvertFrom-Json $State.vbo
+            return @(foreach ($j in @($cached)) { if ($null -eq $j) { continue }
+                    $o = [ordered]@{}; foreach ($p in $j.PSObject.Properties) { $o[$p.Name] = $(if ($p.Value -is [DateTime]) { ConvertTo-UtcString $p.Value } else { $p.Value }) }; $o })
+        } catch { }
     }
-    Import-Module Veeam.Archiver.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+    try { Import-Module Veeam.Archiver.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null }
+    catch {
+        $mod = Get-ChildItem -Path "$env:ProgramFiles\Veeam" -Filter 'Veeam.Archiver.PowerShell.psd1' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $mod) { throw "Veeam Backup for Microsoft 365's PowerShell module isn't installed or can't be loaded: $($_.Exception.Message)" }
+        Import-Module $mod.FullName -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+    }
     $list = @()
     $sets = @(@{ type = 'Backup'; cmd = 'Get-VBOJob' }, @{ type = 'Backup copy'; cmd = 'Get-VBOCopyJob' })
     foreach ($set in $sets) {
         if (-not (Get-Command $set.cmd -ErrorAction SilentlyContinue)) { continue }
-        foreach ($j in @(& $set.cmd -ErrorAction SilentlyContinue)) {
+        $jobs = @()
+        try { $jobs = @(& $set.cmd -ErrorAction Stop) } catch { Add-CollectorError "veeam m365 ($($set.cmd))" $_; continue }
+        foreach ($j in $jobs) {
             $last = $null; $next = $null
             try { if ($j.LastRun -and ([DateTime]$j.LastRun).Year -gt 2000) { $last = ConvertTo-UtcString $j.LastRun } } catch { }
             try { if ($j.NextRun -and ([DateTime]$j.NextRun).Year -gt 2000) { $next = ConvertTo-UtcString $j.NextRun } } catch { }
@@ -1040,7 +1053,8 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bjobs = @()
         $vbr = Measure-Step 'veeam b&r' { Get-VeeamJobs $State }
         if ($null -ne $vbr) { $bjobs += @($vbr) }
-        $vbo = Measure-Step 'veeam m365' { Get-VboJobs $State }
+        $vbo = $null
+        try { $vbo = Measure-Step 'veeam m365' { Get-VboJobs $State } } catch { Add-CollectorError 'veeam m365' $_ }
         if ($null -ne $vbo) { $bjobs += @($vbo) }
         if ($null -ne $vbr -or $null -ne $vbo) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
     } catch { Add-CollectorError 'veeam' $_ }

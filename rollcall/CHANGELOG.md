@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.15.1 - 2026-11-06
+
+### Fixed
+- Windows agent 1.0.11: Veeam Backup for Microsoft 365 jobs were missing from Backups most of the time on Windows PowerShell 5.1. They were shown for one report, then lost for the next 30 minutes while the agent reused its cached copy.
+- Windows agent: a problem reading Microsoft 365 jobs (module not found, or `Get-VBOJob` failing) now shows as an agent error in Details instead of the jobs silently not appearing, and no longer affects Backup & Replication jobs. If the module isn't found by name, the agent also looks for it under `Program Files\Veeam`.
+
 ## 1.15.0 - 2026-11-06
 
 ### Added
