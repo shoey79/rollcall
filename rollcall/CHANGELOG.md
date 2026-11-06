@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.20.1 - 2026-11-06
+
+### Fixed
+- SNMP: switches that can't answer large requests in time, such as some Netgear smart switches, lost their PoE information and took around 20 seconds to poll. Rollcall now asks for fewer rows at a time when a request goes unanswered, and remembers that for the device's next poll.
+- SNMP Details now says when part of the information didn't arrive, instead of leaving it out silently, and shows how long each part took.
+
 ## 1.20.0 - 2026-11-06
 
 ### Added

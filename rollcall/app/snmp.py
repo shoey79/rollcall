@@ -113,7 +113,9 @@ def _parse(buf: bytes) -> tuple[int, int, list[tuple[str, object]]]:
 # Transport
 # --------------------------------------------------------------------------
 class SnmpError(Exception):
-    pass
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status  # SNMP error-status from the device, None for no reply
 
 
 class _Proto(asyncio.DatagramProtocol):
@@ -139,9 +141,10 @@ class _Proto(asyncio.DatagramProtocol):
 class Session:
     """One device. Use as `async with Session(ip, community) as s:`."""
 
-    def __init__(self, host: str, community: str, timeout: float = 2.0, retries: int = 1, port: int = 161):
+    def __init__(self, host: str, community: str, timeout: float = 2.0, retries: int = 1, port: int = 161, per: int = 25):
         self.host, self.community, self.timeout, self.retries, self.port = host, community, timeout, retries, port
         self.requests = 0
+        self.per = per  # rows asked for at a time; lowered if the device can't keep up
 
     async def __aenter__(self):
         loop = asyncio.get_running_loop()
@@ -167,19 +170,28 @@ class Session:
                 self.proto.waiting.pop(rid, None)
                 raise SnmpError(f"no SNMP reply ({e.strerror or e})") from None
             if err:
-                raise SnmpError(f"device returned SNMP error {err}")
+                raise SnmpError(f"device returned SNMP error {err}", err)
             return binds
         raise SnmpError("no SNMP reply (check SNMP is on and the community name is right)")
 
     async def get(self, oids: list[str]) -> dict[str, object]:
         return {o: v for o, v in await self._ask(0xA0, oids) if v is not END}
 
-    async def walk(self, root: str, limit: int = 3000, timeout: float | None = None, per: int = 25) -> dict[str, object]:
-        """Every value under root, keyed by the OID suffix after root (e.g. '3.1.2')."""
+    async def walk(self, root: str, limit: int = 3000, timeout: float | None = None, per: int | None = None) -> dict[str, object]:
+        """Every value under root, keyed by the OID suffix after root (e.g. '3.1.2').
+        Small switches often can't answer large GETBULK requests in time (or say tooBig):
+        if that happens, ask for fewer rows at a time and carry on."""
         root = root.strip(".")
         out, cur = {}, root
         while len(out) < limit:
-            binds = await self._ask(0xA5, [cur], 0, per, timeout)
+            n = min(per or self.per, self.per)
+            try:
+                binds = await self._ask(0xA5, [cur], 0, n, timeout)
+            except SnmpError as err:
+                if n > 1 and err.status in (None, 1, 5):  # no reply, tooBig, genErr
+                    self.per = max(1, n // 3)
+                    continue
+                raise
             if not binds:
                 break
             done = False
@@ -229,10 +241,25 @@ def _smart(v) -> str:
     return str(v)
 
 
-async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161) -> dict:
+async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
-    async with Session(host, community, timeout, port=port) as s:
+    timing: dict[str, int] = {}
+    missing: list[str] = []
+
+    async def timed(name, coro, optional=True):
+        t = time.monotonic()
+        try:
+            return await coro
+        except SnmpError:
+            if not optional:
+                raise
+            missing.append(name)
+            return {}
+        finally:
+            timing[name] = timing.get(name, 0) + int((time.monotonic() - t) * 1000)
+
+    async with Session(host, community, timeout, port=port, per=per) as s:
         sysv = await s.get([f"{SYS}.1.0", f"{SYS}.2.0", f"{SYS}.3.0", f"{SYS}.5.0", f"{SYS}.6.0"])
         if not sysv:
             raise SnmpError("the device answered but returned no system information")
@@ -248,12 +275,10 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161)
                          ("in_err", "1.3.6.1.2.1.2.2.1.14"), ("out_err", "1.3.6.1.2.1.2.2.1.20"),
                          ("name", "1.3.6.1.2.1.31.1.1.1.1"), ("speed", "1.3.6.1.2.1.31.1.1.1.15"),
                          ("alias", "1.3.6.1.2.1.31.1.1.1.18")):
-            try:
-                cols[col] = await s.walk(oid)
-            except SnmpError:
-                if col in ("descr", "type", "oper"):
-                    raise
-                cols[col] = {}
+            cols[col] = await timed({"descr": "ports", "type": "ports", "oper": "ports", "admin": "port admin state",
+                                     "in_err": "port errors", "out_err": "port errors", "name": "port names",
+                                     "speed": "port speeds", "alias": "port descriptions"}[col], s.walk(oid),
+                                    optional=col not in ("descr", "type", "oper"))
         for idx, typ in cols["type"].items():
             oper = cols["oper"].get(idx)
             if typ not in IF_TYPES_PHYSICAL or oper == 6:  # 6 = notPresent
@@ -266,11 +291,8 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161)
         out["ports"].sort(key=lambda p: p["index"])
 
         # PoE (POWER-ETHERNET-MIB), if the switch has it
-        try:
-            ports = _cols(await s.walk("1.3.6.1.2.1.105.1.1.1"))
-            mains = _cols(await s.walk("1.3.6.1.2.1.105.1.3.1.1"))
-        except SnmpError:
-            ports, mains = {}, {}
+        ports = _cols(await timed("PoE", s.walk("1.3.6.1.2.1.105.1.1.1")))
+        mains = _cols(await timed("PoE", s.walk("1.3.6.1.2.1.105.1.3.1.1")))
         if ports or mains:
             m = next(iter(mains.values()), {})
             out["poe"] = {
@@ -315,6 +337,9 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161)
             s.retries = 1
             out["nas"] = nas
         out["requests"] = s.requests
+        out["per"] = s.per
+        out["timing"] = timing
+        out["missing"] = sorted(set(missing))
     out["took_ms"] = int((time.monotonic() - t0) * 1000)
     return out
 
