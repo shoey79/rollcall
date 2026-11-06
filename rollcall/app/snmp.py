@@ -151,7 +151,7 @@ class Session:
     async def __aexit__(self, *exc):
         self.transport.close()
 
-    async def _ask(self, tag: int, oids: list[str], a: int = 0, b: int = 0):
+    async def _ask(self, tag: int, oids: list[str], a: int = 0, b: int = 0, timeout: float | None = None):
         for attempt in range(self.retries + 1):
             rid = secrets.randbelow(2 ** 31 - 1) + 1
             fut = asyncio.get_running_loop().create_future()
@@ -159,7 +159,7 @@ class Session:
             self.transport.sendto(_request(self.community, tag, rid, oids, a, b))
             self.requests += 1
             try:
-                err, binds = await asyncio.wait_for(fut, self.timeout)
+                err, binds = await asyncio.wait_for(fut, timeout or self.timeout)
             except asyncio.TimeoutError:
                 self.proto.waiting.pop(rid, None)
                 continue
@@ -174,12 +174,12 @@ class Session:
     async def get(self, oids: list[str]) -> dict[str, object]:
         return {o: v for o, v in await self._ask(0xA0, oids) if v is not END}
 
-    async def walk(self, root: str, limit: int = 3000) -> dict[str, object]:
+    async def walk(self, root: str, limit: int = 3000, timeout: float | None = None, per: int = 25) -> dict[str, object]:
         """Every value under root, keyed by the OID suffix after root (e.g. '3.1.2')."""
         root = root.strip(".")
         out, cur = {}, root
         while len(out) < limit:
-            binds = await self._ask(0xA5, [cur], 0, 25)
+            binds = await self._ask(0xA5, [cur], 0, per, timeout)
             if not binds:
                 break
             done = False
@@ -220,7 +220,7 @@ NAS_RAID = {-1: "not supported", 1: "off", 2: "RAID 0", 3: "RAID 1", 4: "RAID 5"
             7: "RAID 50", 8: "RAID 51", 9: "RAID 60", 10: "RAID 61"}
 
 
-async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161) -> dict:
+async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, info_cache: dict | None = None) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     async with Session(host, community, timeout, port=port) as s:
@@ -276,28 +276,41 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161)
 
         # Buffalo TeraStation (BUFFALO-NAS-MIB)
         if out["object_id"].startswith("1.3.6.1.4.1.5227") or "terastation" in out["descr"].lower():
-            nas = {"disks": [], "arrays": [], "errors": [], "info": {}}
+            nas = {"disks": [], "arrays": [], "errors": [], "info": {}, "unavailable": []}
             try:
-                for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.2.1")).items(), key=lambda kv: int(kv[0] or 0)):
+                for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.2.1", timeout=max(timeout, 5))).items(), key=lambda kv: int(kv[0] or 0)):
                     st = r.get("2")
                     nas["disks"].append({"index": int(idx), "status": NAS_DISK.get(st, str(st)), "bad": st in NAS_DISK_BAD,
                                          "spare_missing": st == 7, "smart": str(r.get("5") if r.get("5") is not None else ""),
                                          "model": str(r.get("30") or "").strip(), "capacity_gib": r.get("24")})
-                for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.3.1")).items(), key=lambda kv: int(kv[0] or 0)):
+                for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.3.1", timeout=max(timeout, 5))).items(), key=lambda kv: int(kv[0] or 0)):
                     cap, used = r.get("5"), r.get("8")
                     nas["arrays"].append({"index": int(idx), "raid": NAS_RAID.get(r.get("2"), str(r.get("2"))),
                                           "configured": r.get("2") not in (1, -1, None),
                                           "capacity_gib": cap if isinstance(cap, int) and cap >= 0 else None,
                                           "used_gib": used if isinstance(used, int) and used >= 0 else None})
-                errs = _cols(await s.walk(f"{BUFFALO}.4.1"))
+            except SnmpError as err:
+                nas["error"] = f"couldn't read the disks and arrays: {err}"
+            # The NAS builds these on request, so they can be slow: give them longer, ask for
+            # fewer rows at a time, and don't alert if they don't come back.
+            s.retries = 0
+            try:
+                errs = _cols(await s.walk(f"{BUFFALO}.4.1", timeout=8, per=10))
                 for idx, r in sorted(errs.items()):
                     text = " ".join(str(v) for k, v in sorted(r.items(), key=lambda kv: int(kv[0])) if k != "1" and v not in (None, ""))
                     if text.strip():
                         nas["errors"].append(text.strip()[:200])
-                info = await s.walk(f"{BUFFALO}.10")
-                nas["info"] = {k: str(v) for k, v in list(info.items())[:20]}
-            except SnmpError as err:
-                nas["error"] = str(err)
+            except SnmpError:
+                nas["unavailable"].append("errors")
+            if info_cache is not None:
+                nas["info"] = info_cache
+            else:
+                try:
+                    info = await s.walk(f"{BUFFALO}.10", timeout=8, per=10, limit=40)
+                    nas["info"] = {k: str(v) for k, v in list(info.items())[:20]}
+                except SnmpError:
+                    nas["unavailable"].append("system information")
+            s.retries = 1
             out["nas"] = nas
         out["requests"] = s.requests
     out["took_ms"] = int((time.monotonic() - t0) * 1000)
