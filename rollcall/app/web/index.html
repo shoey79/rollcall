@@ -1125,6 +1125,7 @@ function renderDetails(d) {
         : im.ping && !im.api_error ? `<p class="hint">Add an Immich admin API key when installing (<code>--immich-api-key</code>) to see job queues and library statistics.</p>` : ""));
   }
   if (c.rds) html += sect("Remote Desktop sessions", `<p class="empty-note">${c.rds.active} active, ${c.rds.disconnected} disconnected</p>`);
+  flush("security");  // Defender is protection, not a server role: it sits with its detections
   if (c.defender) html += sect("Microsoft Defender", `<p class="empty-note">Mode: ${esc(c.defender.mode || "?")} · real-time protection ${c.defender.realtime ? "on" : "<b>off</b>"} · definitions ${c.defender.signature_age_days} day(s) old</p>`);
   flush("security");
   const dets = (hist.detections || []).slice().reverse();
@@ -1207,7 +1208,7 @@ function renderDetails(d) {
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
-  hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["roles", "Microsoft Defender"],
+  hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
   security: ["security"], events: ["events"], backups: ["backups"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
