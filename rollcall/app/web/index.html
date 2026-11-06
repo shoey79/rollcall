@@ -276,10 +276,15 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 tr.bad td{background:color-mix(in srgb,var(--red) 8%,transparent)}
 tr.warn td{background:color-mix(in srgb,var(--amber) 8%,transparent)}
 ul.plain{margin:0;padding-left:18px}
+.logbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.logbar input{flex:1 1 220px;min-width:0}
+table.logs td.msg{max-width:none;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+table.logs td:first-child{white-space:nowrap;color:var(--muted)}
+@media (max-width:760px){table.logs td.msg{white-space:normal;min-width:240px}}
 .tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
 .rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
-.rule select,.rule input,.tabfield select{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0}
+.rule select,.rule input,.tabfield select,.logbar select,#syslogBox select{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0}
 .tabfield{display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0 10px;flex-wrap:wrap}
 .preview{font-size:12.5px;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px;line-height:1.5}
 .preview b{color:var(--text)}
@@ -415,6 +420,18 @@ ul.plain{margin:0;padding-left:18px}
         <div class="picked" id="picked"></div>
         <div id="presetGroups"></div>
         <p class="hint" id="noMatch" hidden>No preset matches. You can add it as a custom check below.</p>
+        <div id="syslogBox" hidden class="snmpbox">
+          <div class="fields">
+            <label class="field">Alert on<select id="fSysAlert">
+              <option value="2">Critical and worse</option>
+              <option value="3">Errors and worse</option>
+              <option value="4">Warnings and worse</option>
+              <option value="-1">Only the words below</option></select></label>
+            <label class="field">Always alert on these words<input id="fSysWords" maxlength="600" placeholder="e.g. disconnected, failed, overheat" autocomplete="off"></label>
+            <label class="field">Never alert on these words<input id="fSysIgnore" maxlength="600" placeholder="e.g. NTP, DHCPACK" autocomplete="off"></label>
+          </div>
+          <p class="hint" id="syslogHint">Set the device to send syslog to Home Assistant's IP address, UDP port 514. Critical messages and the words above go red and notify; others you alert on go amber. Comma-separated, not case-sensitive.</p>
+        </div>
         <div id="snmpBox" hidden class="snmpbox">
           <label class="field">SNMP community (v2c, read-only)<input id="fSnmpComm" maxlength="64" autocomplete="off" spellcheck="false" placeholder="public"></label>
           <p class="hint">Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). Choose which switch ports should alert when they go down from the device's <b>Details</b>.</p>
@@ -656,6 +673,7 @@ function render() {
         <button data-key="${esc(h.key)}" ${h.checking ? "disabled" : ""}>Check now</button>
         ${h.agent ? `<button data-details="${esc(h.key)}" title="Disks, services, logs and more from the agent">Details</button>`
           : h.snmp ? `<button data-snmp="${esc(h.key)}" title="Ports, PoE, disks and more over SNMP">Details</button>` : ""}
+        ${h.syslog ? `<button data-logs="${esc(h.key)}" title="Syslog messages from this device">Logs</button>` : ""}
         ${h.maint_until
           ? `<button class="edit-only" data-resume="${esc(h.key)}" title="Resume monitoring and alerts now">Resume</button>`
           : `<button class="edit-only" data-pause="${esc(h.key)}" data-name="${esc(h.name)}" title="Pause alerts, e.g. for a reboot">Pause</button>`}
@@ -711,7 +729,7 @@ function renderHome() {
   html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
-      const target = a.check && a.check.kind === "snmp" ? "Details" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
+      const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
       return `<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
         <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
@@ -727,6 +745,17 @@ function renderHome() {
     const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
     return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span><span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
   }).join("")}</div></div>`;
+  const unk = data.syslog_unknown || [];
+  if (unk.length) {
+    html += `<div class="panel"><h2>Syslog from unknown devices<small>Messages from these addresses aren't kept until you add them</small></h2>` +
+      unk.map(u => {
+        const known = u.host_key && data.hosts.find(x => x.key === u.host_key);
+        return `<div class="alert" style="cursor:default"><span class="dot unknown"></span>
+        <span class="what"><b>${esc(known ? known.name : u.name || u.ip)}</b> <span class="chk">· ${esc(u.ip)} · ${u.count} message${u.count === 1 ? "" : "s"}</span><small>${esc((u.app ? u.app + ": " : "") + (u.msg || ""))}</small></span>
+        <span class="when">${ago(u.last, now).replace(" ago", "")}</span>
+        <span class="actions edit-only">${known ? `<button type="button" data-sysedit="${esc(known.key)}">Tick Syslog</button>` : `<button type="button" data-sysadd="${esc(u.ip)}" data-sysname="${esc(u.name || "")}">Add</button>`}<button type="button" data-sysforget="${esc(u.ip)}" title="Hide until it sends again">✕</button></span></div>`;
+      }).join("") + `</div>`;
+  }
   el.innerHTML = html;
   homeAlerts = list;
 }
@@ -761,15 +790,31 @@ function showInList(key) {
   const row = [...document.querySelectorAll("#rows tr")].find(tr => tr.querySelector(`[data-key="${CSS.escape(key)}"]`));
   if (row) { row.scrollIntoView({block: "center", behavior: "smooth"}); row.classList.add("flashrow"); setTimeout(() => row.classList.remove("flashrow"), 1700); }
 }
-document.getElementById("home").addEventListener("click", e => {
+document.getElementById("home").addEventListener("click", async e => {
   const t = e.target.closest("[data-hometab]");
   if (t) { tabId = t.dataset.hometab; document.getElementById("filter").value = ""; return render(); }
   if (e.target.closest("[data-homeadd]")) return openDialog(null);
+  const sa = e.target.closest("[data-sysadd]");
+  if (sa) {
+    await openDialog(null);
+    fHost.value = sa.dataset.sysadd; fName.value = sa.dataset.sysname || "";
+    const cb = form.querySelector('.preset input[value="syslog"]'); if (cb) cb.checked = true;
+    updatePicked(); return fName.focus();
+  }
+  const se = e.target.closest("[data-sysedit]");
+  if (se) {
+    await openDialog(data.hosts.find(x => x.key === se.dataset.sysedit));
+    const cb = form.querySelector('.preset input[value="syslog"]'); if (cb) cb.checked = true;
+    return updatePicked();
+  }
+  const sf = e.target.closest("[data-sysforget]");
+  if (sf) { await fetch("api/syslog/forget", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ip: sf.dataset.sysforget})}); return load(); }
   const a = e.target.closest("[data-alert]");
   if (a) {
     const x = homeAlerts[+a.dataset.alert]; if (!x) return;
     if (x.check && x.check.agent && x.h.agent) return openDetails(x.h.key, JUMP[checkKey(x.check)] || ["overview"]);
     if (x.check && x.check.kind === "snmp") return openSnmp(x.h.key);
+    if (x.check && x.check.kind === "syslog") return openLogs(x.h.key);
     return showInList(x.h.key);
   }
   const g = e.target.closest("[data-glance]");
@@ -1107,6 +1152,8 @@ document.getElementById("rows").addEventListener("click", async e => {
   if (db) return openDetails(db.dataset.details);
   const sn = e.target.closest("[data-snmp]");
   if (sn) return openSnmp(sn.dataset.snmp);
+  const lg = e.target.closest("[data-logs]");
+  if (lg) return openLogs(lg.dataset.logs);
   const eb = e.target.closest("button[data-edit]");
   if (eb) return openDialog(data.hosts.find(h => h.key === eb.dataset.edit));
   const pb = e.target.closest("button[data-pause]");
@@ -1168,7 +1215,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "snmp" ? openSnmp(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -1495,6 +1542,72 @@ document.getElementById("detBody").addEventListener("change", async e => {
   await openSnmp(detKey); setTimeout(load, 2500);
 });
 
+// ---- Syslog viewer ----
+const SEV = ["Emergency", "Alert", "Critical", "Error", "Warning", "Notice", "Info", "Debug"];
+const SEV_DOT = s => s <= 2 ? "red" : s === 3 ? "degraded" : s === 4 ? "amber" : "unknown";
+let logQ = "", logSev = 7, logTimer = null;
+async function openLogs(key) {
+  if (detMode !== "syslog" || key !== detKey) {
+    logQ = ""; logSev = 7;
+    const h = data && data.hosts.find(x => x.key === key);
+    document.getElementById("detTitle").textContent = h ? h.name : "Logs";
+    document.getElementById("detSub").textContent = "Loading…";
+    document.getElementById("detTabs").hidden = true;
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  }
+  detMode = "syslog"; detKey = key;
+  if (!detDlg.open) detDlg.showModal();
+  try {
+    const r = await fetch(`api/hosts/${encodeURIComponent(key)}/syslog?sev=${logSev}&q=${encodeURIComponent(logQ)}&limit=500`, {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    renderLogs(await r.json());
+  } catch (e) {
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load the logs.</p>`;
+  }
+}
+function renderLogs(x) {
+  const body = document.getElementById("detBody"), canEdit = data && data.can_edit === true;
+  const hadFocus = document.activeElement && document.activeElement.id === "logQ";
+  document.getElementById("detTitle").textContent = x.name + " · Logs";
+  document.getElementById("detSub").textContent = `${x.count_24h} message${x.count_24h === 1 ? "" : "s"} in the last 24 hours` +
+    (x.last ? ` · last ${ago(x.last, x.now)}` : "") + ` · from ${x.ip || x.host}`;
+  const alerting = x.rows.filter(r => r.alert).length;
+  const alertText = x.alert < 0 ? "only the words you set" : SEV[x.alert].toLowerCase() + (x.alert < 7 ? " and worse" : "");
+  let html = `<div class="logbar">
+      <input type="search" id="logQ" placeholder="Search messages" value="${esc(logQ)}" autocomplete="off" spellcheck="false">
+      <select id="logSev" aria-label="Severity">${SEV.map((n, i) => `<option value="${i}" ${i === logSev ? "selected" : ""}>${i === 7 ? "All severities" : n + " and worse"}</option>`).join("")}</select>
+      ${alerting && canEdit ? `<button type="button" id="logAck" class="primary">Acknowledge ${alerting} alert${alerting === 1 ? "" : "s"}</button>` : ""}
+    </div>
+    <p class="hint" style="margin:6px 0 10px">Alerts on ${esc(alertText)}${x.keywords.length ? `, and always on <b>${x.keywords.map(esc).join("</b>, <b>")}</b>` : ""}${x.ignore.length ? `; never on <b>${x.ignore.map(esc).join("</b>, <b>")}</b>` : ""}. Change this with Edit. Messages are kept for the add-on's history days.</p>`;
+  if (!x.rows.length) {
+    html += `<p class="empty-note">${logQ || logSev < 7 ? "No messages match." :
+      `No messages yet. Set the device to send syslog to Home Assistant's IP address, UDP port <b>${x.port || 514}</b>.`}</p>`;
+  } else {
+    html += `<table class="small logs"><thead><tr><th>Time</th><th>Severity</th><th>From</th><th>Message</th></tr></thead><tbody>` +
+      x.rows.map(r => `<tr class="${r.alert ? "hl" : r.acked ? "acked" : ""}"><td title="${esc(new Date(r.ts * 1000).toLocaleString())}">${esc(new Date(r.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit"}))}</td>
+        <td><span class="dot ${SEV_DOT(r.sev)}"></span> ${SEV[r.sev]}</td><td>${esc(r.app || "—")}</td><td class="msg">${esc(r.msg)}</td></tr>`).join("") + `</tbody></table>` +
+      (x.rows.length >= 500 ? `<p class="hint">Showing the newest 500. Search or filter to find older messages.</p>` : "");
+  }
+  body.innerHTML = html;
+  const q = document.getElementById("logQ");
+  if (hadFocus) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+document.getElementById("detBody").addEventListener("input", e => {
+  if (e.target.id !== "logQ") return;
+  logQ = e.target.value.trim();
+  clearTimeout(logTimer); logTimer = setTimeout(() => openLogs(detKey), 300);
+});
+document.getElementById("detBody").addEventListener("change", e => {
+  if (e.target.id === "logSev") { logSev = +e.target.value; openLogs(detKey); }
+});
+document.getElementById("detBody").addEventListener("click", async e => {
+  if (e.target.id !== "logAck") return;
+  e.target.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/syslog/ack", {method: "POST"});
+  if (!r.ok) alert("That didn't work (" + r.status + ")");
+  await openLogs(detKey); setTimeout(load, 2000);
+});
+
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
@@ -1754,6 +1867,7 @@ function filterPresets() {
 function updatePicked() {
   const snmpOn = !!form.querySelector('.preset input[value="snmp"]:checked');
   document.getElementById("snmpBox").hidden = !snmpOn;
+  document.getElementById("syslogBox").hidden = !form.querySelector('.preset input[value="syslog"]:checked');
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -1848,6 +1962,10 @@ async function openDialog(h) {
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
   setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
   document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
+  document.getElementById("fSysAlert").value = String(h && h.syslog_alert != null ? h.syslog_alert : 3);
+  document.getElementById("fSysWords").value = h && h.syslog_keywords ? h.syslog_keywords.join(", ") : "";
+  document.getElementById("fSysIgnore").value = h && h.syslog_ignore ? h.syslog_ignore.join(", ") : "";
+  document.getElementById("syslogHint").innerHTML = `Set the device to send syslog to Home Assistant's IP address, UDP port <b>${data && data.syslog_port ? data.syslog_port : 514}</b>. Critical messages and the words above go red and notify; others you alert on go amber. Comma-separated, not case-sensitive.`;
   const comm = document.getElementById("fSnmpComm");
   comm.value = ""; comm.placeholder = h && h.snmp_community_set ? "Unchanged (type a new one to replace it)" : "public";
   document.getElementById("presetFilter").value = "";
@@ -1873,6 +1991,11 @@ form.addEventListener("submit", async e => {
     no_alerts: document.getElementById("fNoAlerts").checked};
   const commIn = document.getElementById("fSnmpComm").value;
   if (!document.getElementById("snmpBox").hidden && commIn) body.snmp_community = commIn;
+  if (!document.getElementById("syslogBox").hidden) {
+    body.syslog_alert = +document.getElementById("fSysAlert").value;
+    body.syslog_keywords = document.getElementById("fSysWords").value;
+    body.syslog_ignore = document.getElementById("fSysIgnore").value;
+  }
   if (body.schedule && !body.schedule.windows.length) { err.textContent = "Add at least one time window, or choose All the time."; return; }
   if (!body.name) { err.textContent = "Name is required."; return fName.focus(); }
   if (!body.host) { err.textContent = "Enter an IP address or hostname."; return fHost.focus(); }

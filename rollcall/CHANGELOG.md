@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.20.0 - 2026-11-06
+
+### Added
+- **Syslog**: the add-on now receives syslog on UDP port 514 (mapped under Configuration → Network). Tick **Syslog** on a device and point the device's syslog at Home Assistant. **Logs** shows its messages with search and a severity filter, kept for `history_days`.
+  - Alerts follow the device's setting (critical, errors or warnings and worse, or only chosen words), plus **Always alert** and **Never alert** words. Critical messages and the chosen words go red and notify; the rest go amber.
+  - Alerts clear after 24 hours or when you **Acknowledge** them.
+  - Messages from devices that aren't set up are listed on the Overview, with a button to add the device.
+  - Messages are limited to 100 a second per device.
+
 ## 1.19.3 - 2026-11-06
 
 ### Changed
