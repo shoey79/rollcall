@@ -59,6 +59,11 @@ button:disabled{opacity:.5;cursor:default}
 button.danger{color:var(--red)}
 button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
 #resetAll{margin-left:auto;font-size:13px;padding:7px 12px}
+#pauseTab,#resumeTab{font-size:13px;padding:7px 12px}
+body.home-on #pauseTab,body.home-on #resumeTab{display:none!important}
+#pauseTab:not([hidden])~#resetAll,#resumeTab:not([hidden])~#resetAll{margin-left:0}
+#pauseTab:not([hidden]){margin-left:auto}
+#pauseTab[hidden]+#resumeTab:not([hidden]){margin-left:auto}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 button.primary:hover{background:color-mix(in srgb,var(--accent) 85%,#000)}
 #addHost{font-size:13px;padding:7px 14px}
@@ -296,6 +301,8 @@ tr.flashrow td{animation:flash 1.6s ease-out}
     <input type="search" id="filter" placeholder="Filter by name, IP or service">
     <select id="sortMobile" aria-label="Sort by"></select>
     <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
+    <button id="pauseTab" class="edit-only" hidden title="Pause alerts for every computer shown in this tab"></button>
+    <button id="resumeTab" class="edit-only" hidden title="Resume monitoring for every paused computer in this tab"></button>
     <button id="resetAll" class="danger edit-only" title="Clear uptime history for every host">Reset all uptime</button>
     <button id="backupBtn" class="edit-only" title="Export everything to move it to another install, or import an export">Export / import</button>
     <button id="agentsBtn" class="edit-only" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
@@ -595,6 +602,14 @@ function render() {
     .filter(h => tabMatch(h, tab))
     .filter(h => !q || [h.name, h.host, h.ip || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
     .sort(compare);
+  shownHosts = hosts;
+  const pauseBtn = document.getElementById("pauseTab"), resumeBtn = document.getElementById("resumeTab");
+  const paused = hosts.filter(h => h.maint_until);
+  const where = q ? "shown" : (tab.id === "all" ? "" : "in this tab");
+  pauseBtn.hidden = !hosts.length || (tab.id === "all" && !q);
+  pauseBtn.textContent = `Pause all ${hosts.length}${where ? " " + where : ""}`;
+  resumeBtn.hidden = paused.length < 2 && !(paused.length && !pauseBtn.hidden);
+  resumeBtn.textContent = `Resume ${paused.length} paused`;
   renderHead();
 
   document.getElementById("empty").hidden = data.hosts.length > 0;
@@ -690,7 +705,31 @@ function renderHome() {
   el.innerHTML = html;
   homeAlerts = list;
 }
-let homeAlerts = [];
+let homeAlerts = [], shownHosts = [];
+document.getElementById("pauseTab").addEventListener("click", async e => {
+  const list = shownHosts.slice(); if (!list.length) return;
+  const tab = currentTab(), name = document.getElementById("filter").value.trim() ? "the computers shown" : `everything in "${tab.name}"`;
+  const names = list.slice(0, 8).map(h => h.name).join(", ") + (list.length > 8 ? ` and ${list.length - 8} more` : "");
+  const ans = prompt(`Pause alerts for ${name} (${list.length}: ${names})?\n\nEach keeps being pinged and resumes by itself once it goes down and replies again. ` +
+    `Any that aren't back by the time limit will alert.\n\nTime limit (minutes):`, data.maintenance_minutes);
+  if (ans === null) return;
+  const minutes = parseInt(ans, 10);
+  if (!(minutes >= 1 && minutes <= 1440)) return alert("Enter a number of minutes between 1 and 1440.");
+  e.target.disabled = true;
+  try {
+    const r = await fetch("api/maintenance-bulk", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({keys: list.map(h => h.key), minutes})});
+    if (!r.ok) alert("Pause failed (" + r.status + ")");
+  } finally { e.target.disabled = false; load(); }
+});
+document.getElementById("resumeTab").addEventListener("click", async e => {
+  const list = shownHosts.filter(h => h.maint_until); if (!list.length) return;
+  if (!confirm(`Resume monitoring and alerts for ${list.length} paused computer${list.length === 1 ? "" : "s"} now?`)) return;
+  e.target.disabled = true;
+  try {
+    const r = await fetch("api/resume-bulk", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({keys: list.map(h => h.key)})});
+    if (!r.ok) alert("Resume failed (" + r.status + ")");
+  } finally { e.target.disabled = false; setTimeout(load, 1500); setTimeout(load, 6000); load(); }
+});
 function showInList(key) {
   const h = data.hosts.find(x => x.key === key); if (!h) return;
   tabId = "all"; document.getElementById("filter").value = h.name; render();

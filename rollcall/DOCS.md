@@ -46,7 +46,9 @@ The dashboard has tabs to split a long list. Each tab is a saved filter, so it u
 | Service check | includes, doesn't include | `SQL`, `HTTPS`, `32400` |
 | Uptime (24 h) | is below / above % | below `99` |
 
-**Start from** has ready-made starting points (name, IP range, Windows, Linux, domain controllers, web servers, low uptime). The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones, and they're saved in the add-on's data folder (`views.json`). Each browser remembers which tab it was on. The search box filters within the open tab.
+**Start from** has ready-made starting points (name, IP range, Windows, Linux, domain controllers, web servers, low uptime). The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones, and they're saved in the add-on's data folder (`views.json`). The search box filters within the open tab.
+
+**Pause all in this tab** pauses every computer in the open tab at once, e.g. for a site's patch night. Each one works like pausing it on its own: it keeps being pinged, resumes by itself once it has gone down and come back, and alerts if it isn't back within the time limit. If something is typed in the search box, only the computers shown are paused, which also works on the All tab. **Resume N paused** ends the pause early for all of them.
 
 ## Adding and editing computers
 
