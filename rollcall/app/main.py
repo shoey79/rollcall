@@ -1682,7 +1682,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -1797,6 +1797,44 @@ class Monitor:
         hist = [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= cutoff]
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
+
+    async def _backup_alerts(self, h: Host, report: dict) -> None:
+        """One notification per failed Veeam job run, and one when a job becomes overdue."""
+        jobs = ((report.get("checks") or {}).get("backups") or {}).get("jobs") or []
+        if not jobs:
+            return
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        seen = hs.setdefault("backup_notified", [])
+        ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(hs.get("ignore") or [])
+                              + list(self.agent_settings.get("global_ignore") or []))
+        now, changed = time.time(), False
+        for j in jobs:
+            if ign.has("backup", j.get("name")):
+                continue
+            level, why = agentlib.backup_job_state(j, now)
+            if level == agentlib.OK or (level == agentlib.WARN and "no successful run" not in why and "missed" not in why):
+                continue
+            # A failure is new per run; being overdue is new per last success.
+            token = f"{j.get('id')}|{j.get('session') or j.get('finished')}" if level == agentlib.CRIT else f"{j.get('id')}|overdue|{j.get('last_success') or j.get('finished')}"
+            if token in seen:
+                continue
+            seen.append(token)
+            del seen[:-100]
+            changed = True
+            if h.maint_until or h.off_schedule:
+                continue
+            kind = "Microsoft 365 " if j.get("source") == "Microsoft 365" else ""
+            job = f"Veeam {kind}{(j.get('type') or 'backup').lower()} job '{j.get('name')}'"
+            if level == agentlib.CRIT:
+                title, msg = f"🔴 {h.name}: backup failed", f"{job} failed" + (f": {str(j.get('detail')).rstrip('.')}" if j.get("detail") else "") + "."
+            elif "missed" in why:
+                title, msg = f"🟠 {h.name}: backup missed", f"{job} missed its scheduled run."
+            else:
+                title, msg = f"🟠 {h.name}: backup overdue", f"{job} hasn't completed successfully for {why.split('for ')[-1]}."
+            await self.notify(title, msg,
+                              f"ping_monitor_{h.key}__backup_{slugify(str(j.get('name')))}")
+        if changed:
+            self._save_agent_settings()
 
     async def _immich_release(self, h: Host, report: dict) -> None:
         """One notification per new Immich release (the check stays amber until updated)."""
@@ -1965,6 +2003,7 @@ class Monitor:
         if not restoring and not reeval:
             await self._alert_notables(h, notable)
             await self._immich_release(h, report)
+            await self._backup_alerts(h, report)
         await self._recompute(h, quiet=restoring)
         if not restoring:
             await self.publish(h)
@@ -1988,6 +2027,8 @@ class Monitor:
         })
         if h.maint_until or h.off_schedule:
             return
+        if s.key == "agent_backups":
+            return  # each failed job gets its own notification (_backup_alerts)
         tag = f"ping_monitor_{svc_key(h, s)}"
         if new == RED:
             if s.key == "agent_agent" and h.status == RED:
@@ -2118,6 +2159,11 @@ class Monitor:
 
     def details(self, h: Host, include_security: bool) -> dict:
         r = dict(h.agent_report or {})
+        bk = (r.get("checks") or {}).get("backups")
+        if bk:  # each job's state as the check sees it, for the Backups tab
+            now = time.time()
+            r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
+                {**j, "_level": lv, "_why": why} for j in bk.get("jobs") or [] for lv, why in [agentlib.backup_job_state(j, now)]]}}
         if not include_security:
             r.pop("security", None)
         hist = {k: [{**{kk: vv for kk, vv in i.items() if kk != "_rx"}, "received": i.get("_rx")} for i in v[-100:]]
