@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.14.1 - 2026-11-06
+
+### Changed
+- Microsoft Defender's status moved from the Roles tab to the Security tab in Details, alongside Defender detections, failed logons and security events. The Defender check card on the Overview now jumps there.
+
 ## 1.14.0 - 2026-11-06
 
 ### Added
