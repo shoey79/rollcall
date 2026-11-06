@@ -164,6 +164,8 @@ table.small tr.dim td{opacity:.55}
 .diskset label{display:inline-flex;align-items:center;gap:4px}
 .diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 .old{color:var(--amber)}
+.okc{color:var(--green)}
+.failtxt{color:var(--red)}
 .dtabs{display:flex;gap:2px;flex-wrap:wrap;flex:none;background:var(--card);box-shadow:inset 0 -1px 0 var(--line);padding:8px 20px 0}
 .dtabs[hidden]{display:none}
 /* Details keeps one size, so switching tabs doesn't make the window jump about. */
@@ -975,7 +977,7 @@ function renderDetails(d) {
   const diskKey = v => { const t = String(v || "").trim();
     return t.startsWith("/") ? (t.replace(/\/+$/, "") || "/") : t.replace(/[\\\/]+$/, "").replace(/:$/, "").toUpperCase() + ":"; };
   const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
-  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update"];
+  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup"];
     const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
   const findIgnore = (kind, v) => {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
@@ -1150,9 +1152,25 @@ function renderDetails(d) {
     html += sect("Security events", `<p class="empty-note">Only Home Assistant admins can see security events.</p>`);
   }
 
+  flush("backups");
+  if (c.backups) {
+    const now = Date.now() / 1000;
+    const jobs = (c.backups.jobs || []).slice().sort((a, b) => (a.source || "").localeCompare(b.source || "") || collator.compare(a.name, b.name));
+    const res = x => { const r = (x.result || "").toLowerCase();
+      return r === "success" ? `<span class="okc">Success</span>` : r === "failed" ? `<b class="failtxt">Failed</b>` : r === "warning" ? `<b class="old">Warning</b>` : esc(x.result || "—"); };
+    const ago2 = iso => iso ? `${when(iso)}<br><small class="muted">${ago(Date.parse(iso) / 1000, now)}</small>` : "—";
+    html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map(x => {
+      const bad = x._level ? x._level !== "ok" : /failed|warning|stopped|disconnected/i.test(x.result || "");
+      return `<tr class="${rowCls(bad, "backup", x.name)}"><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.source === "Microsoft 365" ? "Microsoft 365 · " : "")}${esc(x.type || "")}${x.source === "Microsoft 365" && x.enabled === false ? " · disabled" : ""}</small></td>
+        <td>${res(x)}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}</td>
+        <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
+        <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
+        <td>${ignBtn("backup", x.name, "job " + x.name)}</td></tr>`;
+    })) : `<p class="empty-note">Veeam is installed but no job has finished in the last 30 days.</p>`);
+  }
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
-  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for"};
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job"};
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
@@ -1174,7 +1192,7 @@ function renderDetails(d) {
   if ((r.errors || []).length) html += sect("Agent warnings", `<ul class="steps">${r.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`);
   flush(null);
   // Tabs, with a badge for checks needing attention that belong to each.
-  const names = {overview: "Overview", storage: "Storage", services: "Services", roles: linux ? "Apps" : "Roles", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
+  const names = {overview: "Overview", storage: "Storage", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
   const order = Object.keys(names).filter(k => T[k]);
@@ -1190,7 +1208,7 @@ function renderDetails(d) {
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["roles", "Microsoft Defender"],
-  security: ["security"], events: ["events"]};
+  security: ["security"], events: ["events"], backups: ["backups"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

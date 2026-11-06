@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.14.0 - 2026-11-06
+
+### Added
+- **Veeam backups** (Windows agent 1.0.9). A **Backups** check and Details tab for Veeam Backup & Replication (every job's result from the Veeam Backup event log) and Veeam Backup for Microsoft 365 (job status from its PowerShell module, every 30 minutes). A failed job is red with one notification per failed run; warnings and retried failures are amber; a job that hasn't succeeded for well over its usual interval is amber with one "backup overdue" notification; a Microsoft 365 job past its scheduled run is amber. Jobs can be ignored individually.
+
+### Fixed
+- Windows agent: dates kept in its state file could be read back in the wrong format under PowerShell 7 (AMD RAID "since" times).
+
 ## 1.13.0 - 2026-11-05
 
 ### Added

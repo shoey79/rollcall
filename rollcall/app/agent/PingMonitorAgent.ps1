@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.8'
+$AgentVersion = '1.0.9'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -121,7 +121,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -132,6 +132,10 @@ function Read-State {
             }
             if ($raw.watch) { $state.watch = @($raw.watch) }
             if ($raw.amd_raid) { $state.amd_raid = [string]$raw.amd_raid }
+            if ($raw.veeam) { $state.veeam = [string]$raw.veeam }
+            if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
+            if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
+            if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
             if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
@@ -250,7 +254,8 @@ $RoleDefinitions = @(
     @{ Role = 'SQL Server'; Pattern = '^(MSSQLSERVER|MSSQL\$.+|SQLSERVERAGENT|SQLAgent\$.+|SQLBrowser|ReportServer.*|SQLServerReportingServices|MSSQLServerOLAPService|MSOLAP\$.+)$' },
     @{ Role = 'Exchange'; Pattern = '^MSExchange(IS|Transport|FrontEndTransport|ServiceHost|ADTopology|RPC|MailboxAssistants|Submission|Delivery|Repl|DagMgmt|EdgeSync|UM|MailboxReplication|HM|Throttling)$' },
     @{ Role = 'SharePoint'; Pattern = '^(SPTimerV4|SPAdminV4|SPSearchHostController|OSearch\d+|SPTraceV4)$' },
-    @{ Role = 'Veeam Backup'; Pattern = '^Veeam(BackupSvc|BrokerSvc|CatalogSvc|DeploySvc|MountSvc|TransportSvc|BackupRESTSvc)$' }
+    @{ Role = 'Veeam Backup'; Pattern = '^Veeam(BackupSvc|BrokerSvc|CatalogSvc|DeploySvc|MountSvc|TransportSvc|BackupRESTSvc)$' },
+    @{ Role = 'Veeam Backup for Microsoft 365'; Pattern = '^Veeam\.Archiver\.(Service|Proxy|REST)$' }
 )
 
 function Get-Discovery($AllServices, [string[]]$ExtraWatch, [bool]$Workstation = $false) {
@@ -714,7 +719,7 @@ function Get-AmdRaidHealth($State) {
     if (-not (Test-Path $src) -and -not $State.amd_raid) { return $null }
     $drives = @{}
     if ($State.amd_raid) {
-        try { foreach ($p in ($State.amd_raid | ConvertFrom-Json).PSObject.Properties) { $drives[$p.Name] = @{ state = [string]$p.Value.state; detail = [string]$p.Value.detail; time = [string]$p.Value.time } } } catch { }
+        try { foreach ($p in ($State.amd_raid | ConvertFrom-Json).PSObject.Properties) { $drives[$p.Name] = @{ state = [string]$p.Value.state; detail = [string]$p.Value.detail; time = (ConvertTo-IsoText $p.Value.time) } } } catch { }
     }
     $since = (Get-Date).AddDays(-90)
     $events = @()
@@ -850,6 +855,93 @@ function Get-DellOmsaHealth {
     return $res
 }
 
+function ConvertTo-IsoText($Value) {
+    # PowerShell 7's ConvertFrom-Json turns ISO date strings into DateTimes; keep them as text.
+    if ($Value -is [DateTime]) { return ConvertTo-UtcString $Value }
+    return [string]$Value
+}
+
+function Get-VeeamJobs($State) {
+    # Veeam Backup & Replication: every job writes a "... job '<name>' finished with
+    # <result>" event to the Veeam Backup log (190 backup and replication, 490 backup
+    # copy, 790 agent backup...). Each job's latest result and recent run times are kept
+    # in the state file, so a job that stops running at all can be spotted too.
+    $jobs = @{}
+    if ($State.veeam) {
+        try {
+            foreach ($p in ($State.veeam | ConvertFrom-Json).PSObject.Properties) {
+                $v = $p.Value
+                $jobs[$p.Name] = @{ name = [string]$v.name; type = [string]$v.type; result = [string]$v.result; finished = (ConvertTo-IsoText $v.finished)
+                    retry = [bool]$v.retry; detail = [string]$v.detail; last_success = (ConvertTo-IsoText $v.last_success); session = [string]$v.session
+                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }) }
+            }
+        } catch { }
+    }
+    $hasLog = $false
+    try { $hasLog = [bool](Get-WinEvent -ListLog 'Veeam Backup' -ErrorAction Stop) } catch { }
+    if (-not $hasLog -and -not $jobs.Count) { return $null }
+    if ($hasLog) {
+        $xp = if ($State.veeam_cursor) { "*[System[EventRecordID>$([int64]$State.veeam_cursor)]]" }
+              else { "*[System[TimeCreated[timediff(@SystemTime) <= $(30 * 86400000)]]]" }
+        $events = @()
+        try { $events = @(Get-WinEvent -LogName 'Veeam Backup' -FilterXPath $xp -MaxEvents 5000 -ErrorAction Stop | Sort-Object RecordId) }
+        catch { if (-not ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -like 'No events were found*')) { throw } }
+        foreach ($e in $events) {
+            if ($e.RecordId -gt [int64]$State.veeam_cursor) { $State.veeam_cursor = [int64]$e.RecordId }
+            $vals = @()
+            try { $vals = @(([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_) { [string]$_.'#text' } else { '' } }) } catch { continue }
+            if ($vals.Count -lt 3) { continue }
+            $desc = [string]$vals[$vals.Count - 1]
+            if ($desc -notmatch "^(?<type>.+?) job '(?<name>.+)' finished with (?<res>\w+)\.?\s*(?<detail>.*)$") { continue }
+            $jname = $Matches['name']; $jtype = $Matches['type']; $jdetail = $Matches['detail']; $jres = $Matches['res']
+            if ($vals.Count -gt 6 -and [string]$vals[6]) { $jname = [string]$vals[6] }  # the job's own spelling
+            $res = switch ([string]$vals[2]) { '0' { 'Success' } '1' { 'Warning' } '2' { 'Failed' } default { $jres } }
+            $id = if ([string]$vals[1] -match '^[0-9a-fA-F-]{36}$') { [string]$vals[1] } else { $jname }
+            $when = ConvertTo-UtcString $e.TimeCreated
+            $j = if ($jobs.ContainsKey($id)) { $jobs[$id] } else { @{ runs = @(); last_success = '' } }
+            $j.name = $jname; $j.type = $jtype; $j.result = $res; $j.finished = $when
+            $j.detail = Limit-Text $jdetail 200; $j.session = [string]$vals[0]
+            $j.retry = ($res -eq 'Failed' -and $vals.Count -gt 5 -and [string]$vals[5] -eq 'True')
+            if ($res -ne 'Failed') { $j.last_success = $when }
+            if (@($j.runs) -notcontains $when) { $j.runs = @(@($j.runs) + $when | Select-Object -Last 12) }
+            $jobs[$id] = $j
+        }
+    }
+    # Forget jobs with no run for 60 days (deleted, or retired).
+    $cutoff = (Get-Date).ToUniversalTime().AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
+    foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
+    $State.veeam = ($jobs | ConvertTo-Json -Depth 4 -Compress)
+    return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
+        [ordered]@{ source = 'Backup & Replication'; id = $k; name = $j.name; type = $j.type; result = $j.result; finished = $j.finished
+            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.session; runs = @($j.runs) } })
+}
+
+function Get-VboJobs($State) {
+    # Veeam Backup for Microsoft 365, through its PowerShell module. Loading the module
+    # is slow, so this runs every 30 minutes and the last answer is reused in between.
+    if (-not (Get-Service -Name 'Veeam.Archiver.Service' -ErrorAction SilentlyContinue)) { return $null }
+    $nowSecs = [int64]([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
+    if ($State.vbo -and $State.vbo_checked -and ($nowSecs - [int64]$State.vbo_checked) -lt 1800) {
+        try { return @($State.vbo | ConvertFrom-Json | ForEach-Object { $o = [ordered]@{}; foreach ($p in $_.PSObject.Properties) { $o[$p.Name] = $(if ($p.Value -is [DateTime]) { ConvertTo-UtcString $p.Value } else { $p.Value }) }; $o }) } catch { }
+    }
+    Import-Module Veeam.Archiver.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+    $list = @()
+    $sets = @(@{ type = 'Backup'; cmd = 'Get-VBOJob' }, @{ type = 'Backup copy'; cmd = 'Get-VBOCopyJob' })
+    foreach ($set in $sets) {
+        if (-not (Get-Command $set.cmd -ErrorAction SilentlyContinue)) { continue }
+        foreach ($j in @(& $set.cmd -ErrorAction SilentlyContinue)) {
+            $last = $null; $next = $null
+            try { if ($j.LastRun -and ([DateTime]$j.LastRun).Year -gt 2000) { $last = ConvertTo-UtcString $j.LastRun } } catch { }
+            try { if ($j.NextRun -and ([DateTime]$j.NextRun).Year -gt 2000) { $next = ConvertTo-UtcString $j.NextRun } } catch { }
+            $list += [ordered]@{ source = 'Microsoft 365'; id = "vbo:$($j.Name)"; name = [string]$j.Name; type = $set.type; result = [string]$j.LastStatus
+                finished = $last; next_run = $next; enabled = [bool]$j.IsEnabled; retry = $false; detail = ''; runs = @() }
+        }
+    }
+    $State.vbo = (ConvertTo-Json -InputObject @($list) -Depth 3 -Compress)
+    $State.vbo_checked = $nowSecs
+    return $list
+}
+
 function Get-StorageHealth($State) {
     # Physical disks and Storage Spaces (Windows 8 / Server 2012 and later), software RAID on
     # dynamic disks (mirrors, RAID-5) from diskpart, and SMART status from the disk drives.
@@ -944,6 +1036,14 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
     $report.checks = Get-RoleChecks $discovery.roles $since $State
+    try {
+        $bjobs = @()
+        $vbr = Measure-Step 'veeam b&r' { Get-VeeamJobs $State }
+        if ($null -ne $vbr) { $bjobs += @($vbr) }
+        $vbo = Measure-Step 'veeam m365' { Get-VboJobs $State }
+        if ($null -ne $vbo) { $bjobs += @($vbo) }
+        if ($null -ne $vbr -or $null -ne $vbo) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
+    } catch { Add-CollectorError 'veeam' $_ }
     try {
         $storage = Measure-Step 'storage health' { Get-StorageHealth $State }
         if ($storage) { $report.checks.storage = $storage }

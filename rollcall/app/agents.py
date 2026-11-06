@@ -17,6 +17,7 @@ import logging
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 log = logging.getLogger("ping_monitor")
@@ -241,6 +242,11 @@ def normalize_report(r) -> dict:
         d["detections"] = [x for x in _as_list(d.get("detections")) if isinstance(x, dict)]
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
+    if "backups" in c:
+        b = c["backups"] = _as_dict(c["backups"])
+        b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
+        for j in b["jobs"]:
+            j["runs"] = [str(x) for x in _as_list(j.get("runs")) if x][-12:]
     if "storage" in c:
         st = c["storage"] = _as_dict(c["storage"])
         for k in ("physical", "virtual", "volumes", "dyn_disks", "drives"):
@@ -326,7 +332,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
         return None
 
 
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup")
 
 
 def disk_key(name) -> str:
@@ -360,6 +366,40 @@ def _vt(v) -> tuple:
 def immich_update(im: dict) -> bool:
     """True when a newer Immich release than the one running is known."""
     return bool(im.get("latest") and im.get("version") and _vt(im["latest"]) > _vt(im["version"]))
+
+
+def _ts(iso) -> float | None:
+    try:
+        return datetime.strptime(str(iso)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def backup_job_state(j: dict, now: float) -> tuple[str, str]:
+    """(level, why) for one Veeam job: its last result, and whether it's overdue."""
+    res = (j.get("result") or "").lower()
+    if j.get("source") == "Microsoft 365" and j.get("enabled") is False:
+        return OK, "disabled"
+    if res == "failed":
+        return (WARN, "failed, will be retried") if j.get("retry") else (CRIT, "failed")
+    if res in ("stopped", "disconnected", "notconfigured"):
+        return WARN, res
+    if j.get("source") == "Microsoft 365":
+        nxt = _ts(j.get("next_run"))
+        if nxt and now > nxt + 2 * 3600 and res not in ("running", "queued"):
+            return WARN, "missed its scheduled run"
+    else:
+        last = _ts(j.get("last_success")) or _ts(j.get("finished"))
+        runs = sorted(t for t in (_ts(x) for x in j.get("runs") or []) if t)
+        gaps = sorted(b - a for a, b in zip(runs, runs[1:]) if b - a > 600)
+        limit = 8 * 86400
+        if len(gaps) >= 2:  # learn the job's rhythm from its recent runs
+            limit = min(35 * 86400, max(26 * 3600, 1.5 * gaps[len(gaps) // 2] + 2 * 3600))
+        if last and now - last > limit:
+            return WARN, f"no successful run for {int((now - last) // 3600)} h"
+    if res == "warning":
+        return WARN, "finished with warnings"
+    return OK, ""
 
 
 def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict | None = None) -> dict:
@@ -593,6 +633,26 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                 checks.append(_check("storage", "Storage", WARN, "; ".join(warn)))
             else:
                 checks.append(_check("storage", "Storage", OK, f"{total} disk(s) and array(s) healthy"))
+
+    bk = rc.get("backups")
+    if bk is not None:
+        now_ = now or time.time()
+        bad, warn, n = [], [], 0
+        for j in bk.get("jobs") or []:
+            if ign.has("backup", j.get("name")):
+                continue
+            n += 1
+            lvl, why = backup_job_state(j, now_)
+            if lvl == CRIT:
+                bad.append(f"{j['name']}: {why}")
+            elif lvl == WARN:
+                warn.append(f"{j['name']}: {why}")
+        if bad:
+            checks.append(_check("backups", "Backups", CRIT, "; ".join(bad + warn)))
+        elif warn:
+            checks.append(_check("backups", "Backups", WARN, "; ".join(warn)))
+        elif n:
+            checks.append(_check("backups", "Backups", OK, f"All {n} job(s) OK"))
 
     # Server hardware from Dell OpenManage (power supplies, fans, temperatures, memory...).
     hw = [h for h in ((st or {}).get("hardware") or []) if not ign.has("hardware", h.get("component"))]

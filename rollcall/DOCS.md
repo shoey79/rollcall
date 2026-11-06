@@ -276,6 +276,11 @@ Roles are found from the server's installed Windows roles and services: domain c
 
 Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
+**Veeam backups.** On a Veeam server the agent adds a **Backups** check and tab:
+- **Backup & Replication** (v12/13): every job's result is read from the *Veeam Backup* event log ("… job 'name' finished with Success / Warning / Failed": backup, replication, backup copy, agent jobs and others). A failed job is red, with one notification per failed run giving Veeam's reason; a failure Veeam will retry, or a warning, is amber. Each job's recent run times are remembered, so Rollcall learns how often it runs; a job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or has silently stopped. Jobs with no run for 60 days are dropped.
+- **Backup for Microsoft 365**: each job's last status from its PowerShell module, every 30 minutes (loading the module is slow). Failed is red; Warning, Stopped or Disconnected is amber; an enabled job more than 2 hours past its next scheduled run is amber ("missed"). Disabled jobs are listed but not checked.
+- **Ignore** on a job in the Backups tab (`backup:<job name>`) leaves it out, e.g. a weekly test job.
+
 **Alerted as they happen** (phone notification for each):
 - **Security log:** account locked out (4740), account created or deleted (4720/4726), member added to a security group (4728/4732/4756, e.g. Domain Admins), audit policy changed (4719), Security log cleared (1102). The IDs are in `agent_security_alert_ids`.
 - **System log:** unexpected shutdowns and crashes (Kernel-Power 41, EventLog 6008, BugCheck 1001), disk and NTFS errors, plus any Critical-level event. The list is in `agent_event_watch`, as `Source:ID` or just an ID.
