@@ -27,6 +27,8 @@ Updates appear on the add-on's page in Home Assistant (or **⋮ → Check for up
 
 ## Tabs
 
+Rollcall opens on the **Overview**. Tiles at the top show how many computers are up, need attention, are down or are paused, and whether the agents are reporting; click one to open the matching list. **Alerts** lists everything that isn't green (computers not responding or missing checks, failing service checks, and agent checks such as stopped services, low disks, failed backups or security events), worst and newest first. Click an agent alert to open that server's Details on the relevant tab; other alerts open the list filtered to that computer. **At a glance** shows every computer as a tile; click one for its Details, or its row in the list if it has no agent.
+
 The dashboard has tabs to split a long list. Each tab is a saved filter, so it updates by itself as computers are added or change. The number on a tab is how many computers it shows; the coloured badge is how many of them need attention (red if any are down).
 
 **Built in:** **All**, **Needs attention** (down, degraded or missed a check), and **Windows**, **Linux** and **No agent**, which appear once you have a mix.
