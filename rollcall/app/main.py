@@ -1042,6 +1042,7 @@ class Host:
     expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
     no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
+    reachable: bool | None = None      # answered its last ping (shown while off schedule)
     sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
@@ -1401,6 +1402,7 @@ class Monitor:
                 on = bool(ok)
                 since = (h.sched_started or now) if ok else None
             grace = (h.schedule or {}).get("grace", 15) * 60
+            h.reachable = bool(ok)
             was_off = h.off_schedule
             h.off_schedule = not on
             if on and since and (was_off or h.sched_started is None):
@@ -2272,7 +2274,7 @@ class Monitor:
                 "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else
                 ("Checked whenever it's on" if h.expect_off else None),
                 "expect_off": h.expect_off, "no_alerts": h.no_alerts,
-                "off_schedule": h.off_schedule, "schedule_next": schedule_state(h.schedule, time.time())[2],
+                "off_schedule": h.off_schedule, "reachable": h.reachable, "schedule_next": schedule_state(h.schedule, time.time())[2],
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "services": [{

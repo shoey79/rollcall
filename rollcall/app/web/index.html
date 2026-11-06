@@ -214,6 +214,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .sched{color:var(--muted);font-size:11.5px;margin-top:2px}
 .quiet{font-size:12px;opacity:.75}
 .dot.offsched{background:var(--grey)}
+.dot.offsched.on{background:linear-gradient(90deg,var(--green) 50%,var(--grey) 50%)}
 .haresults{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .harow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
 .harow small{display:block;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
@@ -524,9 +525,17 @@ function cmpVer(a, b) {
   for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); }
   return 0;
 }
+// Off schedule but answering: half green, half grey.
+function dotClass(h) {
+  if (h.off_schedule && !h.maint_until) return h.reachable ? "offsched on" : "offsched";
+  return h.status;
+}
+function dotTip(h) {
+  return h.off_schedule && !h.maint_until ? (h.reachable ? "On, but outside its monitoring schedule (not alerted)" : "Off, outside its monitoring schedule") : "";
+}
 function statusLabel(h) {
   if (h.maint_until) return LABEL[h.status];
-  if (h.off_schedule) return h.expect_off ? "Off" : "Off schedule";
+  if (h.off_schedule) return h.expect_off ? "Off" : h.reachable ? "On · off schedule" : "Off schedule";
   if (h.starting_up) return "Starting up";
   return LABEL[h.status];
 }
@@ -620,7 +629,7 @@ function render() {
     const strip = h.history.map(c => `<span class="${c}"></span>`).join("");
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
-      <td class="first"><div><span class="status"><span class="dot ${h.off_schedule ? "offsched" : h.status}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
+      <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
       <td data-label="Name"><div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
@@ -699,7 +708,7 @@ function renderHome() {
     const sub = h.status === "green" && bad ? `${bad} check${bad === 1 ? "" : "s"} amber`
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
-    const dot = h.off_schedule ? "offsched" : h.status === "green" && bad ? "amber" : h.status;
+    const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
     return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span><span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
   }).join("")}</div></div>`;
   el.innerHTML = html;

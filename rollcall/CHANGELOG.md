@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.18.0 - 2026-11-06
+
+### Added
+- Computers outside their monitoring schedule that are switched on now show a half-green, half-grey dot and **On · off schedule**, instead of the same grey as one that's off. They're still not alerted. This shows in the list and in the Overview's At a glance.
+
 ## 1.17.1 - 2026-11-06
 
 ### Fixed
