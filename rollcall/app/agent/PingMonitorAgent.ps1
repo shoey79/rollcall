@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.11'
+$AgentVersion = '1.0.12'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -190,23 +190,59 @@ function Get-QUserOutput {
     try { return (& quser.exe 2>$null) } catch { return $null }
 }
 
-function Get-NewEvents([hashtable]$Filter, [int]$Max, [string]$CursorName, $State) {
-    # Events newer than the last run, de-duplicated by RecordId.
-    try {
-        $events = @(Get-WinEvent -FilterHashtable $Filter -MaxEvents $Max -ErrorAction Stop)
-    } catch {
-        if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -like 'No events were found*') {
-            return @()
-        }
-        throw
+$ScanLimit = 200000   # most records read from one log in one run
+
+function Get-RecentRecords([string]$Log, [DateTime]$Since, [long]$After) {
+    # Reads the log backwards from the newest record and stops at the last record seen
+    # (or $Since), so a run only touches what's new. A filtered query (Get-WinEvent with
+    # IDs and StartTime) can't do that: the event log has no index, so Windows reads the
+    # whole log every time, which takes minutes on a large Security log.
+    if (-not ('System.Diagnostics.Eventing.Reader.EventLogQuery' -as [type])) {
+        # Built in to Windows PowerShell 5.1; PowerShell 7 loads it with its Diagnostics module.
+        try { Import-Module Microsoft.PowerShell.Diagnostics -ErrorAction Stop } catch { }
+        try { Add-Type -AssemblyName System.Diagnostics.EventLog -ErrorAction Stop } catch { }
     }
-    $last = 0
-    if ($State.cursors.ContainsKey($CursorName)) { $last = [long]$State.cursors[$CursorName] }
-    $newest = ($events | Measure-Object -Property RecordId -Maximum).Maximum
-    if ($null -ne $newest -and $newest -lt $last) { $last = 0 }  # log was cleared
-    $fresh = @($events | Where-Object { $_.RecordId -gt $last })
-    if ($null -ne $newest -and $newest -gt $last) { $State.cursors[$CursorName] = [long]$newest }
-    return $fresh
+    $q = New-Object System.Diagnostics.Eventing.Reader.EventLogQuery($Log, [System.Diagnostics.Eventing.Reader.PathType]::LogName, '*')
+    $q.ReverseDirection = $true
+    $reader = New-Object System.Diagnostics.Eventing.Reader.EventLogReader($q)
+    $out = New-Object System.Collections.ArrayList
+    $res = @{ records = $out; newest = $null; capped = $false }
+    try {
+        $n = 0
+        while ($true) {
+            $e = $reader.ReadEvent()
+            if ($null -eq $e) { break }
+            if ($null -eq $res.newest) { $res.newest = [long]$e.RecordId; if ($After -and $res.newest -lt $After) { $After = 0 } }  # log was cleared
+            if ($After -and $e.RecordId -le $After) { $e.Dispose(); break }
+            if ($e.TimeCreated -and $e.TimeCreated -lt $Since) { $e.Dispose(); break }
+            [void]$out.Add($e)
+            if (++$n -ge $ScanLimit) { $res.capped = $true; break }
+        }
+    } finally { $reader.Dispose() }
+    return $res
+}
+
+function Get-NewEvents([string]$Log, [DateTime]$Since, [int[]]$Ids, [int[]]$Levels, [string]$CursorName, $State) {
+    # Matching events newer than the last run, newest first. The cursor is the newest
+    # record read, so the next run stops there.
+    $after = 0
+    if ($State.cursors.ContainsKey($CursorName)) { $after = [long]$State.cursors[$CursorName] }
+    $res = Get-RecentRecords $Log $Since $after
+    if ($res.capped) { Add-CollectorError "events-$Log" ([pscustomobject]@{ Exception = [pscustomobject]@{ Message = "more than $ScanLimit new records since the last run; only the newest were checked" } }) }
+    if ($null -ne $res.newest) { $State.cursors[$CursorName] = [long]$res.newest }
+    $idSet = $null; if ($Ids) { $idSet = New-Object 'System.Collections.Generic.HashSet[int]'; foreach ($i in $Ids) { [void]$idSet.Add($i) } }
+    $out = New-Object System.Collections.ArrayList
+    foreach ($e in $res.records) {
+        $keep = (-not $idSet -or $idSet.Contains([int]$e.Id)) -and (-not $Levels -or ($Levels -contains [int]$e.Level))
+        if ($keep) { [void]$out.Add($e) } else { $e.Dispose() }
+    }
+    return $out
+}
+
+function Get-EventMessage($Event) {
+    if ($Event.PSObject.Properties['Message'] -and $Event.Message) { return [string]$Event.Message }
+    try { $m = $Event.FormatDescription(); if ($m) { return [string]$m } } catch { }
+    return '(no description)'
 }
 
 function Get-EventFields($Event) {
@@ -471,7 +507,7 @@ function Get-EventReport($State, [DateTime]$Since) {
     foreach ($log in @('System', 'Application')) {
         $counts[$log] = [ordered]@{ critical = 0; error = 0 }
         try {
-            $events = Get-NewEvents @{ LogName = $log; Level = 1, 2; StartTime = $Since } 300 $log $State
+            $events = @(Get-NewEvents $log $Since $null @(1, 2) "$log-scan" $State | Select-Object -First 300)
             foreach ($e in $events) {
                 if ($e.Level -eq 1) { $counts[$log].critical++ } else { $counts[$log].error++ }
             }
@@ -482,7 +518,7 @@ function Get-EventReport($State, [DateTime]$Since) {
                         level   = if ($e.Level -eq 1) { 'Critical' } else { 'Error' }
                         id      = [int]$e.Id
                         source  = [string]$e.ProviderName
-                        message = Limit-Text ($(if ($e.Message) { $e.Message } else { '(no description)' })) 300
+                        message = Limit-Text (Get-EventMessage $e) 300
                     })
             }
         } catch { Add-CollectorError "events-$log" $_ }
@@ -501,9 +537,13 @@ $SecurityIds = @{
 
 function Get-SecurityReport($State, [DateTime]$Since) {
     $report = [ordered]@{ since = ConvertTo-UtcString $Since; failed_logons = [ordered]@{ count = 0; top = @() }; items = @() }
+    $all = @()
     try {
-        $ids = @($SecurityIds.Keys | ForEach-Object { [int]$_ })
-        $events = Get-NewEvents @{ LogName = 'Security'; Id = $ids; StartTime = $Since } 300 'Security-notable' $State
+        $ids = @($SecurityIds.Keys | ForEach-Object { [int]$_ }) + 4625
+        $all = @(Get-NewEvents 'Security' $Since $ids $null 'Security-scan' $State)
+    } catch { Add-CollectorError 'security' $_; return $report }
+    try {
+        $events = @($all | Where-Object { $_.Id -ne 4625 } | Select-Object -First 300)
         $items = @()
         foreach ($e in ($events | Sort-Object TimeCreated -Descending | Select-Object -First 50)) {
             $f = Get-EventFields $e
@@ -523,8 +563,9 @@ function Get-SecurityReport($State, [DateTime]$Since) {
         $report.items = $items
     } catch { Add-CollectorError 'security' $_ }
     try {
-        $failed = Get-NewEvents @{ LogName = 'Security'; Id = 4625; StartTime = $Since } 2000 'Security-4625' $State
-        $report.failed_logons.count = @($failed).Count
+        $failed = @($all | Where-Object { $_.Id -eq 4625 })
+        $report.failed_logons.count = $failed.Count
+        $failed = @($failed | Select-Object -First 2000)
         if (@($failed).Count -gt 0) {
             $rows = foreach ($e in $failed) {
                 $f = Get-EventFields $e

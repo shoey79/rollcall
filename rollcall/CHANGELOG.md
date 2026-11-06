@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.1 - 2026-11-06
+
+### Fixed
+- Windows agent 1.0.12: reading the Security log could take minutes on computers with a large Security log. The agent asked Windows for "these event IDs since the last run", and because the event log has no index, Windows read the whole log to answer, twice per run. The agent now reads each log (Security, System and Application) backwards from the newest record and stops at the last record it saw, in one pass, so a run only reads what's new. Event descriptions are now only fetched for the events shown, not every match.
+
 ## 1.17.0 - 2026-11-06
 
 ### Added
