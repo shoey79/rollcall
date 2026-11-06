@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.16.0 - 2026-11-06
+
+### Added
+- **Overview**: Rollcall now opens on an Overview tab instead of the list. It shows:
+  - tiles for computers, up, needing attention, down, paused or off, and agents reporting;
+  - an **Alerts** list of everything that isn't green, worst and newest first;
+  - an **At a glance** grid of every computer.
+
+  Clicking an agent alert opens that server's Details on the right tab, for example a stopped service on Services, low disk space on Storage, or a failed backup on Backups. Ping and service-check alerts open the list filtered to that computer. Clicking a tile opens the matching list tab. The Overview tab's badge shows how many alerts there are.
+
+### Fixed
+- The Agents button showed a red "0" badge when no servers were waiting for approval.
+
 ## 1.15.1 - 2026-11-06
 
 ### Fixed

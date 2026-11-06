@@ -8,6 +8,7 @@
 :root{--bg:#f5f6f8;--card:#fff;--text:#1b2027;--muted:#5d6a79;--line:#e2e6eb;--green:#1f9d55;--amber:#d99a00;--red:#d64545;--grey:#9aa5b1;--accent:#2b6cb0;--blue:#3b6fd8;--orange:#e8590c}
 @media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1a1f25;--text:#e6e9ed;--muted:#97a3b0;--line:#2a313a;--green:#3ccf7a;--amber:#f2b632;--red:#f06565;--grey:#5f6b7a;--accent:#63a4ff;--blue:#6f9dff;--orange:#ff8a3d}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:1240px;margin:0 auto;padding:20px 16px 40px}
 header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
@@ -225,6 +226,45 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .tab .pen{font-size:12px;opacity:.6;padding:0 2px;border-radius:4px}
 .tab .pen:hover{opacity:1;background:color-mix(in srgb,var(--accent) 15%,transparent)}
 .tab.add{color:var(--accent);font-weight:500}
+/* Overview (landing tab) */
+body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!important}
+#home{display:grid;gap:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);text-align:left;font-size:13px}
+.tile b{font-size:26px;line-height:1.1;font-variant-numeric:tabular-nums}
+.tile small{color:var(--muted);font-size:12px}
+.tile .lbl{display:flex;align-items:center;gap:6px;color:var(--muted);font-weight:600;font-size:12px}
+.tile.hot{border-color:color-mix(in srgb,var(--red) 55%,var(--line));background:color-mix(in srgb,var(--red) 6%,var(--card))}
+.tile.warm{border-color:color-mix(in srgb,var(--orange) 55%,var(--line));background:color-mix(in srgb,var(--orange) 6%,var(--card))}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.panel h2{margin:0;padding:11px 14px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+.panel h2 small{text-transform:none;letter-spacing:0;font-weight:500}
+.alert{display:grid;grid-template-columns:auto 1fr auto auto;gap:4px 12px;align-items:center;width:100%;padding:10px 14px;border:none;border-bottom:1px solid var(--line);border-radius:0;background:transparent;color:var(--text);text-align:left;font-size:13px}
+.alert:last-child{border-bottom:none}
+.alert:hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.alert .what{min-width:0}
+.alert .what b{font-weight:650}
+.alert .what .chk{color:var(--muted);font-weight:600}
+.alert .what small{display:block;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.alert .when{color:var(--muted);font-size:12px;white-space:nowrap}
+.alert .go{color:var(--accent);font-size:12px;white-space:nowrap}
+.alert.sev0,.alert.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
+.allok{padding:22px 14px;text-align:center;color:var(--muted)}
+.allok b{display:block;color:var(--green);font-size:15px;margin-bottom:2px}
+.glance{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;padding:12px}
+.gl{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);text-align:left;font-size:13px;min-width:0}
+.gl .dot{margin-top:4px}
+.gl span{min-width:0}
+.gl b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gl small{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gl.red{border-color:color-mix(in srgb,var(--red) 50%,var(--line))}.gl.degraded{border-color:color-mix(in srgb,var(--orange) 50%,var(--line))}.gl.amber{border-color:color-mix(in srgb,var(--amber) 50%,var(--line))}
+tr.flashrow td{animation:flash 1.6s ease-out}
+@media (max-width:760px){
+  .alert{grid-template-columns:auto 1fr auto}
+  .alert .go{display:none}
+  .alert .what small{white-space:normal}
+  .tile b{font-size:22px}
+}
 .tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
 .rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
@@ -262,6 +302,8 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
     <button id="addHost" class="primary edit-only">+ Add computer</button>
   </div>
   <nav class="tabs" id="tabs" aria-label="Device lists"></nav>
+  <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
+  <section id="home" hidden aria-label="Overview"></section>
   <div class="wrap">
     <table>
       <thead><tr id="head"></tr></thead>
@@ -269,7 +311,6 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
     </table>
     <div class="empty" id="empty" hidden>No computers have been added yet.<br><button class="primary edit-only" id="addFirst">+ Add computer</button></div>
     <div class="empty" id="emptyTab" hidden>Nothing in this tab right now.</div>
-    <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
   </div>
 </main>
 
@@ -547,6 +588,9 @@ function render() {
 
   renderTabs();
   const tab = currentTab();
+  document.body.classList.toggle("home-on", !!tab.home);
+  document.getElementById("home").hidden = !tab.home;
+  if (tab.home) { renderHome(); return; }
   const hosts = data.hosts
     .filter(h => tabMatch(h, tab))
     .filter(h => !q || [h.name, h.host, h.ip || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
@@ -581,6 +625,95 @@ function render() {
   }).join("");
 }
 
+// ---- Overview: status at a glance, and every alert one click from its details ----
+const checkKey = s => s.key.replace(/^agent_/, "");
+function alerts() {
+  if (!data) return [];
+  const out = [];
+  for (const h of data.hosts) {
+    if (h.maint_until || h.off_schedule || h.status === "maintenance") continue;
+    if (h.status === "red" || h.status === "amber") {
+      out.push({h, sev: h.status === "red" ? 0 : 2, dot: h.status, check: null,
+        title: h.status === "red" ? "Not responding" : "Missed a check",
+        detail: h.status === "red" ? `No reply from ${h.ip || h.host}` : "Didn't reply to the last check; re-checking",
+        since: h.last_change});
+      if (h.status === "red") continue;  // its checks are down with it
+    }
+    for (const s of h.services) {
+      if (s.status !== "red" && s.status !== "amber") continue;
+      out.push({h, sev: s.status === "red" ? 1 : 3, dot: s.status === "red" ? "degraded" : "amber", check: s,
+        title: s.label, detail: s.detail || (s.agent ? "" : `${s.target}: ${SVC_LABEL[s.status]}`), since: s.last_change});
+    }
+  }
+  return out.sort((a, b) => a.sev - b.sev || (b.since || 0) - (a.since || 0) || collator.compare(a.h.name, b.h.name));
+}
+function renderHome() {
+  const el = document.getElementById("home"), hosts = data.hosts, now = data.now, list = alerts();
+  if (!hosts.length) {
+    el.innerHTML = `<div class="panel"><div class="allok">No computers have been added yet.<br><br><button class="primary edit-only" data-homeadd>+ Add computer</button></div></div>`;
+    return;
+  }
+  const n = st => hosts.filter(st).length;
+  const down = n(h => h.status === "red"), deg = new Set(list.filter(a => a.h.status !== "red").map(a => a.h.key)).size;
+  const quiet = n(h => h.status === "maintenance" || h.off_schedule);
+  const up = n(h => h.status === "green" && !h.off_schedule);
+  const withAgent = hosts.filter(h => h.agent), agentBad = withAgent.filter(h => h.services.some(s => s.agent && s.key === "agent_agent" && s.status !== "green")).length;
+  const tile = (cls, dot, label, value, sub, go) =>
+    `<button type="button" class="tile ${cls}" data-hometab="${go}"><span class="lbl">${dot ? `<span class="dot ${dot}"></span>` : ""}${label}</span><b>${value}</b><small>${sub}</small></button>`;
+  let html = `<div class="tiles">
+    ${tile("", "", "Computers", hosts.length, `${withAgent.length} with an agent`, "all")}
+    ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of computers`, "all")}
+    ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `computer${deg === 1 ? "" : "s"} with alerts` : "none", "problems")}
+    ${tile(down ? "hot" : "", "red", "Down", down, down ? "not responding" : "none", "problems")}
+    ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "all") : ""}
+    ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", "all") : ""}
+  </div>`;
+  html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
+    (list.length ? list.map((a, i) => {
+      const jump = a.check && a.check.agent && a.h.agent;
+      const target = jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
+      return `<button type="button" class="alert sev${a.sev}" data-alert="${i}">
+        <span class="dot ${a.dot}"></span>
+        <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
+        <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
+        <span class="go">${target} ›</span></button>`;
+    }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + `</div>`;
+  const sorted = hosts.slice().sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || collator.compare(a.name, b.name));
+  html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"}</small></h2><div class="glance">${sorted.map(h => {
+    const bad = h.services.filter(s => s.status === "red" || s.status === "amber").length;
+    const sub = h.status === "green" && bad ? `${bad} check${bad === 1 ? "" : "s"} amber`
+      : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
+      : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
+    const dot = h.off_schedule ? "offsched" : h.status === "green" && bad ? "amber" : h.status;
+    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span><span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
+  }).join("")}</div></div>`;
+  el.innerHTML = html;
+  homeAlerts = list;
+}
+let homeAlerts = [];
+function showInList(key) {
+  const h = data.hosts.find(x => x.key === key); if (!h) return;
+  tabId = "all"; document.getElementById("filter").value = h.name; render();
+  const row = [...document.querySelectorAll("#rows tr")].find(tr => tr.querySelector(`[data-key="${CSS.escape(key)}"]`));
+  if (row) { row.scrollIntoView({block: "center", behavior: "smooth"}); row.classList.add("flashrow"); setTimeout(() => row.classList.remove("flashrow"), 1700); }
+}
+document.getElementById("home").addEventListener("click", e => {
+  const t = e.target.closest("[data-hometab]");
+  if (t) { tabId = t.dataset.hometab; document.getElementById("filter").value = ""; return render(); }
+  if (e.target.closest("[data-homeadd]")) return openDialog(null);
+  const a = e.target.closest("[data-alert]");
+  if (a) {
+    const x = homeAlerts[+a.dataset.alert]; if (!x) return;
+    if (x.check && x.check.agent && x.h.agent) return openDetails(x.h.key, JUMP[checkKey(x.check)] || ["overview"]);
+    return showInList(x.h.key);
+  }
+  const g = e.target.closest("[data-glance]");
+  if (g) {
+    const h = data.hosts.find(x => x.key === g.dataset.glance);
+    return h && h.agent ? openDetails(h.key) : showInList(g.dataset.glance);
+  }
+});
+
 // ---- Tabs: saved filters, shared by everyone ----
 const FIELDS = {
   name:    {label: "Name", ops: {begins: "begins with", contains: "contains", ends: "ends with", is: "is", not: "is not", notcontains: "doesn't contain", regex: "matches pattern"}, ph: "SQL"},
@@ -595,14 +728,15 @@ const FIELDS = {
 const PROBLEM = new Set(["red", "degraded", "amber"]);
 const osOf = h => h.agent ? (h.agent.os_family || "windows") : "none";
 const BUILTIN = [
+  {id: "home", name: "Overview", rules: [], builtin: true, home: true},
   {id: "all", name: "All", rules: []},
   {id: "problems", name: "Needs attention", rules: [{field: "status", op: "is", value: "problem"}], builtin: true},
   {id: "windows", name: "Windows", rules: [{field: "os", op: "is", value: "windows"}], builtin: true, auto: true},
   {id: "linux", name: "Linux", rules: [{field: "os", op: "is", value: "linux"}], builtin: true, auto: true},
   {id: "noagent", name: "No agent", rules: [{field: "os", op: "is", value: "none"}], builtin: true, auto: true},
 ];
-let views = [], tabId = "all";
-try { tabId = localStorage.getItem("pm_tab") || "all"; } catch (e) {}
+// Rollcall always opens on the Overview; the list tabs are a click away.
+let views = [], tabId = "home";
 
 function ipRanges(spec) {
   return spec.split(/[,\s]+/).filter(Boolean).map(p => {
@@ -673,6 +807,10 @@ function currentTab() {
 function renderTabs() {
   const hosts = data.hosts, cur = currentTab();
   const one = t => {
+    if (t.home) {
+      const n = alerts().length, red = alerts().some(a => a.sev <= 1);
+      return `<button type="button" class="tab${t.id === cur.id ? " on" : ""}" data-tab="home" title="Status at a glance and everything that needs attention">Overview${n ? `<span class="bad${red ? " red" : ""}" title="${n} alert(s)">${n}</span>` : ""}</button>`;
+    }
     const list = hosts.filter(h => tabMatch(h, t));
     const red = list.filter(h => h.status === "red").length, bad = list.filter(h => PROBLEM.has(h.status)).length;
     const custom = !t.builtin && t.id !== "all";
@@ -938,8 +1076,8 @@ const tbl = (head, rows) => rows.length
   ? `<table class="small"><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>` : "";
 const sect = (title, inner) => inner ? `<div class="sect"><h3>${title}</h3>${inner}</div>` : "";
 
-async function openDetails(key) {
-  if (key !== detKey) {
+async function openDetails(key, jump) {
+  if (key !== detKey || jump) {
     // Clear the previous server's details straight away so they don't flash up.
     diskEditing = null;
     detTab = "overview";
@@ -956,6 +1094,7 @@ async function openDetails(key) {
     if (!r.ok) throw new Error(r.status);
     lastDetails = await r.json();
     renderDetails(lastDetails);
+    if (jump) showDetTab(...jump);
   } catch (e) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
