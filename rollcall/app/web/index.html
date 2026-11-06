@@ -1317,29 +1317,33 @@ function renderAgents() {
       <h5>Install</h5><ol class="steps">${o.install.map(x => `<li>${x}</li>`).join("")}</ol>
       ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
       <h5>Update</h5><p>${o.update}</p>
+      <label class="row-inline" style="margin-top:6px"><input type="checkbox" data-autoupdate="${o.os}" ${a.auto_update && a.auto_update[o.os] ? "checked" : ""}> Update ${o.title} agents automatically</label>
+      <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades.</p>
       <h5>Remove</h5><p>${o.remove}</p>
       <h5>Troubleshoot</h5><p>${o.trouble}</p>
     </div>`;
-  html += sect("2. Download and install", `<div class="osgrid">${card({
-      title: "Windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
+  const updWarn = !a.ssl && (a.auto_update?.windows || a.auto_update?.linux)
+    ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>agent_ssl</b> in the add-on's configuration is still recommended.</p>` : "";
+  html += sect("2. Download and install", updWarn + `<div class="osgrid">${card({
+      title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
       req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
       install: [
         `Copy the file to <code>${share}</code> or another share the servers can read.`,
         `Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add <code>powershell.exe</code> with <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\PingMonitorAgent.ps1 -Install</code>. Applies at the next restart.`,
         `Or run that command once as an administrator to start straight away, or use MECM: <i>Software Library → Scripts</i>, import the file, approve it, then <i>Run Script</i> on a collection with <b>Action</b> set to <code>Install</code>.`,
         `It creates a scheduled task that runs as SYSTEM every 5 minutes, and the server appears below for approval.`],
-      update: "Replace the file on the share; servers update at their next restart, or run <code>-Install</code> again.",
+      update: "Turn on automatic updates below, use <b>Update</b> next to a server, or replace the file on the share (servers pick it up at their next restart, or run <code>-Install</code> again).",
       remove: "<code>-Uninstall</code> on the server, then <b>Revoke</b> below.",
       trouble: "<code>-ShowReport</code> prints what it would send. Log: <code>C:\\ProgramData\\PingMonitor\\agent.log</code>."
     })}${card({
-      title: "Linux", version: a.latest_linux_version, btn: "agDownloadLinux", file: "pingmonitor-agent.py",
+      title: "Linux", os: "linux", version: a.latest_linux_version, btn: "agDownloadLinux", file: "pingmonitor-agent.py",
       req: "Ubuntu 20.04 or later, or any systemd Linux with Python 3.8 or later; nothing to install.",
       install: [
         "Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code>",
         "On the server run <code>sudo python3 pingmonitor-agent.py --install</code>.",
         "It copies itself to <code>/usr/local/lib/pingmonitor</code> and adds a systemd timer that runs as root every 5 minutes, and the server appears below for approval."],
       options: `Immich job queues and library statistics: add <code>--immich-api-key KEY</code>, a key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> <code>job.read</code> (or <code>queue.read</code>) and <code>systemMetadata.read</code>. Immich elsewhere than a local container: <code>--immich-url http://host:2283</code>.`,
-      update: "Download it again and run <code>--install</code> again; settings and approval are kept.",
+      update: "Turn on automatic updates below, use <b>Update</b> next to a server, or download it again and run <code>--install</code> again; settings and approval are kept.",
       remove: "<code>sudo python3 /usr/local/lib/pingmonitor/pingmonitor-agent.py --uninstall</code>, then <b>Revoke</b> below.",
       trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/pingmonitor/agent.log</code>; <code>systemctl status pingmonitor-agent</code>."
     })}</div>`);
@@ -1353,13 +1357,15 @@ function renderAgents() {
     const age = x.last_report ? now - x.last_report : null;
     const stale = age == null || age > staleSec;
     const latest = x.os_family === "linux" ? a.latest_linux_version : a.latest_version;
-    const old = latest && x.version && x.version !== latest;
+    const old = latest && x.version && cmpVer(latest, x.version) > 0;
+    const auto = a.auto_update && a.auto_update[x.os_family === "linux" ? "linux" : "windows"];
     return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
       <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
       <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}</td>
       <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (x.os_family === "linux" ? "download it and run --install again" : "update the script on the share") : ""}">${esc(x.version || "?")} <small class="muted">${x.os_family === "linux" ? "Linux" : "Windows"}</small></td>
       <td><small>${esc((x.roles || []).join(", "))}</small></td>
-      <td><button type="button" class="danger" data-revoke="${esc(x.id)}" data-name="${esc(x.hostname)}">Revoke</button></td></tr>`;
+      <td><div class="actions">${old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`
+        : `<button type="button" data-updatenow="${esc(x.id)}">Update</button>`) : ""}<button type="button" class="danger" data-revoke="${esc(x.id)}" data-name="${esc(x.hostname)}">Revoke</button></div></td></tr>`;
   })) : `<p class="empty-note">No servers yet.</p>`);
   html += sect("Enrolment key", `<div class="row-inline"><span class="mono">${esc(a.key_hint)}</span>
     <button type="button" class="danger" id="agRotate">Rotate key</button></div>
@@ -1367,6 +1373,15 @@ function renderAgents() {
   document.getElementById("agBody").innerHTML = html;
 }
 
+document.getElementById("agBody").addEventListener("change", async e => {
+  const c = e.target.closest("input[data-autoupdate]");
+  if (!c) return;
+  c.disabled = true;
+  const r = await fetch("api/agents/auto-update", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({os: c.dataset.autoupdate, enabled: c.checked})});
+  if (!r.ok) { alert("That didn't work (" + r.status + ")"); }
+  await loadAgents();
+});
 document.getElementById("agBody").addEventListener("click", async e => {
   const t = e.target.closest("button");
   if (!t) return;
@@ -1392,6 +1407,8 @@ document.getElementById("agBody").addEventListener("click", async e => {
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } finally { t.disabled = false; }
+  } else if (t.dataset.updatenow) {
+    await post("api/agents/" + encodeURIComponent(t.dataset.updatenow) + "/update-now");
   } else if (t.dataset.approve) {
     await post("api/agents/approve/" + encodeURIComponent(t.dataset.approve));
   } else if (t.dataset.reject) {
