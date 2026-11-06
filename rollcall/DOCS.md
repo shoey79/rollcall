@@ -243,6 +243,17 @@ In **Edit**, search under **Home Assistant sensors** (it starts with the compute
 
 The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and like other checks they pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
+### SNMP (switches and NAS units)
+
+For network kit you can't install an agent on, tick **SNMP** (under Network) when adding or editing the device, and enter its SNMP community. On the device, turn on SNMP v2c with a read-only community; the name is case-sensitive, and a TeraStation's default is `TeraStation`. Rollcall reads the device on every check while it answers ping, and **Details** shows what it found:
+
+- **Ports** (any switch): every physical port, with its description, speed and error counts. Tick **Alert** for ports that should always be up (uplinks, servers, access points). They go red if they drop, and amber if someone disables them. Other ports are just shown, so desktops going off at night don't alert.
+- **PoE** (switches with the standard PoE MIB, e.g. Netgear GS516TP): power used against the budget (amber at the switch's own alert threshold), a red alert for a port in a PoE fault, amber when a port's overload, short-circuit or power-denied count goes up, and red if the PoE supply is off or faulty.
+- **Buffalo TeraStation** (detected automatically): each disk's status and SMART health, RAID arrays and how full they are (amber at 90%, red at 97%), and the errors the NAS reports itself. A degraded or removed disk is red; a removed hot spare or a SMART warning is amber.
+- **Restarts**: amber for an hour after the device restarts.
+
+Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up as long as it answers ping. The community is only sent to the device; it isn't shown on the dashboard, and leaving the box blank when editing keeps the one already set.
+
 ### How services affect status
 
 - Services are only checked while the computer is answering pings. Each service has its own count: one failure turns its chip amber, and two in a row turns it red.
