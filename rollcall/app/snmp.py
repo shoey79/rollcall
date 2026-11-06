@@ -220,7 +220,16 @@ NAS_RAID = {-1: "not supported", 1: "off", 2: "RAID 0", 3: "RAID 1", 4: "RAID 5"
             7: "RAID 50", 8: "RAID 51", 9: "RAID 60", 10: "RAID 61"}
 
 
-async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, info_cache: dict | None = None) -> dict:
+def _smart(v) -> str:
+    """TeraStations report SMART as a number (1 = healthy) or, on some firmware, as text."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, int):
+        return {1: "OK", 0: "not checked", -1: "not supported"}.get(v, f"warning (code {v})")
+    return str(v)
+
+
+async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     async with Session(host, community, timeout, port=port) as s:
@@ -281,7 +290,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                 for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.2.1", timeout=max(timeout, 5))).items(), key=lambda kv: int(kv[0] or 0)):
                     st = r.get("2")
                     nas["disks"].append({"index": int(idx), "status": NAS_DISK.get(st, str(st)), "bad": st in NAS_DISK_BAD,
-                                         "spare_missing": st == 7, "smart": str(r.get("5") if r.get("5") is not None else ""),
+                                         "spare_missing": st == 7, "smart": _smart(r.get("5")),
                                          "model": str(r.get("30") or "").strip(), "capacity_gib": r.get("24")})
                 for idx, r in sorted(_cols(await s.walk(f"{BUFFALO}.3.1", timeout=max(timeout, 5))).items(), key=lambda kv: int(kv[0] or 0)):
                     cap, used = r.get("5"), r.get("8")
@@ -302,14 +311,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                         nas["errors"].append(text.strip()[:200])
             except SnmpError:
                 nas["unavailable"].append("errors")
-            if info_cache is not None:
-                nas["info"] = info_cache
-            else:
-                try:
-                    info = await s.walk(f"{BUFFALO}.10", timeout=8, per=10, limit=40)
-                    nas["info"] = {k: str(v) for k, v in list(info.items())[:20]}
-                except SnmpError:
-                    nas["unavailable"].append("system information")
+            # Model and firmware are already in sysDescr, so the NAS's slow system-information table isn't read.
             s.retries = 1
             out["nas"] = nas
         out["requests"] = s.requests
@@ -358,7 +360,7 @@ def evaluate(d: dict, watch: set[int], prev: dict | None) -> tuple[str, list[dic
                 add("crit", f"Disk {k['index']}", k["status"])
             elif k["spare_missing"]:
                 add("warn", f"Disk {k['index']}", "hot spare removed")
-            if any(w in k["smart"].lower() for w in ("fail", "bad", "caution", "warn", "error")):
+            if any(w in k["smart"].lower() for w in ("fail", "bad", "caution", "warn", "error")) and not k["bad"]:
                 add("warn", f"Disk {k['index']} SMART", k["smart"])
         for a in nas.get("arrays") or []:
             if a["configured"] and a["capacity_gib"] and a["used_gib"] is not None:

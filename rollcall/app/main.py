@@ -1058,7 +1058,6 @@ class Host:
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
-    snmp_info_at: float | None = None
     sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
@@ -1538,18 +1537,11 @@ class Monitor:
         problems (a watched port down, a failed disk) go red if they're still there next time."""
         prev = h.snmp_data
         try:
-            # The NAS's system info (firmware etc.) is slow to read: read it every 6 hours, not every check.
-            info = ((prev or {}).get("nas") or {}).get("info")
-            if info is None or now - (h.snmp_info_at or 0) > 6 * 3600:
-                info = None
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
-                                  info_cache=info,
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:
             h.snmp_items = [{"level": "crit", "what": "SNMP", "detail": str(err)}]
             return False, None, str(err)
-        if d.get("nas") and info is None:
-            h.snmp_info_at = now
         h.snmp_data, h.snmp_polled = d, now
         worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev)
         h.snmp_items = items
