@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.9'
+$AgentVersion = '1.0.10'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1089,6 +1089,44 @@ function Send-Json([string]$Path, $Body, [string]$Token) {
     }
 }
 
+function Test-NewerVersion([string]$A, [string]$B) {
+    # True when version A is newer than version B (e.g. 1.0.10 > 1.0.9).
+    try { return ([version]($A -replace '[^\d.]', '')) -gt ([version]($B -replace '[^\d.]', '')) } catch { return $false }
+}
+
+function Invoke-AgentUpdate($State, $Offer) {
+    # The add-on offers a newer agent only when an admin has turned updates on. The
+    # download is checked before anything changes: it must be signed with this server's
+    # own token (HMAC-SHA256), be a newer version than this one, and parse as PowerShell.
+    # The old copy is kept as PingMonitorAgent.ps1.old. The new one runs from the next report.
+    if (-not $Offer -or -not $Offer.version -or -not (Test-NewerVersion ([string]$Offer.version) $AgentVersion)) { return }
+    $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
+    if (-not (Test-Path $dest)) { return }  # only an installed agent updates itself
+    $uri = $Server.TrimEnd('/') + '/agent/update?os=windows&server=' + [uri]::EscapeDataString($Server.TrimEnd('/'))
+    if ($IgnoreCertificate) { $uri += '&ignore_cert=1' }
+    $params = @{ Uri = $uri; Method = 'Get'; TimeoutSec = 60; UseBasicParsing = $true; Headers = @{ Authorization = "Bearer $($State.token)" } }
+    if ($uri -like 'https:*' -and $IgnoreCertificate) {
+        if ($PSVersionTable.PSVersion.Major -ge 6) { $params.SkipCertificateCheck = $true }
+        else { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
+    }
+    $r = Invoke-WebRequest @params
+    $bytes = $r.RawContentStream.ToArray()
+    $sig = [string]($r.Headers['X-Rollcall-Signature'] | Select-Object -First 1)
+    $key = (New-Object Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$State.token))
+    $mac = -join ((New-Object Security.Cryptography.HMACSHA256 (, $key)).ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+    if (-not $sig -or $sig.ToLower() -ne $mac) { throw 'The update failed its signature check, so it was not installed' }
+    $text = [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)
+    if ($text -notmatch "\`$AgentVersion = '([^']+)'" -or $Matches[1] -ne [string]$Offer.version) { throw 'The update is not the version offered, so it was not installed' }
+    $errs = $null
+    [void][Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errs)
+    if ($errs -and $errs.Count) { throw "The update doesn't parse ($($errs[0].Message)), so it was not installed" }
+    $new = "$dest.new"
+    [IO.File]::WriteAllText($new, $text, (New-Object Text.UTF8Encoding $true))
+    Copy-Item -Path $dest -Destination "$dest.old" -Force
+    Move-Item -Path $new -Destination $dest -Force
+    Write-AgentLog "Updated the agent from $AgentVersion to $($Offer.version); the new version runs from the next report"
+}
+
 function Invoke-AgentRun([switch]$ReportOnly) {
     if ($Server -like '__PM_*' -or $EnrolKey -like '__PM_*') {
         throw 'This copy of the script has no add-on address or enrolment key. Download it from the Rollcall dashboard (Agents), or pass -Server and -EnrolKey.'
@@ -1126,6 +1164,9 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $took = if ($report.run_ms) { '{0:N1} s' -f ($report.run_ms / 1000) } else { '?' }
     Write-AgentLog ("Report sent: {0} role(s), {1} error(s); run took {2}{3}" -f @($report.roles).Count, @($report.errors).Count, $took,
         $(if ($slow) { '; slowest: {0} {1:N1} s' -f $slow.Key, ($slow.Value / 1000) } else { '' }))
+    if ($res.body -and $res.body.agent_update) {
+        try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1138,7 +1179,13 @@ function Install-Agent {
     New-Item -ItemType Directory -Path $DataPath -Force | Out-Null
     Protect-DataFolder
     $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
-    if ($SelfPath -and (Test-Path $SelfPath)) {
+    # A startup script on the share can be older than a copy that has updated itself:
+    # keep the newer one, so the two don't keep swapping versions.
+    $installed = $null
+    if (Test-Path $dest) { $m = Select-String -Path $dest -Pattern "\`$AgentVersion = '([^']+)'" | Select-Object -First 1; if ($m) { $installed = $m.Matches[0].Groups[1].Value } }
+    if ($installed -and (Test-NewerVersion $installed $AgentVersion)) {
+        Write-AgentLog "Kept the installed agent $installed (newer than this copy, $AgentVersion)"
+    } elseif ($SelfPath -and (Test-Path $SelfPath)) {
         if ($SelfPath -ne $dest) { Copy-Item -Path $SelfPath -Destination $dest -Force }
     } elseif ($SelfText -and $SelfText -match '(Rollcall|Ping Monitor) agent') {
         # Run as a script block (no file): write the script text out, with a BOM

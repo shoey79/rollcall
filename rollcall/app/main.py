@@ -23,6 +23,8 @@ import logging
 import os
 import re
 import secrets
+import hashlib
+import hmac
 import io
 import shutil
 import tempfile
@@ -1798,6 +1800,23 @@ class Monitor:
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
 
+    def agent_update_offer(self, agent: dict, report: dict) -> dict | None:
+        """Offer the agent the version in this add-on if updates are on for its OS (or an
+        admin asked for this one) and it's older. Agents never update otherwise."""
+        os_name = "linux" if report.get("os_family") == "linux" else "windows"
+        latest = _linux_script_version() if os_name == "linux" else _script_version()
+        running = report.get("agent_version") or agent.get("agent_version")
+        now = set(self.agent_settings.get("update_now") or [])
+        if not latest or not running or _vt(latest) <= _vt(running):
+            if agent["id"] in now:  # done
+                now.discard(agent["id"])
+                self.agent_settings["update_now"] = sorted(now)
+                self._save_agent_settings()
+            return None
+        if (self.agent_settings.get("auto_update") or {}).get(os_name) or agent["id"] in now:
+            return {"version": latest}
+        return None
+
     async def _backup_alerts(self, h: Host, report: dict) -> None:
         """One notification per failed Veeam job run, and one when a job becomes overdue."""
         jobs = ((report.get("checks") or {}).get("backups") or {}).get("jobs") or []
@@ -2535,7 +2554,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                 "os": a.get("os"), "version": a.get("agent_version"), "roles": a.get("roles") or [],
                 "os_family": a.get("os_family") or "windows",
                 "approved_at": a.get("approved_at"), "last_report": a.get("last_report"),
-                "host_key": h.key if h else None, "host_name": h.name if h else None}
+                "host_key": h.key if h else None, "host_name": h.name if h else None,
+                "update_queued": a["id"] in (monitor.agent_settings.get("update_now") or [])}
 
     async def agents_list(_req):
         st = monitor.agents
@@ -2550,6 +2570,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                               key=lambda r: r["requested_at"]),
             "latest_version": _script_version(),
             "latest_linux_version": _linux_script_version(),
+            "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
         })
 
     async def agents_approve(req):
@@ -2586,27 +2607,36 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
 
     async def agents_script(req):
         server = (req.query.get("server") or "").strip().rstrip("/")
-        if not re.match(r"^https?://[A-Za-z0-9.\-\[\]:]+$", server):
+        if not SERVER_RE.match(server):
             raise web.HTTPBadRequest(text=json.dumps({"error": "Enter the address as http://host:port"}),
                                      content_type="application/json")
-        if req.query.get("os") == "linux":
-            text = LINUX_AGENT_SCRIPT.read_text(encoding="utf-8")
-            text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
-            text = text.replace('ENROL_KEY = "__PM_ENROL_KEY__"', f'ENROL_KEY = "{monitor.agents.enrol_key}"', 1)
-            if req.query.get("ignore_cert") == "1":
-                text = text.replace("IGNORE_CERT = False", "IGNORE_CERT = True", 1)
-            return web.Response(body=text.encode("utf-8"), content_type="application/octet-stream", headers={
-                "Content-Disposition": 'attachment; filename="pingmonitor-agent.py"'})
-        text = AGENT_SCRIPT.read_text(encoding="utf-8")
-        text = text.replace("[string]$Server = '__PM_SERVER__'", f"[string]$Server = '{server}'", 1)
-        text = text.replace("[string]$EnrolKey = '__PM_ENROL_KEY__'",
-                            f"[string]$EnrolKey = '{monitor.agents.enrol_key}'", 1)
-        if req.query.get("ignore_cert") == "1":
-            text = text.replace("[switch]$IgnoreCertificate,", "[switch]$IgnoreCertificate = $true,", 1)
-        # Windows PowerShell 5.1 reads BOM-less scripts as ANSI; add a BOM so it's read as UTF-8.
-        body = b"\xef\xbb\xbf" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+        linux = req.query.get("os") == "linux"
+        body = build_agent_script("linux" if linux else "windows", server, monitor.agents.enrol_key,
+                                  req.query.get("ignore_cert") == "1")
         return web.Response(body=body, content_type="application/octet-stream", headers={
-            "Content-Disposition": 'attachment; filename="PingMonitorAgent.ps1"'})
+            "Content-Disposition": f'attachment; filename="{"pingmonitor-agent.py" if linux else "PingMonitorAgent.ps1"}"'})
+
+    async def agents_auto_update(req):
+        body = await req.json()
+        os_name = body.get("os")
+        if os_name not in ("windows", "linux"):
+            return web.json_response({"error": "os must be windows or linux"}, status=400)
+        au = monitor.agent_settings.setdefault("auto_update", {})
+        au[os_name] = bool(body.get("enabled"))
+        monitor._save_agent_settings()
+        log.info("Automatic %s agent updates %s", os_name.capitalize(), "on" if au[os_name] else "off")
+        return web.json_response({"auto_update": au})
+
+    async def agents_update_now(req):
+        aid = req.match_info["aid"]
+        if aid not in monitor.agents.agents:
+            raise web.HTTPNotFound()
+        now = set(monitor.agent_settings.get("update_now") or [])
+        now.add(aid)
+        monitor.agent_settings["update_now"] = sorted(now)
+        monitor._save_agent_settings()
+        log.info("Agent on %s will update at its next report", monitor.agents.agents[aid].get("hostname"))
+        return web.json_response({"ok": True})
 
     async def check_now(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -2729,6 +2759,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_delete("/api/agents/{aid}", editor_only(agents_revoke))
     app.router.add_post("/api/agents/rotate-key", editor_only(agents_rotate))
     app.router.add_get("/api/agents/script", editor_only(agents_script))
+    app.router.add_post("/api/agents/auto-update", editor_only(agents_auto_update))
+    app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app
 
 
@@ -2945,6 +2977,31 @@ def apply_pending_restore() -> None:
     print(f"Imported an export; the previous data is kept in {keep}", flush=True)
 
 
+SERVER_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+$")
+
+
+def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: bool) -> bytes:
+    """The agent script with this add-on's address and enrolment key built in."""
+    if os_name == "linux":
+        text = LINUX_AGENT_SCRIPT.read_text(encoding="utf-8")
+        text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
+        text = text.replace('ENROL_KEY = "__PM_ENROL_KEY__"', f'ENROL_KEY = "{enrol_key}"', 1)
+        if ignore_cert:
+            text = text.replace("IGNORE_CERT = False", "IGNORE_CERT = True", 1)
+        return text.encode("utf-8")
+    text = AGENT_SCRIPT.read_text(encoding="utf-8")
+    text = text.replace("[string]$Server = '__PM_SERVER__'", f"[string]$Server = '{server}'", 1)
+    text = text.replace("[string]$EnrolKey = '__PM_ENROL_KEY__'", f"[string]$EnrolKey = '{enrol_key}'", 1)
+    if ignore_cert:
+        text = text.replace("[switch]$IgnoreCertificate,", "[switch]$IgnoreCertificate = $true,", 1)
+    # Windows PowerShell 5.1 reads BOM-less scripts as ANSI; add a BOM so it's read as UTF-8.
+    return b"\xef\xbb\xbf" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+
+
+def _vt(v) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:3])
+
+
 def _linux_script_version() -> str | None:
     try:
         m = re.search(r'^AGENT_VERSION = "([^"]+)"', LINUX_AGENT_SCRIPT.read_text(encoding="utf-8"), re.M)
@@ -3017,7 +3074,31 @@ def build_agent_app(monitor: Monitor) -> web.Application:
                 pass
             return web.json_response({"error": "report could not be processed"}, status=500)
         watch = [str(x) for x in monitor.opts.get("agent_watch_services") or [] if str(x).strip()]
-        return web.json_response({"ok": True, "watch_services": watch})
+        resp = {"ok": True, "watch_services": watch}
+        offer = monitor.agent_update_offer(agent, body)
+        if offer:
+            resp["agent_update"] = offer
+        return web.json_response(resp)
+
+    async def update(req):
+        """A newer agent for an approved agent that has been offered one, signed with an
+        HMAC of the agent's own token so it can check nothing changed it on the way."""
+        auth = req.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        state, agent = store.lookup(token)
+        if state != "approved":
+            return web.json_response({"error": "unknown agent"}, status=401)
+        os_name = "linux" if agent.get("os_family") == "linux" else "windows"
+        if not monitor.agent_update_offer(agent, {"os_family": os_name, "agent_version": agent.get("agent_version")}):
+            return web.json_response({"error": "no update offered"}, status=404)
+        server = (req.query.get("server") or "").strip().rstrip("/")
+        if not SERVER_RE.match(server):
+            raise web.HTTPBadRequest(text="invalid server address")
+        body = build_agent_script(os_name, server, store.enrol_key, req.query.get("ignore_cert") == "1")
+        key = bytes.fromhex(agentlib.token_hash(token))
+        sig = hmac.new(key, body, hashlib.sha256).hexdigest()
+        log.info("Sending the %s agent update to %s", os_name.capitalize(), agent.get("hostname"))
+        return web.Response(body=body, content_type="application/octet-stream", headers={"X-Rollcall-Signature": sig})
 
     async def ping_view(_req):
         return web.json_response({"ok": True, "service": "ping-monitor-agent-api"})
@@ -3026,6 +3107,7 @@ def build_agent_app(monitor: Monitor) -> web.Application:
     app.router.add_post("/agent/enrol", enrol)
     app.router.add_post("/agent/report", report)
     app.router.add_get("/agent/ping", ping_view)
+    app.router.add_get("/agent/update", update)
     return app
 
 

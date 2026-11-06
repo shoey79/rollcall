@@ -297,7 +297,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 4. Within 5 minutes each server shows under **Waiting for approval**. Check the name and address, then **Approve** (or **Approve all**).
 5. Approved servers that aren't on the dashboard yet are added automatically (by IP), unless `agent_auto_add` is off. Existing entries are matched by name or IP.
 
-`-Install` (or `-Action Install`) copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent** (the name from before the rename, kept so existing installs update in place), that runs every 5 minutes as SYSTEM. Running it again is safe, and it's how you update: put the new script on the share and it's picked up at the next restart (or run `-Install` again). `-Uninstall` (`-Action Uninstall`) removes it. `-ShowReport` (`-Action Report`) prints what it would send, for troubleshooting. The agent writes a log to `C:\ProgramData\PingMonitor\agent.log`.
+`-Install` (or `-Action Install`) copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent** (the name from before the rename, kept so existing installs update in place), that runs every 5 minutes as SYSTEM. Running it again is safe, and it's one way to update: put the new script on the share and it's picked up at the next restart (or run `-Install` again). Agents can also update themselves from the add-on; see [Updating agents automatically](#updating-agents-automatically). `-Uninstall` (`-Action Uninstall`) removes it. `-ShowReport` (`-Action Report`) prints what it would send, for troubleshooting. The agent writes a log to `C:\ProgramData\PingMonitor\agent.log`.
 
 Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and port 8100 open from the servers to Home Assistant. Workstations work too; they just have no roles.
 
@@ -322,6 +322,19 @@ Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and por
 - **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything: those items stay listed, greyed out, and anything new that arrives afterwards turns the check amber again. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
 
 These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
+
+### Updating agents automatically
+
+Each add-on release carries the latest agents. Under **Agents → Download and install**, tick **Update Windows agents automatically** and/or **Update Linux agents automatically**. At its next report, any agent older than the add-on's copy downloads it from Home Assistant and replaces itself; the new version runs from the report after that. To update just one server, use **Update** next to it in the Approved list. Both are off by default, and the Agent column shows which servers are out of date.
+
+An agent only installs an update if all of these pass; otherwise it keeps running the version it has and logs why:
+- It is signed (HMAC-SHA256) with that server's own agent token, which only the server and the add-on know, so a copy changed on the way, or sent by anything other than your add-on, is refused.
+- It is the version offered, and newer than the one running. Agents never downgrade.
+- It parses (PowerShell) or compiles (Python).
+
+The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-agent.py.old`). Only installed agents update themselves: a copy run by hand from a share doesn't. A Group Policy startup script pointing at an older copy on a share won't undo an update, because `-Install` doesn't replace a newer installed copy with an older one.
+
+The agent port uses plain HTTP unless `agent_ssl` is on. Signing stops a tampered update being installed, but turning on `agent_ssl` is still recommended so reports and updates can't be read on the network.
 
 **From the Configuration tab** (all servers):
 - **`agent_disk_warn` / `agent_disk_crit`** are the default disk thresholds.
@@ -364,7 +377,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so n
    If Immich isn't in a local container, add `--immich-url http://host:2283`.
 4. Approve it under **Agents → Waiting for approval**.
 
-It installs to `/usr/local/lib/pingmonitor/`, adds a systemd timer (`pingmonitor-agent.timer`, every 5 minutes, low CPU and disk priority) and keeps its token and log in `/var/lib/pingmonitor/` (root only). Settings, including the API key, are in `/etc/pingmonitor/agent.conf` (root only). To update, download the new version and run `--install` again. `--report` prints what it would send; `--uninstall` removes it. `systemctl status pingmonitor-agent` and `/var/lib/pingmonitor/agent.log` show what it's doing.
+It installs to `/usr/local/lib/pingmonitor/`, adds a systemd timer (`pingmonitor-agent.timer`, every 5 minutes, low CPU and disk priority) and keeps its token and log in `/var/lib/pingmonitor/` (root only). Settings, including the API key, are in `/etc/pingmonitor/agent.conf` (root only). To update, download the new version and run `--install` again, or let it update itself (see [Updating agents automatically](#updating-agents-automatically)). `--report` prints what it would send; `--uninstall` removes it. `systemctl status pingmonitor-agent` and `/var/lib/pingmonitor/agent.log` show what it's doing.
 
 ## Who can see and change things
 

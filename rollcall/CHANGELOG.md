@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.15.0 - 2026-11-06
+
+### Added
+- **Automatic agent updates** (Windows agent 1.0.10, Linux agent 1.0.6). Turn on **Update Windows/Linux agents automatically** under Agents, or use **Update** next to one server. At its next report an older agent downloads the add-on's copy, checks it is signed with its own token, is the version offered and newer, and parses, then replaces itself, keeping the old copy as `.old`. Off by default; agents never downgrade.
+
+### Changed
+- `-Install` / `--install` no longer replaces an installed agent with an older copy (e.g. a Group Policy startup script pointing at an old file on a share).
+
 ## 1.14.1 - 2026-11-06
 
 ### Changed

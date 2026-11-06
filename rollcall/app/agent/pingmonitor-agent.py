@@ -26,6 +26,8 @@ Then approve the server in the Rollcall dashboard (Agents).
 Other options: --uninstall, --report (print the report, send nothing).
 """
 import argparse
+import hashlib
+import hmac
 import concurrent.futures
 import datetime
 import glob
@@ -43,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.5"
+AGENT_VERSION = "1.0.6"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -762,6 +764,42 @@ def send(path, body, token=None, server=None, ignore_cert=False):
         return err.code, None
 
 
+def newer(a, b):
+    return _version_tuple(a) > _version_tuple(b)
+
+
+def self_update(offer, token, server, ignore):
+    """Install a newer agent the add-on offers (only when an admin has turned updates on).
+
+    The download must be signed with this server's own token (HMAC-SHA256), be the
+    version offered and newer than this one, and compile. The old copy is kept as .old;
+    the new one runs from the next report."""
+    version = str((offer or {}).get("version") or "")
+    if not version or not newer(version, AGENT_VERSION) or not os.path.exists(INSTALL_PATH):
+        return
+    url = server.rstrip("/") + "/agent/update?os=linux&server=" + urllib.request.quote(server, safe="")
+    if ignore:
+        url += "&ignore_cert=1"
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    ctx = ssl._create_unverified_context() if (url.startswith("https") and ignore) else None
+    with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        body, sig = resp.read(), resp.headers.get("X-Rollcall-Signature", "")
+    mac = hmac.new(hashlib.sha256(token.encode()).digest(), body, hashlib.sha256).hexdigest()
+    if not sig or not hmac.compare_digest(sig.lower(), mac):
+        raise RuntimeError("the update failed its signature check, so it was not installed")
+    text = body.decode("utf-8")
+    m = re.search(r'^AGENT_VERSION = "([^"]+)"', text, re.M)
+    if not m or m.group(1) != version:
+        raise RuntimeError("the update is not the version offered, so it was not installed")
+    compile(text, INSTALL_PATH, "exec")  # raises SyntaxError if it's broken
+    tmp = INSTALL_PATH + ".new"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700), "w") as f:
+        f.write(text)
+    shutil.copyfile(INSTALL_PATH, INSTALL_PATH + ".old")
+    os.replace(tmp, INSTALL_PATH)
+    log("Updated the agent from %s to %s; the new version runs from the next report" % (AGENT_VERSION, version))
+
+
 def agent_run(conf, report_only=False):
     server = conf.get("server") or SERVER
     key = conf.get("enrol_key") or ENROL_KEY
@@ -805,6 +843,11 @@ def agent_run(conf, report_only=False):
     log("Report sent: %d role(s), %d error(s); run took %.1f s%s" % (
         len(report["roles"]), len(report["errors"]), report["run_ms"] / 1000,
         "; slowest: %s %.1f s" % (slow[0], slow[1] / 1000) if slow else ""))
+    if (body or {}).get("agent_update"):
+        try:
+            self_update(body["agent_update"], state["token"], server, ignore)
+        except Exception as err:  # noqa: BLE001
+            log("WARN Agent update: %s" % err)
 
 
 # --------------------------------------------------------------------------
@@ -844,7 +887,10 @@ def install(args):
                          "add-on address and enrolment key, or pass --server and --enrol-key.")
     os.makedirs(os.path.dirname(INSTALL_PATH), mode=0o755, exist_ok=True)
     src = os.path.abspath(__file__)
-    if src != os.path.abspath(INSTALL_PATH):
+    installed = re.search(r'^AGENT_VERSION = "([^"]+)"', read(INSTALL_PATH), re.M)
+    if installed and newer(installed.group(1), AGENT_VERSION):
+        log("Kept the installed agent %s (newer than this copy, %s)" % (installed.group(1), AGENT_VERSION))
+    elif src != os.path.abspath(INSTALL_PATH):
         shutil.copyfile(src, INSTALL_PATH)
     os.chmod(INSTALL_PATH, 0o700)
     conf = load_json(CONFIG_PATH, {})
