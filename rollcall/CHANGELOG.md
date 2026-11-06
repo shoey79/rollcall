@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.19.3 - 2026-11-06
+
+### Changed
+- Buffalo TeraStation: an array that reports no space used (e.g. one presented as iSCSI, where the server manages the space) now says the space used isn't reported, instead of showing 0%.
+
 ## 1.19.2 - 2026-11-06
 
 ### Fixed
