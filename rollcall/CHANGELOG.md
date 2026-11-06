@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.19.2 - 2026-11-06
+
+### Fixed
+- Buffalo TeraStation: SMART showed as a number. It now shows as **OK** (1), and any other number shows as a warning with its code.
+- Buffalo TeraStation: polls took around 20 seconds waiting for the NAS's system-information table. It's no longer read, because the model and firmware are already in the device description.
+
 ## 1.19.1 - 2026-11-06
 
 ### Fixed
