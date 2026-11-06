@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.19.1 - 2026-11-06
+
+### Fixed
+- Buffalo TeraStation: a constant amber **NAS: no SNMP reply** even though disks and arrays were coming in. The NAS builds its error list and system information on request and can be slow to send them. They now get longer to answer, the system information is read every 6 hours instead of every check, and if they still don't arrive it's noted in Details rather than raised as an alert. Disk and RAID problems still alert as before.
+
 ## 1.19.0 - 2026-11-06
 
 ### Added

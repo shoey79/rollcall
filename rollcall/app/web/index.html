@@ -1456,6 +1456,7 @@ function renderSnmp(x) {
     html += sect("RAID arrays", tbl(["Array", "RAID", "Used"], (nas.arrays || []).filter(a => a.configured).map(a =>
       `<tr><td>${a.index}</td><td>${esc(a.raid)}</td><td>${a.capacity_gib ? `${Math.round(a.used_gib / a.capacity_gib * 100)}% of ${(a.capacity_gib / 1024).toFixed(1)} TiB` : "—"}</td></tr>`)));
     if ((nas.errors || []).length) html += sect("Reported by the NAS", `<ul class="plain">${nas.errors.map(e => `<li>${esc(e)}</li>`).join("")}</ul>`);
+    if ((nas.unavailable || []).length) html += `<p class="hint">The NAS didn't send its ${esc(nas.unavailable.join(" or "))} in time on the last check; it's tried again each check. This doesn't affect the disk and RAID checks.</p>`;
   }
   const ports = d.ports || [], watch = new Set(x.watch || []);
   if (ports.length) {
