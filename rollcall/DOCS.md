@@ -254,6 +254,17 @@ For network kit you can't install an agent on, tick **SNMP** (under Network) whe
 
 Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up as long as it answers ping. The community is only sent to the device; it isn't shown on the dashboard, and leaving the box blank when editing keeps the one already set.
 
+### Syslog
+
+Rollcall receives syslog on **UDP port 514** of the Home Assistant machine. You can change or turn off the port under the add-on's **Configuration → Network**. Tick **Syslog** (under Network) on a device, then set the device to send its logs to Home Assistant's IP address on that port. Messages are matched to the device by the IP address they come from.
+
+- **Logs** next to the device shows its messages, newest first, with search and a severity filter. They're kept for `history_days`, up to 20,000 per device.
+- **Alert on** sets which messages alert: critical and worse, errors and worse (the default), warnings and worse, or only your words. Critical, alert and emergency messages, and any message containing one of your **Always alert** words, go red and notify. Others you alert on go amber. Messages containing a **Never alert** word are kept but never alert.
+- Alerts last 24 hours. **Acknowledge** in Logs clears them now; a new message that alerts sets it off again.
+- Messages from devices that aren't in Rollcall, or that don't have Syslog ticked, aren't kept. They're listed on the Overview under **Syslog from unknown devices**, with a button to add the device or tick Syslog for it.
+
+Each device can send up to 100 messages a second (with bursts up to 200); more than that are dropped, so a chatty device can't fill the database. Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof.
+
 ### How services affect status
 
 - Services are only checked while the computer is answering pings. Each service has its own count: one failure turns its chip amber, and two in a row turns it red.

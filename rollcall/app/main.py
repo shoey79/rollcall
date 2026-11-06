@@ -43,6 +43,7 @@ from aiohttp import ClientSession, ClientTimeout, web
 
 import agents as agentlib
 import snmp as snmplib
+import syslogrx as sysloglib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -77,6 +78,7 @@ IMPORT_MARK = HOSTS_PATH.with_name("imported_options.json")
 AGENTS_PATH = Path(os.environ.get("PM_AGENTS", str(DB_PATH.parent / "agents.json")))
 AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "agent_reports")))
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
+SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
@@ -196,6 +198,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
     ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
     ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID (e.g. Netgear, Buffalo)", _NET, [("SNMP", "snmp:device")]),
+    ("syslog", "Syslog: keep this device's log messages and alert on errors", _NET, [("Syslog", "syslog:device")]),
     ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
     # Home & automation
     ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
@@ -303,6 +306,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or f"{scheme.upper()} {port}", "kind": "http", "port": port,
                  "url": f"{scheme}://{{host}}:{port}{path}", "desc": f"{scheme}:{port}{path}",
                  "fallback": True}]
+    if low == "syslog:device":
+        return [{"label": label or "Syslog", "kind": "syslog", "port": 514, "url": None, "desc": "syslog"}]
     if low == "snmp:device":
         return [{"label": label or "SNMP", "kind": "snmp", "port": 161, "url": None, "desc": "snmp"}]
     if m := _HA.match(entry):
@@ -479,6 +484,21 @@ def validate_entry(raw: dict) -> dict:
             entry["schedule"] = sched
     if raw.get("no_alerts"):
         entry["no_alerts"] = True
+    if "syslog_alert" in raw:
+        try:
+            lvl = int(raw.get("syslog_alert"))
+        except (TypeError, ValueError):
+            raise ValueError("Choose which syslog messages alert")
+        if not -1 <= lvl <= 4:
+            raise ValueError("Choose which syslog messages alert")
+        entry["syslog_alert"] = lvl
+    for k in ("syslog_keywords", "syslog_ignore"):
+        if k in raw:
+            v = raw.get(k) or []
+            words = [w.strip() for w in (v.split(",") if isinstance(v, str) else v) if str(w).strip()]
+            if len(words) > 30 or any(len(str(w)) > 80 for w in words):
+                raise ValueError("Up to 30 syslog words, each up to 80 characters")
+            entry[k] = [str(w) for w in words]
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -989,6 +1009,19 @@ class HomeAssistant:
             log.warning("Couldn't read HA users: %s", err)
             return None
 
+    async def addon_network(self) -> dict:
+        """This add-on's port mappings, e.g. {"5140/udp": 514}."""
+        if not self.enabled:
+            return {}
+        try:
+            async with self.session.get(f"{SUPERVISOR_API}/addons/self/info",
+                                        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status >= 400:
+                    return {}
+                return (await resp.json()).get("data", {}).get("network") or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
     async def addon_slug(self) -> str | None:
         """This add-on's slug from the Supervisor (e.g. local_ping_monitor)."""
         if not self.enabled:
@@ -1058,6 +1091,10 @@ class Host:
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
+    syslog_alert: int = 3              # alert on this severity and worse (-1 = never)
+    syslog_keywords: list[str] = field(default_factory=list)  # always alert (red)
+    syslog_ignore: list[str] = field(default_factory=list)    # never alert
+    syslog_ack: float = 0              # alerts before this are acknowledged
     sched_started: float | None = None # when the current on-period began (start-up allowance, agent grace)
     checks: list[str] = field(default_factory=list)   # as configured
     services: list[Service] = field(default_factory=list)
@@ -1073,6 +1110,12 @@ class Host:
         return f"sensor.ping_monitor_{self.key}"
 
 
+def fmt_ago(sec: float) -> str:
+    sec = max(0, int(sec))
+    return (f"{sec}s ago" if sec < 60 else f"{sec // 60} min ago" if sec < 3600
+            else f"{sec // 3600} h ago" if sec < 86400 else f"{sec // 86400} days ago")
+
+
 def svc_key(h: Host, s: Service) -> str:
     return f"{h.key}__{s.key}"
 
@@ -1085,6 +1128,9 @@ class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
         self.opts = opts
         self.store = store
+        self.logs = sysloglib.LogStore(store.db)
+        self.syslog_unknown: dict[str, dict] = {}
+        self.syslog_port: int | None = None  # the port on the Home Assistant machine, if known
         self.ha = ha
         self.interval = int(opts["interval"])
         self.retry_interval = int(opts["retry_interval"])
@@ -1190,7 +1236,11 @@ class Monitor:
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
-                            **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {})}
+                            **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
+                            **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
+                            **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
+                            **({"syslog_ignore": h.syslog_ignore} if h.syslog_ignore else {}),
+                            **({"syslog_ack": h.syslog_ack} if h.syslog_ack else {})}
                            for h in self.hosts.values()])
 
     def _make_host(self, entry: dict, due: float) -> Host:
@@ -1199,6 +1249,11 @@ class Monitor:
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         h.snmp_community = entry.get("snmp_community") or None
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
+        self._apply_syslog(h, entry)
+        try:
+            h.syslog_ack = float(entry.get("syslog_ack") or 0)
+        except (TypeError, ValueError):
+            h.syslog_ack = 0
         try:
             h.schedule = clean_schedule(entry.get("schedule"))
         except ValueError as err:
@@ -1223,6 +1278,7 @@ class Monitor:
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
+        self._apply_syslog(h, entry)
         if h.no_alerts:
             await self.dismiss(f"ping_monitor_{h.key}")
         old = {s.desc: s for s in h.services}
@@ -1245,6 +1301,55 @@ class Monitor:
         log.info("Updated %s (%s) with checks %s", h.name, h.host, h.checks or "none")
         await self.publish(h)
 
+    @staticmethod
+    def _apply_syslog(h: Host, entry: dict) -> None:
+        if "syslog_alert" in entry:
+            h.syslog_alert = int(entry["syslog_alert"])
+        for k in ("syslog_keywords", "syslog_ignore"):
+            if k in entry:
+                setattr(h, k, list(entry[k]))
+
+    # ---- Syslog ----
+    def _syslog_target(self, ip: str) -> Host | None:
+        cands = [h for h in self.hosts.values() if ip in (h.ip, h.host)]
+        return next((h for h in cands if any(s.kind == "syslog" for s in h.services)), None) or (cands[0] if cands else None)
+
+    def on_syslog(self, ip: str, m: dict) -> None:
+        now = time.time()
+        h = self._syslog_target(ip)
+        if h and any(s.kind == "syslog" for s in h.services):
+            self.logs.add(h.key, now, m)
+            lvl = sysloglib.alert_level(m, h.syslog_alert, h.syslog_keywords, h.syslog_ignore)
+            svc = next(s for s in h.services if s.kind == "syslog")
+            if lvl and (svc.status == GREEN or (lvl == "red" and svc.status != RED)):
+                h.next_due = 0  # show it now rather than at the next check
+            return
+        u = self.syslog_unknown.get(ip)
+        if not u:
+            if len(self.syslog_unknown) >= 100:
+                self.syslog_unknown.pop(min(self.syslog_unknown, key=lambda k: self.syslog_unknown[k]["last"]))
+            u = self.syslog_unknown[ip] = {"ip": ip, "first": now, "count": 0}
+            log.info("Syslog from %s, which %s", ip, f"is {h.name} but Syslog isn't ticked for it" if h
+                     else "isn't a computer in Rollcall")
+        u.update(count=u["count"] + 1, last=now, msg=m["msg"][:200], app=m["app"], sev=m["sev"], name=m["host"],
+                 host_key=h.key if h else None)
+
+    def syslog_state(self, h: Host, now: float) -> tuple:
+        """Alerts in the last 24 hours that haven't been acknowledged."""
+        since = max(now - DAY, h.syslog_ack)
+        rows = self.logs.query(h.key, since=since, max_sev=7, limit=2000)
+        hits = [(sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore), r) for r in rows]
+        hits = [(lvl, r) for lvl, r in hits if lvl]
+        n, last = self.logs.stats(h.key, now - DAY)
+        if not hits:
+            return True, None, (f"{n} message{'s' if n != 1 else ''} in 24 h, last {fmt_ago(now - last)}" if n
+                                else "No messages in the last 24 h")
+        worst = "red" if any(lvl == "red" for lvl, _ in hits) else "amber"
+        top = next(r for lvl, r in hits if lvl == worst)
+        more = f" (+{len(hits) - 1} more)" if len(hits) > 1 else ""
+        detail = f"{sysloglib.SEVERITY[top['sev']]}: {(top['app'] + ': ') if top['app'] else ''}{top['msg']}"[:200] + more
+        return False, None, detail, ("now" if worst == "red" else "warn")
+
     async def delete_host(self, h: Host) -> None:
         h.removed = True
         if self.agent_settings["hosts"].pop(h.key, None) is not None:
@@ -1254,6 +1359,7 @@ class Monitor:
         if h.maint_until:
             self._save_maint()
         self.store.clear(h.key)
+        self.logs.clear(h.key)
         await self.dismiss(f"ping_monitor_{h.key}")
         await self.ha.delete_state(h.entity_id)
         for s in h.services + h.agent_checks:
@@ -1394,6 +1500,7 @@ class Monitor:
             if now - last_prune >= 3600:
                 last_prune = now
                 self.store.prune(now - int(self.opts["history_days"]) * DAY)
+                self.logs.prune(now - int(self.opts["history_days"]) * DAY)
             if self.agents:
                 await self.check_stale_agents(now)
             await asyncio.sleep(1)
@@ -1503,6 +1610,8 @@ class Monitor:
                 return await self.ha_check(s)
             if s.kind == "snmp":
                 return await self.snmp_check(h, now)
+            if s.kind == "syslog":
+                return self.syslog_state(h, now)
             async with self.sem:
                 if s.kind == "tcp":
                     return await tcp_check(h.ip, s.port, self.svc_timeout)
@@ -1519,12 +1628,13 @@ class Monitor:
                 ok, lat, detail = False, None, type(res).__name__
             else:
                 ok, lat, detail = res[:3]
-            warn = not isinstance(res, Exception) and len(res) > 3 and res[3] == "warn"
+            level = res[3] if not isinstance(res, Exception) and len(res) > 3 else None
+            warn = level == "warn"
             s.last_check = now
             s.latency = lat if ok else None
             s.detail = detail
             s.failures = 0 if ok or warn else s.failures + 1
-            new = GREEN if ok else AMBER if warn or s.failures == 1 else RED
+            new = GREEN if ok else AMBER if warn or (s.failures == 1 and level != "now") else RED
             ok = ok or warn  # a warning isn't counted as downtime
             self.store.add(svc_key(h, s), now, ok, s.latency)
             if new != s.status:
@@ -1641,6 +1751,14 @@ class Monitor:
             "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
         })
         tag = f"ping_monitor_{svc_key(h, s)}"
+        if new == RED and s.kind == "syslog":
+            msg = f"{h.name} ({h.ip or h.host}) logged {s.detail}"
+            await self.notify(f"🟠 {h.name}: syslog alert", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} syslog", msg)
+            return
+        if old == RED and new == GREEN and s.kind == "syslog":
+            await self.dismiss(tag)
+            return
         if new == RED and s.kind == "snmp":
             msg = f"{h.name} ({h.ip or h.host}): {s.detail}."
             await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag)
@@ -2338,6 +2456,8 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
+                "syslog": any(s.kind == "syslog" for s in h.services), "syslog_alert": h.syslog_alert,
+                "syslog_keywords": h.syslog_keywords, "syslog_ignore": h.syslog_ignore,
                 "services": [{
                     "key": s.key, "label": s.label, "target": s.desc, "status": s.status, "kind": s.kind,
                     "latency_ms": s.latency, "detail": s.detail,
@@ -2348,6 +2468,7 @@ class Monitor:
                 "agent": self._agent_summary(h),
             })
         return {"now": time.time(), "interval": self.interval,
+                "syslog_port": self.syslog_port, "syslog_unknown": sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
                 "ping_mode": PING_MODE,
@@ -2842,6 +2963,44 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                 h.next_due = 0
         return web.json_response({"watch": h.snmp_watch})
 
+    async def host_syslog(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        try:
+            max_sev = max(0, min(7, int(req.query.get("sev", "7"))))
+            limit = max(1, min(2000, int(req.query.get("limit", "300"))))
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad filter")
+        now = time.time()
+        rows = monitor.logs.query(h.key, 0, max_sev, (req.query.get("q") or "").strip()[:100], limit)
+        since = max(now - DAY, h.syslog_ack)
+        for r in rows:
+            r["alert"] = sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore) if r["ts"] >= since else None
+            r["acked"] = bool(h.syslog_ack and r["ts"] < h.syslog_ack and r["ts"] >= now - DAY and
+                              sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore))
+        n, last = monitor.logs.stats(h.key, now - DAY)
+        svc = next((s for s in h.services if s.kind == "syslog"), None)
+        return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "rows": rows, "count_24h": n, "last": last,
+                                  "alert": h.syslog_alert, "keywords": h.syslog_keywords, "ignore": h.syslog_ignore,
+                                  "ack": h.syslog_ack, "status": svc.status if svc else None,
+                                  "detail": svc.detail if svc else None, "port": monitor.syslog_port, "now": now})
+
+    async def host_syslog_ack(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        h.syslog_ack = time.time()
+        monitor._save_hosts()
+        log.info("%s: syslog alerts acknowledged", h.name)
+        h.next_due = 0
+        return web.json_response({"ack": h.syslog_ack})
+
+    async def syslog_forget(req):
+        body = await req.json()
+        monitor.syslog_unknown.pop(str(body.get("ip")), None)
+        return web.json_response({"ok": True})
+
     async def delete_host(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -2861,6 +3020,9 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts", editor_only(add_host))
     app.router.add_put("/api/hosts/{key}", editor_only(update_host))
     app.router.add_get("/api/hosts/{key}/snmp", host_snmp)
+    app.router.add_get("/api/hosts/{key}/syslog", host_syslog)
+    app.router.add_post("/api/hosts/{key}/syslog/ack", editor_only(host_syslog_ack))
+    app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
@@ -3301,6 +3463,26 @@ async def main() -> None:
             log.info("Agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
         except Exception as err:  # noqa: BLE001
             log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.create_datagram_endpoint(lambda: sysloglib.Receiver(monitor.on_syslog), local_addr=("0.0.0.0", SYSLOG_PORT))
+            net = await ha.addon_network()
+            monitor.syslog_port = net.get(f"{SYSLOG_PORT}/udp") if net else None
+            if net and not monitor.syslog_port:
+                log.info("Syslog: receiver ready, but its port isn't mapped (add-on Configuration > Network)")
+            else:
+                log.info("Syslog: listening on UDP port %s", monitor.syslog_port or SYSLOG_PORT)
+
+            async def flusher():
+                while True:
+                    await asyncio.sleep(1)
+                    try:
+                        monitor.logs.flush()
+                    except Exception as err:  # noqa: BLE001
+                        log.warning("Syslog: couldn't save messages: %s", err)
+            monitor._syslog_flusher = asyncio.create_task(flusher())
+        except Exception as err:  # noqa: BLE001
+            log.error("Syslog receiver could not start on UDP port %d: %s", SYSLOG_PORT, err)
         await monitor.run()
 
 
