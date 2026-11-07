@@ -1528,7 +1528,7 @@ function renderSnmp(x) {
   }
   html += sect("System", `<div class="kv">
     <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
-    ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}</div>
+    ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
     <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests${d.per && d.per < 25 ? `, ${d.per} rows at a time` : ""}</div></div>` +
     (d.timing ? `<p class="hint" style="margin-top:8px">Time per part: ${Object.entries(d.timing).map(([k, v]) => `${esc(k)} ${v} ms`).join(", ")}</p>` : ""));
   body.innerHTML = html;
