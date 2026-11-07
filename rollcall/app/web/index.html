@@ -272,7 +272,8 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   .tile b{font-size:22px}
 }
 .snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}
-.snmpbox .field{max-width:320px}
+.snmpbox .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 12px;margin-bottom:6px}
+.snmpbox select,.snmpbox input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0;width:100%}
 tr.bad td{background:color-mix(in srgb,var(--red) 8%,transparent)}
 tr.warn td{background:color-mix(in srgb,var(--amber) 8%,transparent)}
 ul.plain{margin:0;padding-left:18px}
@@ -433,8 +434,18 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
           <p class="hint" id="syslogHint">Set the device to send syslog to Home Assistant's IP address, UDP port 514. Critical messages and the words above go red and notify; others you alert on go amber. Comma-separated, not case-sensitive.</p>
         </div>
         <div id="snmpBox" hidden class="snmpbox">
-          <label class="field">SNMP community (v2c, read-only)<input id="fSnmpComm" maxlength="64" autocomplete="off" spellcheck="false" placeholder="public"></label>
-          <p class="hint">Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). Choose which switch ports should alert when they go down from the device's <b>Details</b>.</p>
+          <div class="fields">
+            <label class="field">SNMP version<select id="fSnmpVer"><option value="2c">v2c (community)</option><option value="3">v3 (user and passwords)</option></select></label>
+            <label class="field" id="snmpV2"><span>Community (read-only)</span><input id="fSnmpComm" maxlength="64" autocomplete="off" spellcheck="false" placeholder="public"></label>
+          </div>
+          <div class="fields" id="snmpV3" hidden>
+            <label class="field">User name<input id="fV3User" maxlength="32" autocomplete="off" spellcheck="false"></label>
+            <label class="field">Authentication<select id="fV3Auth"><option value="">None</option><option>MD5</option><option selected>SHA</option><option>SHA-224</option><option>SHA-256</option><option>SHA-384</option><option>SHA-512</option></select></label>
+            <label class="field" id="v3AuthPw">Authentication password<input id="fV3AuthPass" type="password" maxlength="64" autocomplete="new-password"></label>
+            <label class="field">Privacy (encryption)<select id="fV3Priv"><option value="">None</option><option>DES</option><option selected>AES-128</option><option>AES-192</option><option>AES-256</option></select></label>
+            <label class="field" id="v3PrivPw">Privacy password<input id="fV3PrivPass" type="password" maxlength="64" autocomplete="new-password"></label>
+          </div>
+          <p class="hint" id="snmpHint"></p>
         </div>
       </fieldset>
       <fieldset>
@@ -1866,6 +1877,20 @@ function filterPresets() {
   document.getElementById("noMatch").hidden = any;
 }
 
+function snmpShow() {
+  const v3 = document.getElementById("fSnmpVer").value === "3";
+  const auth = document.getElementById("fV3Auth"), priv = document.getElementById("fV3Priv");
+  if (!auth.value) priv.value = "";
+  priv.disabled = !auth.value;
+  document.getElementById("snmpV2").hidden = v3;
+  document.getElementById("snmpV3").hidden = !v3;
+  document.getElementById("v3AuthPw").hidden = !auth.value;
+  document.getElementById("v3PrivPw").hidden = !priv.value;
+  document.getElementById("snmpHint").innerHTML = v3
+    ? "Create a read-only SNMP v3 user on the device and enter the same details here. SHA with AES-128 is the most widely supported pair; passwords are 8 characters or more. Passwords are only sent to the device as keys, and aren't shown on the dashboard."
+    : "Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). The community travels unencrypted: use v3 if the device supports it.";
+}
+for (const id of ["fSnmpVer", "fV3Auth", "fV3Priv"]) document.getElementById(id).addEventListener("change", snmpShow);
 function updatePicked() {
   const snmpOn = !!form.querySelector('.preset input[value="snmp"]:checked');
   document.getElementById("snmpBox").hidden = !snmpOn;
@@ -1970,6 +1995,15 @@ async function openDialog(h) {
   document.getElementById("syslogHint").innerHTML = `Set the device to send syslog to Home Assistant's IP address, UDP port <b>${data && data.syslog_port ? data.syslog_port : 514}</b>. Critical messages and the words above go red and notify; others you alert on go amber. Comma-separated, not case-sensitive.`;
   const comm = document.getElementById("fSnmpComm");
   comm.value = ""; comm.placeholder = h && h.snmp_community_set ? "Unchanged (type a new one to replace it)" : "public";
+  const v3 = h && h.snmp_v3;
+  document.getElementById("fSnmpVer").value = h && h.snmp_version === "3" ? "3" : "2c";
+  document.getElementById("fV3User").value = v3 ? v3.user : "";
+  document.getElementById("fV3Auth").value = v3 ? (v3.auth || "") : "SHA";
+  document.getElementById("fV3Priv").value = v3 ? (v3.priv || "") : "AES-128";
+  for (const [id, set] of [["fV3AuthPass", v3 && v3.auth_set], ["fV3PrivPass", v3 && v3.priv_set]]) {
+    const el = document.getElementById(id); el.value = ""; el.placeholder = set ? "Unchanged (type to replace)" : "8 characters or more";
+  }
+  snmpShow();
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -1992,7 +2026,17 @@ form.addEventListener("submit", async e => {
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
   const commIn = document.getElementById("fSnmpComm").value;
-  if (!document.getElementById("snmpBox").hidden && commIn) body.snmp_community = commIn;
+  if (!document.getElementById("snmpBox").hidden) {
+    if (commIn) body.snmp_community = commIn;
+    body.snmp_version = document.getElementById("fSnmpVer").value;
+    if (body.snmp_version === "3") {
+      body.snmp_v3 = {user: document.getElementById("fV3User").value.trim(), auth: document.getElementById("fV3Auth").value || null,
+        priv: document.getElementById("fV3Priv").value || null};
+      const ap = document.getElementById("fV3AuthPass").value, pp = document.getElementById("fV3PrivPass").value;
+      if (ap) body.snmp_v3.auth_pass = ap;
+      if (pp) body.snmp_v3.priv_pass = pp;
+    }
+  }
   if (!document.getElementById("syslogBox").hidden) {
     body.syslog_alert = +document.getElementById("fSysAlert").value;
     body.syslog_keywords = document.getElementById("fSysWords").value;

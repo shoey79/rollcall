@@ -1,4 +1,4 @@
-"""A small SNMP v2c client (GET and GETBULK walks over UDP), with no dependencies,
+"""A small SNMP client (v2c, and v3 with authentication and privacy; GET and GETBULK walks over UDP),
 plus the readers Rollcall uses for switches, PoE and Buffalo TeraStation NAS units."""
 from __future__ import annotations
 
@@ -89,47 +89,109 @@ def _value(tag: int, body: bytes):
     return body.hex()
 
 
-def _parse(buf: bytes) -> tuple[int, int, list[tuple[str, object]]]:
-    _, msg, _ = _read(buf, 0)
-    i = 0
-    _, _ver, i = _read(msg, i)
-    _, _comm, i = _read(msg, i)
-    _, pdu, _ = _read(msg, i)
-    j = 0
-    _, rid, j = _read(pdu, j)
-    _, err, j = _read(pdu, j)
-    _, _idx, j = _read(pdu, j)
-    _, binds, _ = _read(pdu, j)
-    out, k = [], 0
-    while k < len(binds):
-        _, vb, k = _read(binds, k)
-        _, ob, m = _read(vb, 0)
-        vt, vv, _ = _read(vb, m)
-        out.append((_dec_oid(ob), _value(vt, vv)))
-    return int.from_bytes(rid, "big", signed=True), int.from_bytes(err, "big"), out
+# --------------------------------------------------------------------------
+# SNMP v3 security (USM: RFC 3414, AES RFC 3826, SHA-2 RFC 7860)
+# --------------------------------------------------------------------------
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+
+AUTH = {  # name: (hash, digest bytes sent)
+    "MD5": ("md5", 12), "SHA": ("sha1", 12), "SHA-224": ("sha224", 16),
+    "SHA-256": ("sha256", 24), "SHA-384": ("sha384", 32), "SHA-512": ("sha512", 48)}
+PRIV = {"DES": 16, "AES-128": 16, "AES-192": 24, "AES-256": 32}  # localized key bytes needed
+_USM_REPORTS = {
+    "1.3.6.1.6.3.15.1.1.1.0": "the device doesn't allow this security level for that user",
+    "1.3.6.1.6.3.15.1.1.3.0": "unknown SNMP v3 user name",
+    "1.3.6.1.6.3.15.1.1.5.0": "wrong authentication password or protocol",
+    "1.3.6.1.6.3.15.1.1.6.0": "wrong privacy password or protocol",
+}
+_NOT_IN_TIME = "1.3.6.1.6.3.15.1.1.2.0"
+_UNKNOWN_ENGINE = "1.3.6.1.6.3.15.1.1.4.0"
+
+
+def _password_key(password: str, hname: str) -> bytes:
+    """RFC 3414 A.2: the password repeated to 1 MB, hashed."""
+    pw = password.encode()
+    return hashlib.new(hname, (pw * (1048576 // len(pw) + 1))[:1048576]).digest()
+
+
+def _localize(key: bytes, engine: bytes, hname: str) -> bytes:
+    return hashlib.new(hname, key + engine + key).digest()
+
+
+def _priv_key(password: str, hname: str, engine: bytes, need: int) -> bytes:
+    k = _localize(_password_key(password, hname), engine, hname)
+    while len(k) < need:  # AES-192/256 with a short hash: extend as Net-SNMP does (Blumenthal)
+        k += hashlib.new(hname, k).digest()
+    return k[:need]
+
+
+def _cipher(priv: str, key: bytes, iv: bytes):
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    if priv == "DES":
+        try:
+            from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+        except ImportError:  # cryptography < 43
+            TripleDES = algorithms.TripleDES  # noqa: N806
+        k = key[:8]
+        return Cipher(TripleDES(k + k + k), modes.CBC(iv))  # 3DES with K1=K2=K3 is single DES
+    try:
+        from cryptography.hazmat.decrepit.ciphers.modes import CFB
+    except ImportError:  # cryptography < 47
+        CFB = modes.CFB  # noqa: N806
+    return Cipher(algorithms.AES(key), CFB(iv))
+
+
+class V3:
+    """User settings for SNMP v3."""
+
+    def __init__(self, user: str, auth: str | None = None, auth_pass: str = "", priv: str | None = None,
+                 priv_pass: str = "", context: str = ""):
+        if auth and auth not in AUTH:
+            raise ValueError(f"unknown authentication protocol {auth}")
+        if priv and priv not in PRIV:
+            raise ValueError(f"unknown privacy protocol {priv}")
+        if priv and not auth:
+            raise ValueError("privacy needs authentication too")
+        self.user, self.auth, self.auth_pass, self.priv, self.priv_pass, self.context = \
+            user, auth, auth_pass, priv, priv_pass, context
+        self._keys: dict[bytes, tuple[bytes, bytes]] = {}
+
+    def keys(self, engine: bytes) -> tuple[bytes, bytes]:
+        if engine not in self._keys:
+            hname = AUTH[self.auth][0] if self.auth else "sha1"
+            ak = _localize(_password_key(self.auth_pass, hname), engine, hname) if self.auth else b""
+            pk = _priv_key(self.priv_pass, hname, engine, PRIV[self.priv]) if self.priv else b""
+            self._keys[engine] = (ak, pk)
+        return self._keys[engine]
 
 
 # --------------------------------------------------------------------------
 # Transport
 # --------------------------------------------------------------------------
+_ERRSTAT = {6: "the device refused access (noAccess)",
+            16: "the device doesn't allow this user or community at this security level (authorizationError)"}
+
+
 class SnmpError(Exception):
     def __init__(self, msg: str, status: int | None = None):
         super().__init__(msg)
-        self.status = status  # SNMP error-status from the device, None for no reply
+        self.status = status  # SNMP error-status from the device; None for no reply; -1 for a security problem
 
 
 class _Proto(asyncio.DatagramProtocol):
     def __init__(self):
         self.waiting: dict[int, asyncio.Future] = {}
+        self.key = None  # datagram -> id it answers
 
     def datagram_received(self, data, addr):
         try:
-            rid, err, binds = _parse(data)
+            k = self.key(data)
         except Exception:  # noqa: BLE001 - ignore anything malformed
             return
-        fut = self.waiting.pop(rid, None)
+        fut = self.waiting.pop(k, None)
         if fut and not fut.done():
-            fut.set_result((err, binds))
+            fut.set_result(data)
 
     def error_received(self, exc):
         for fut in self.waiting.values():
@@ -138,41 +200,226 @@ class _Proto(asyncio.DatagramProtocol):
         self.waiting.clear()
 
 
-class Session:
-    """One device. Use as `async with Session(ip, community) as s:`."""
+def _binds(pdu: bytes) -> tuple[int, int, list[tuple[str, object]]]:
+    j = 0
+    _, rid, j = _read(pdu, j)
+    _, err, j = _read(pdu, j)
+    _, _idx, j = _read(pdu, j)
+    _, bl, _ = _read(pdu, j)
+    out, k = [], 0
+    while k < len(bl):
+        _, vb, k = _read(bl, k)
+        _, ob, m = _read(vb, 0)
+        vt, vv, _ = _read(vb, m)
+        out.append((_dec_oid(ob), _value(vt, vv)))
+    return int.from_bytes(rid, "big", signed=True), int.from_bytes(err, "big"), out
 
-    def __init__(self, host: str, community: str, timeout: float = 2.0, retries: int = 1, port: int = 161, per: int = 25):
+
+def _v3_header(data: bytes) -> dict:
+    _, msg, _ = _read(data, 0)
+    i = 0
+    _, ver, i = _read(msg, i)
+    if int.from_bytes(ver, "big") != 3:
+        raise ValueError("not v3")
+    _, glob, i = _read(msg, i)
+    g = 0
+    _, mid, g = _read(glob, g)
+    _, _max, g = _read(glob, g)
+    _, flags, g = _read(glob, g)
+    _, sp, i = _read(msg, i)
+    _, sec, _ = _read(sp, 0)
+    q = 0
+    _, eng, q = _read(sec, q)
+    _, boots, q = _read(sec, q)
+    _, etime, q = _read(sec, q)
+    _, user, q = _read(sec, q)
+    _, authp, q = _read(sec, q)
+    _, privp, q = _read(sec, q)
+    dtag, dbody, _ = _read(msg, i)
+    return {"id": int.from_bytes(mid, "big"), "flags": flags[0] if flags else 0, "engine": eng,
+            "boots": int.from_bytes(boots, "big") if boots else 0, "time": int.from_bytes(etime, "big") if etime else 0,
+            "user": user, "authp": authp, "privp": privp, "dtag": dtag, "data": dbody}
+
+
+class Session:
+    """One device. Use as `async with Session(ip, community) as s:`, or pass v3=V3(...) for SNMP v3."""
+
+    def __init__(self, host: str, community: str = "", timeout: float = 2.0, retries: int = 1, port: int = 161,
+                 per: int = 25, v3: V3 | None = None):
         self.host, self.community, self.timeout, self.retries, self.port = host, community, timeout, retries, port
         self.requests = 0
         self.per = per  # rows asked for at a time; lowered if the device can't keep up
+        self.v3 = v3
+        self.engine, self.boots, self.etime, self.etime_at = b"", 0, 0, 0.0
+        self._salt = secrets.randbits(64)
 
     async def __aenter__(self):
         loop = asyncio.get_running_loop()
         self.transport, self.proto = await loop.create_datagram_endpoint(_Proto, remote_addr=(self.host, self.port))
+        self.proto.key = (lambda d: _v3_header(d)["id"]) if self.v3 else self._v2_key
         return self
+
+    @staticmethod
+    def _v2_key(data: bytes) -> int:
+        _, msg, _ = _read(data, 0)
+        i = 0
+        _, _ver, i = _read(msg, i)
+        _, _comm, i = _read(msg, i)
+        _, pdu, _ = _read(msg, i)
+        return _binds(pdu)[0]
 
     async def __aexit__(self, *exc):
         self.transport.close()
 
+    async def _send(self, key: int, packet: bytes, timeout: float) -> bytes | None:
+        fut = asyncio.get_running_loop().create_future()
+        self.proto.waiting[key] = fut
+        self.transport.sendto(packet)
+        self.requests += 1
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self.proto.waiting.pop(key, None)
+            return None
+        except OSError as e:  # e.g. port unreachable
+            self.proto.waiting.pop(key, None)
+            raise SnmpError(f"no SNMP reply ({e.strerror or e})") from None
+
     async def _ask(self, tag: int, oids: list[str], a: int = 0, b: int = 0, timeout: float | None = None):
-        for attempt in range(self.retries + 1):
+        if self.v3:
+            return await self._ask_v3(tag, oids, a, b, timeout)
+        for _attempt in range(self.retries + 1):
             rid = secrets.randbelow(2 ** 31 - 1) + 1
-            fut = asyncio.get_running_loop().create_future()
-            self.proto.waiting[rid] = fut
-            self.transport.sendto(_request(self.community, tag, rid, oids, a, b))
-            self.requests += 1
-            try:
-                err, binds = await asyncio.wait_for(fut, timeout or self.timeout)
-            except asyncio.TimeoutError:
-                self.proto.waiting.pop(rid, None)
+            data = await self._send(rid, _request(self.community, tag, rid, oids, a, b), timeout or self.timeout)
+            if data is None:
                 continue
-            except OSError as e:  # e.g. port unreachable
-                self.proto.waiting.pop(rid, None)
-                raise SnmpError(f"no SNMP reply ({e.strerror or e})") from None
+            _, msg, _ = _read(data, 0)
+            i = 0
+            _, _ver, i = _read(msg, i)
+            _, _comm, i = _read(msg, i)
+            _, pdu, _ = _read(msg, i)
+            _, err, binds = _binds(pdu)
             if err:
-                raise SnmpError(f"device returned SNMP error {err}", err)
+                raise SnmpError(_ERRSTAT.get(err, f"device returned SNMP error {err}"), err)
             return binds
         raise SnmpError("no SNMP reply (check SNMP is on and the community name is right)")
+
+    # ---- v3 ----
+    def _v3_packet(self, msg_id: int, flags: int, scoped: bytes, user: bytes) -> bytes:
+        v = self.v3
+        authp = privp = b""
+        data = _tlv(0x30, scoped)
+        if flags & 2:  # privacy
+            ak, pk = v.keys(self.engine)
+            self._salt = (self._salt + 1) & (2 ** 64 - 1)
+            if v.priv == "DES":
+                privp = self.boots.to_bytes(4, "big") + (self._salt & 0xFFFFFFFF).to_bytes(4, "big")
+                iv = bytes(x ^ y for x, y in zip(pk[8:16], privp))
+                plain = data + b"\x00" * (-len(data) % 8)
+            else:
+                privp = self._salt.to_bytes(8, "big")
+                iv = self.boots.to_bytes(4, "big") + self._engine_time().to_bytes(4, "big") + privp
+                plain = data
+            enc = _cipher(v.priv, pk, iv).encryptor()
+            data = _tlv(0x04, enc.update(plain) + enc.finalize())
+        if flags & 1:
+            authp = b"\x00" * AUTH[v.auth][1]
+        sec = _tlv(0x30, _tlv(0x04, self.engine) + _int(self.boots) + _int(self._engine_time() if self.engine else 0)
+                   + _tlv(0x04, user) + _tlv(0x04, authp) + _tlv(0x04, privp))
+        glob = _tlv(0x30, _int(msg_id) + _int(65507) + _tlv(0x04, bytes([flags])) + _int(3))
+        packet = _tlv(0x30, _int(3) + glob + _tlv(0x04, sec) + data)
+        if flags & 1:
+            ak, _ = v.keys(self.engine)
+            hname, n = AUTH[v.auth]
+            digest = hmac.new(ak, packet, hname).digest()[:n]
+            at = packet.index(_tlv(0x04, authp)) + 2
+            packet = packet[:at] + digest + packet[at + n:]
+        return packet
+
+    def _engine_time(self) -> int:
+        return int(self.etime + (time.monotonic() - self.etime_at))
+
+    def _flags(self) -> int:
+        return (1 if self.v3.auth else 0) | (2 if self.v3.priv else 0) | 4  # 4 = reportable
+
+    async def _discover(self, timeout: float) -> None:
+        """Learn the device's engine ID, boots and time (RFC 3414 4)."""
+        for _attempt in range(self.retries + 1):
+            mid = secrets.randbelow(2 ** 31 - 1) + 1
+            scoped = _tlv(0x04, b"") + _tlv(0x04, b"") + _tlv(0xA0, _int(mid) + _int(0) + _int(0) + _tlv(0x30, b""))
+            data = await self._send(mid, self._v3_packet(mid, 4, scoped, b""), timeout)
+            if data is None:
+                continue
+            h = _v3_header(data)
+            self.engine, self.boots, self.etime, self.etime_at = h["engine"], h["boots"], h["time"], time.monotonic()
+            if not self.engine:
+                raise SnmpError("the device didn't send its SNMP engine ID", -1)
+            return
+        raise SnmpError("no SNMP v3 reply (check SNMP v3 is on for this device)")
+
+    def _open(self, h: dict, raw: bytes) -> bytes:
+        """Check a reply's signature and decrypt it; returns the scoped PDU's contents."""
+        v = self.v3
+        if h["flags"] & 1:
+            if not v.auth:
+                raise SnmpError("the device's reply was signed, but no authentication protocol is set", -1)
+            ak, _ = v.keys(self.engine)
+            hname, n = AUTH[v.auth]
+            if len(h["authp"]) != n:
+                raise SnmpError("the device's reply wasn't signed as expected", -1)
+            at = raw.find(h["authp"])
+            zeroed = raw[:at] + b"\x00" * n + raw[at + n:]
+            if not hmac.compare_digest(hmac.new(ak, zeroed, hname).digest()[:n], h["authp"]):
+                raise SnmpError("the device's reply failed its signature check (wrong authentication password?)", -1)
+        if h["flags"] & 2:
+            if not v.priv:
+                raise SnmpError("the device's reply was encrypted, but no privacy protocol is set", -1)
+            _, pk = v.keys(self.engine)
+            if v.priv == "DES":
+                iv = bytes(x ^ y for x, y in zip(pk[8:16], h["privp"]))
+            else:
+                iv = h["boots"].to_bytes(4, "big") + h["time"].to_bytes(4, "big") + h["privp"]
+            dec = _cipher(v.priv, pk, iv).decryptor()
+            plain = dec.update(h["data"]) + dec.finalize()
+            try:
+                _, scoped, _ = _read(plain, 0)
+            except IndexError:
+                raise SnmpError("couldn't decrypt the reply (wrong privacy password or protocol)", -1) from None
+            return scoped
+        return h["data"]
+
+    async def _ask_v3(self, tag: int, oids: list[str], a: int, b: int, timeout: float | None):
+        timeout = timeout or self.timeout
+        if not self.engine:
+            await self._discover(timeout)
+        user = self.v3.user.encode()
+        for attempt in range(self.retries + 2):
+            mid = secrets.randbelow(2 ** 31 - 1) + 1
+            binds = b"".join(_tlv(0x30, _oid(o) + b"\x05\x00") for o in oids)
+            pdu = _tlv(tag, _int(mid) + _int(a) + _int(b) + _tlv(0x30, binds))
+            scoped = _tlv(0x04, self.engine) + _tlv(0x04, self.v3.context.encode()) + pdu
+            data = await self._send(mid, self._v3_packet(mid, self._flags(), scoped, user), timeout)
+            if data is None:
+                continue
+            h = _v3_header(data)
+            body = self._open(h, data)
+            i = 0
+            _, _ceng, i = _read(body, i)
+            _, _cname, i = _read(body, i)
+            ptag, pbody, _ = _read(body, i)
+            _, err, vbinds = _binds(pbody)
+            if ptag == 0xA8:  # Report: a USM problem
+                oid = vbinds[0][0] if vbinds else ""
+                if oid in (_NOT_IN_TIME, _UNKNOWN_ENGINE) and attempt == 0:
+                    self.engine, self.boots, self.etime, self.etime_at = h["engine"], h["boots"], h["time"], time.monotonic()
+                    continue
+                raise SnmpError(_USM_REPORTS.get(oid, f"the device refused the request ({oid})"), -1)
+            if self.v3.auth and not h["flags"] & 1:
+                raise SnmpError("the device's reply wasn't signed", -1)
+            if err:
+                raise SnmpError(_ERRSTAT.get(err, f"device returned SNMP error {err}"), err)
+            return vbinds
+        raise SnmpError("no SNMP v3 reply (check the privacy password and protocol: devices ignore requests they can't decrypt)")
 
     async def get(self, oids: list[str]) -> dict[str, object]:
         return {o: v for o, v in await self._ask(0xA0, oids) if v is not END}
@@ -241,7 +488,7 @@ def _smart(v) -> str:
     return str(v)
 
 
-async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25) -> dict:
+async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25, v3: V3 | None = None) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     timing: dict[str, int] = {}
@@ -259,7 +506,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         finally:
             timing[name] = timing.get(name, 0) + int((time.monotonic() - t) * 1000)
 
-    async with Session(host, community, timeout, port=port, per=per) as s:
+    async with Session(host, community, timeout, port=port, per=per, v3=v3) as s:
         sysv = await s.get([f"{SYS}.1.0", f"{SYS}.2.0", f"{SYS}.3.0", f"{SYS}.5.0", f"{SYS}.6.0"])
         if not sysv:
             raise SnmpError("the device answered but returned no system information")

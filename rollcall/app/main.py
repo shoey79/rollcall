@@ -499,6 +499,33 @@ def validate_entry(raw: dict) -> dict:
             if len(words) > 30 or any(len(str(w)) > 80 for w in words):
                 raise ValueError("Up to 30 syslog words, each up to 80 characters")
             entry[k] = [str(w) for w in words]
+    if "snmp_version" in raw:
+        ver = str(raw.get("snmp_version") or "2c")
+        if ver not in ("2c", "3"):
+            raise ValueError("SNMP version must be 2c or 3")
+        entry["snmp_version"] = ver
+        if ver == "3":
+            v = raw.get("snmp_v3") or {}
+            user = str(v.get("user") or "").strip()
+            if not user or len(user) > 32 or not user.isprintable():
+                raise ValueError("Enter the SNMP v3 user name (up to 32 characters)")
+            auth = v.get("auth") or None
+            priv = v.get("priv") or None
+            if auth and auth not in snmplib.AUTH:
+                raise ValueError("Unknown SNMP v3 authentication protocol")
+            if priv and priv not in snmplib.PRIV:
+                raise ValueError("Unknown SNMP v3 privacy protocol")
+            if priv and not auth:
+                raise ValueError("SNMP v3 privacy needs authentication too")
+            clean = {"user": user, "auth": auth, "priv": priv}
+            for k in ("auth_pass", "priv_pass"):
+                pw = v.get(k)
+                if pw not in (None, ""):
+                    pw = str(pw)
+                    if not 8 <= len(pw) <= 64:
+                        raise ValueError("SNMP v3 passwords must be 8 to 64 characters")
+                    clean[k] = pw
+            entry["snmp_v3"] = clean
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1087,6 +1114,8 @@ class Host:
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
+    snmp_version: str = "2c"
+    snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
     snmp_watch: list[int] = field(default_factory=list)  # switch ports (ifIndex) that alert when down
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
@@ -1236,6 +1265,7 @@ class Monitor:
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
+                            **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1248,6 +1278,8 @@ class Monitor:
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         h.snmp_community = entry.get("snmp_community") or None
+        h.snmp_version = "3" if entry.get("snmp_version") == "3" else "2c"
+        h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
         self._apply_syslog(h, entry)
         try:
@@ -1278,6 +1310,14 @@ class Monitor:
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
+        if "snmp_version" in entry:
+            h.snmp_version = entry["snmp_version"]
+            if h.snmp_version == "3":
+                new = dict(entry["snmp_v3"])
+                for k in ("auth_pass", "priv_pass"):  # blank keeps the one already set
+                    if k not in new and h.snmp_v3.get(k):
+                        new[k] = h.snmp_v3[k]
+                h.snmp_v3 = new
         self._apply_syslog(h, entry)
         if h.no_alerts:
             await self.dismiss(f"ping_monitor_{h.key}")
@@ -1647,7 +1687,12 @@ class Monitor:
         problems (a watched port down, a failed disk) go red if they're still there next time."""
         prev = h.snmp_data
         try:
+            v3 = None
+            if h.snmp_version == "3":
+                c = h.snmp_v3
+                v3 = snmplib.V3(c.get("user", ""), c.get("auth"), c.get("auth_pass", ""), c.get("priv"), c.get("priv_pass", ""))
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
+                                  v3=v3,
                                   per=int((prev or {}).get("per") or 25),  # what worked last time
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:
@@ -2457,6 +2502,10 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
+                "snmp_version": h.snmp_version,
+                "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
+                            "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
+                if h.snmp_version == "3" else None,
                 "syslog": any(s.kind == "syslog" for s in h.services), "syslog_alert": h.syslog_alert,
                 "syslog_keywords": h.syslog_keywords, "syslog_ignore": h.syslog_ignore,
                 "services": [{
@@ -2921,8 +2970,19 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}),
                                      content_type="application/json")
 
+    def check_v3(entry: dict, h: Host | None) -> None:
+        """SNMP v3 passwords: needed when adding; left blank when editing keeps the saved ones."""
+        if entry.get("snmp_version") != "3":
+            return
+        v, old = entry["snmp_v3"], (h.snmp_v3 if h else {})
+        for proto, pw, what in (("auth", "auth_pass", "authentication"), ("priv", "priv_pass", "privacy")):
+            if v.get(proto) and not v.get(pw) and not old.get(pw):
+                raise web.HTTPBadRequest(text=json.dumps({"error": f"Enter the SNMP v3 {what} password"}),
+                                         content_type="application/json")
+
     async def add_host(req):
         entry = await read_entry(req)
+        check_v3(entry, None)
         h = await monitor.add_host(entry)
         return web.json_response({"added": h.key}, status=201)
 
@@ -2930,7 +2990,9 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
             raise web.HTTPNotFound()
-        await monitor.update_host(h, await read_entry(req))
+        entry = await read_entry(req)
+        check_v3(entry, h)
+        await monitor.update_host(h, entry)
         return web.json_response({"updated": h.key})
 
     async def host_snmp(req):
