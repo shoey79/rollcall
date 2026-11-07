@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.20.2 - 2026-11-07
+
+### Fixed
+- SNMP: **Up for** showed how long the device's SNMP service had been running, not the device itself. On Linux-based kit such as a TeraStation, that service restarts whenever the network link drops, for example when a switch reboots. Rollcall now reads the device's own uptime (HOST-RESOURCES-MIB `hrSystemUptime`) when the device provides it, which also stops false **Restarted** warnings. When a device only reports the SNMP service's uptime, Details says so.
+
 ## 1.20.1 - 2026-11-06
 
 ### Fixed

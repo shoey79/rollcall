@@ -266,7 +266,15 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out = {"descr": str(sysv.get(f"{SYS}.1.0") or ""), "object_id": str(sysv.get(f"{SYS}.2.0") or ""),
                "uptime_s": (sysv.get(f"{SYS}.3.0") or 0) // 100 if isinstance(sysv.get(f"{SYS}.3.0"), int) else None,
                "name": str(sysv.get(f"{SYS}.5.0") or ""), "location": str(sysv.get(f"{SYS}.6.0") or ""),
-               "ports": [], "poe": None, "nas": None}
+               "ports": [], "poe": None, "nas": None, "uptime_source": "snmp"}
+        # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
+        # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
+        try:
+            hr = (await s.get(["1.3.6.1.2.1.25.1.1.0"])).get("1.3.6.1.2.1.25.1.1.0")
+            if isinstance(hr, int) and hr > 0:
+                out["uptime_s"], out["uptime_source"] = hr // 100, "system"
+        except SnmpError:
+            pass
 
         # Interfaces: physical ports only (not VLANs, LAGs, the CPU or absent slots)
         cols = {}
@@ -350,7 +358,8 @@ def evaluate(d: dict, watch: set[int], prev: dict | None) -> tuple[str, list[dic
     add = lambda level, what, detail="": items.append({"level": level, "what": what, "detail": detail})  # noqa: E731
     up = d.get("uptime_s")
     if isinstance(up, int) and up < 3600:
-        add("warn", "Restarted", f"{max(1, up // 60)} min ago")
+        add("warn", "Restarted", f"{max(1, up // 60)} min ago" + ("" if d.get("uptime_source") == "system"
+                                                               else " (or its SNMP service did)"))
     for p in d.get("ports") or []:
         if p["index"] not in watch:
             continue
