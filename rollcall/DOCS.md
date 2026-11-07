@@ -243,6 +243,14 @@ In **Edit**, search under **Home Assistant sensors** (it starts with the compute
 
 The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and like other checks they pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
+### Other addresses
+
+A firewall, router or multi-homed server can have more than one address worth watching, e.g. a WAN IP and an internal IP. Under **Other addresses** in Edit, add each one with a name (e.g. *WAN*), the IP address or hostname, and optionally ports to check there (e.g. `443, 4444`).
+
+- The main **IP address or hostname** still decides whether the device is up or down. The other addresses are checked while it answers, like its other checks. Each one gets its own chip, and turns the device **degraded** if it stops replying (amber at the first miss, red if it's still missing at the next check).
+- Syslog from any of the device's addresses is matched to it.
+- They're stored as checks, so you can also type them as custom checks: `WAN=ping:203.0.113.5` and `WAN 443=tcp:203.0.113.5:443`. IPv6 addresses go in brackets: `ping:[2001:db8::1]`.
+
 ### Icons and make/model
 
 Each computer shows an icon next to its name, in the list and on the Overview. By default it's picked from what the computer is: its name (e.g. "AP1", "NAS", "SQL01", "CCTV"), its agent (Windows Server or desktop, Linux), or its checks (printer, SNMP). To choose one yourself, click **Icon** in Edit. There are 23 device types: rack, storage and tower servers, desktop, laptop, VM, database, NAS, switch, router, firewall, access point, smart home hub, CCTV and dome cameras, printer, UPS, TV, phone, single-board computer, web service, cloud and other.

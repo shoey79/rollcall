@@ -265,6 +265,9 @@ def preset_summary(name: str) -> str:
 
 _LABELLED = re.compile(r"^([^=:/]+)=(.+)$")
 _TCP = re.compile(r"^tcp:(\d{1,5})$", re.I)
+_ADDR = r"(?:[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])"
+_PING = re.compile(rf"^ping:({_ADDR})$", re.I)             # another address of the same device
+_TCP_AT = re.compile(rf"^tcp:({_ADDR}):(\d{{1,5}})$", re.I)  # a port on another address
 _REL_HTTP = re.compile(r"^(https?):(\d{1,5})(/.*)?$", re.I)
 # A Home Assistant entity, optionally with a condition: ha:sensor.office_ap_cpu_utilization>90
 _HA = re.compile(r"^ha:([a-z_]+\.[a-z0-9_]+)\s*(?:(>=|<=|!=|>|<|=)\s*(\S.{0,60}))?$", re.I)
@@ -297,6 +300,15 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         items = PRESETS[name]
         return [d for lab, spec in items
                 for d in parse_check(spec, label if label and len(items) == 1 else lab)]
+    if m := _PING.match(entry):
+        addr = m.group(1).strip("[]")
+        return [{"label": label or addr, "kind": "ping", "port": None, "url": None, "desc": f"ping {addr}", "target": addr}]
+    if m := _TCP_AT.match(entry):
+        addr, port = m.group(1).strip("[]"), int(m.group(2))
+        if not 1 <= port <= 65535:
+            raise ValueError(f"port out of range in '{entry}'")
+        return [{"label": label or f"TCP {port} on {addr}", "kind": "tcp", "port": port, "url": None,
+                 "desc": f"tcp/{port} on {addr}", "target": addr}]
     if m := _TCP.match(entry):
         port = int(m.group(1))
         if not 1 <= port <= 65535:
@@ -1097,6 +1109,8 @@ class Service:
     entity: str | None = None       # ha only: the Home Assistant entity to read
     op: str | None = None           # ha only: >, <, =, ... (None: just needs to be available)
     value: str | None = None        # ha only: what the state is compared with
+    target: str | None = None       # ping / tcp on another address of the device (None: its main address)
+    resolved: str | None = None     # that address's IP at the last check
     status: str = UNKNOWN
     failures: int = 0
     latency: float | None = None
@@ -1352,7 +1366,7 @@ class Monitor:
             if prev:  # same target: keep its key (history) and current state
                 s.key = prev.key
                 for f in ("status", "failures", "latency", "detail", "last_check", "last_change",
-                          "scheme_pref"):
+                          "scheme_pref", "resolved"):
                     setattr(s, f, getattr(prev, f))
         for gone in old.values():
             await self.dismiss(f"ping_monitor_{svc_key(h, gone)}")
@@ -1375,7 +1389,8 @@ class Monitor:
 
     # ---- Syslog ----
     def _syslog_target(self, ip: str) -> Host | None:
-        cands = [h for h in self.hosts.values() if ip in (h.ip, h.host)]
+        cands = [h for h in self.hosts.values()
+                 if ip in (h.ip, h.host) or any(ip in (s.resolved, s.target) for s in h.services if s.target)]
         return next((h for h in cands if any(s.kind == "syslog" for s in h.services)), None) or (cands[0] if cands else None)
 
     def on_syslog(self, ip: str, m: dict) -> None:
@@ -1585,7 +1600,7 @@ class Monitor:
                     h.ip = ip
                     ok, latency = await ping(
                         ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
-                        [s.port for s in h.services if s.port],
+                        [s.port for s in h.services if s.port and not s.target],
                     )
                 else:
                     ok, latency = False, None
@@ -1685,6 +1700,15 @@ class Monitor:
             if s.kind == "syslog":
                 return self.syslog_state(h, now)
             async with self.sem:
+                if s.target:
+                    ip = await resolve(s.target)
+                    if not ip:
+                        return False, None, f"can't resolve {s.target}"
+                    s.resolved = ip
+                    if s.kind == "ping":
+                        ok, ms = await ping(ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]), [])
+                        return ok, ms, (f"{ip} replied" if ok else f"no reply from {ip}")
+                    return await tcp_check(ip, s.port, self.svc_timeout)
                 if s.kind == "tcp":
                     return await tcp_check(h.ip, s.port, self.svc_timeout)
                 ok, ms, detail, scheme = await http_check(

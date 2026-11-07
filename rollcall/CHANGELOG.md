@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.23.0 - 2026-11-07
+
+### Added
+- **Other addresses**: a device can have extra addresses, such as a firewall's WAN and internal IPs. Each one is given a name, pinged while the main address answers, and optionally has ports checked on it. If one stops replying, the device goes degraded. Syslog from any of the addresses is matched to the device. The new checks `ping:HOST` and `tcp:HOST:PORT` also work as custom checks.
+
 ## 1.22.1 - 2026-11-07
 
 ### Fixed
