@@ -245,14 +245,17 @@ The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A se
 
 ### SNMP (switches and NAS units)
 
-For network kit you can't install an agent on, tick **SNMP** (under Network) when adding or editing the device, and enter its SNMP community. On the device, turn on SNMP v2c with a read-only community; the name is case-sensitive, and a TeraStation's default is `TeraStation`. Rollcall reads the device on every check while it answers ping, and **Details** shows what it found:
+For network kit you can't install an agent on, tick **SNMP** (under Network) when adding or editing the device, and choose the SNMP version:
+
+- **v3** (recommended where the device supports it): create a read-only SNMP v3 user on the device and enter its user name, authentication protocol and password, and privacy (encryption) protocol and password. Authentication can be MD5, SHA, SHA-224, SHA-256, SHA-384 or SHA-512, and privacy DES, AES-128, AES-192 or AES-256. SHA with AES-128 is the most widely supported pair. AES-192 and AES-256 use the same key extension as Net-SNMP (Blumenthal); devices using Cisco's variant aren't supported. Passwords are 8 characters or more. Requests are signed, replies are checked, and with privacy everything is encrypted.
+- **v2c**: turn on SNMP v2c on the device with a read-only community, and enter the same name here. The name is case-sensitive, and a TeraStation's default is `TeraStation`. The community travels unencrypted, so anyone capturing traffic on your network could read it. Rollcall reads the device on every check while it answers ping, and **Details** shows what it found:
 
 - **Ports** (any switch): every physical port, with its description, speed and error counts. Tick **Alert** for ports that should always be up (uplinks, servers, access points). They go red if they drop, and amber if someone disables them. Other ports are just shown, so desktops going off at night don't alert.
 - **PoE** (switches with the standard PoE MIB, e.g. Netgear GS516TP): power used against the budget (amber at the switch's own alert threshold), a red alert for a port in a PoE fault, amber when a port's overload, short-circuit or power-denied count goes up, and red if the PoE supply is off or faulty.
 - **Buffalo TeraStation** (detected automatically): each disk's status and SMART health, RAID arrays and how full they are (amber at 90%, red at 97%), and the errors the NAS reports itself. A degraded or removed disk is red; a removed hot spare or a SMART warning is amber.
 - **Restarts**: amber for an hour after the device restarts.
 
-Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up as long as it answers ping. The community is only sent to the device; it isn't shown on the dashboard, and leaving the box blank when editing keeps the one already set.
+Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up as long as it answers ping. The community and v3 passwords aren't shown on the dashboard. Leaving them blank when editing keeps the ones already saved. They are included in exports, so keep export files safe.
 
 ### Syslog
 

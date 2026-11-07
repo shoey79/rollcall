@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.21.0 - 2026-11-07
+
+### Added
+- **SNMP v3**: choose v2c or v3 for each SNMP device. v3 takes a user name plus authentication (MD5, SHA, SHA-224, SHA-256, SHA-384 or SHA-512) and privacy (none, DES, AES-128, AES-192 or AES-256). Requests are signed, replies are checked, and with privacy everything is encrypted. Wrong user names, passwords and protocols are reported in plain words. Passwords aren't shown on the dashboard, and leaving them blank when editing keeps the saved ones.
+- The add-on image now includes `py3-cryptography`, which SNMP v3 encryption needs.
+
 ## 1.20.2 - 2026-11-07
 
 ### Fixed
