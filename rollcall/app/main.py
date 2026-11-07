@@ -77,6 +77,10 @@ HOSTS_PATH = Path(os.environ.get("PM_HOSTS", str(DB_PATH.parent / "hosts.json"))
 IMPORT_MARK = HOSTS_PATH.with_name("imported_options.json")
 AGENTS_PATH = Path(os.environ.get("PM_AGENTS", str(DB_PATH.parent / "agents.json")))
 AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "agent_reports")))
+ICONS_DIR = Path(os.environ.get("PM_ICONS", str(DB_PATH.parent / "icons")))  # uploaded device pictures
+ICON_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "svg": "image/svg+xml"}
+ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)$")
+ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$")
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
@@ -526,6 +530,16 @@ def validate_entry(raw: dict) -> dict:
                         raise ValueError("SNMP v3 passwords must be 8 to 64 characters")
                     clean[k] = pw
             entry["snmp_v3"] = clean
+    if "icon" in raw:
+        icon = str(raw.get("icon") or "")
+        if icon and not ICON_REF.match(icon):
+            raise ValueError("Unknown icon")
+        entry["icon"] = icon
+    if "model" in raw:
+        model = str(raw.get("model") or "").strip()
+        if len(model) > 64 or not model.isprintable():
+            raise ValueError("Make and model must be up to 64 ordinary characters")
+        entry["model"] = model
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1113,6 +1127,8 @@ class Host:
     no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
+    icon: str = ""                     # "b:<built-in>" or "u:<uploaded file>"; blank = pick from what it is
+    model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
     snmp_version: str = "2c"
     snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
@@ -1264,6 +1280,8 @@ class Monitor:
                             **({"schedule": h.schedule} if h.schedule else {}),
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
+                            **({"icon": h.icon} if h.icon else {}),
+                            **({"model": h.model} if h.model else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
@@ -1278,6 +1296,8 @@ class Monitor:
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         h.snmp_community = entry.get("snmp_community") or None
+        h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
+        h.model = str(entry.get("model") or "")[:64]
         h.snmp_version = "3" if entry.get("snmp_version") == "3" else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
@@ -1310,6 +1330,10 @@ class Monitor:
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
+        if "icon" in entry:
+            h.icon = entry["icon"]
+        if "model" in entry:
+            h.model = entry["model"]
         if "snmp_version" in entry:
             h.snmp_version = entry["snmp_version"]
             if h.snmp_version == "3":
@@ -2502,7 +2526,7 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
-                "snmp_version": h.snmp_version,
+                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
@@ -3066,6 +3090,72 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         monitor.syslog_unknown.pop(str(body.get("ip")), None)
         return web.json_response({"ok": True})
 
+    def icons_list() -> list[dict]:
+        if not ICONS_DIR.exists():
+            return []
+        meta = {}
+        try:
+            meta = json.loads((ICONS_DIR / "names.json").read_text())
+        except (OSError, ValueError):
+            pass
+        return [{"id": "u:" + f.name, "name": meta.get(f.name) or f.stem, "url": "icons/" + f.name}
+                for f in sorted(ICONS_DIR.iterdir(), key=lambda f: f.stat().st_mtime) if ICON_FILE.match(f.name)]
+
+    async def icons_get(req):
+        return web.json_response({"icons": icons_list()})
+
+    async def icon_upload(req):
+        """Body: the image itself. Header X-Icon-Name: a label for it."""
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg"}.get(
+            (req.content_type or "").lower())
+        if not ext:
+            return web.json_response({"error": "Use a PNG, JPEG, WebP or SVG image"}, status=400)
+        data = await req.read()
+        if not data or len(data) > 300 * 1024:
+            return web.json_response({"error": "Images must be under 300 KB"}, status=400)
+        magic = {"png": data[:8] == b"\x89PNG\r\n\x1a\n", "jpg": data[:3] == b"\xff\xd8\xff",
+                 "webp": data[:4] == b"RIFF" and data[8:12] == b"WEBP",
+                 "svg": b"<svg" in data[:2048].lower()}
+        if not magic[ext]:
+            return web.json_response({"error": "That file isn't the image type it says it is"}, status=400)
+        if len(icons_list()) >= 200:
+            return web.json_response({"error": "Up to 200 uploaded icons; delete some first"}, status=400)
+        ICONS_DIR.mkdir(parents=True, exist_ok=True)
+        fname = secrets.token_hex(6) + "." + ext
+        (ICONS_DIR / fname).write_bytes(data)
+        label = re.sub(r"[^\w .()+-]", "", (req.headers.get("X-Icon-Name") or "").strip())[:40] or "Uploaded"
+        try:
+            meta = json.loads((ICONS_DIR / "names.json").read_text())
+        except (OSError, ValueError):
+            meta = {}
+        meta[fname] = label
+        (ICONS_DIR / "names.json").write_text(json.dumps(meta))
+        log.info("Uploaded icon %s (%s)", label, fname)
+        return web.json_response({"id": "u:" + fname, "name": label, "url": "icons/" + fname}, status=201)
+
+    async def icon_delete(req):
+        fname = req.match_info["file"]
+        if not ICON_FILE.match(fname):
+            raise web.HTTPNotFound()
+        (ICONS_DIR / fname).unlink(missing_ok=True)
+        changed = False
+        for h in monitor.hosts.values():
+            if h.icon == "u:" + fname:
+                h.icon, changed = "", True
+        if changed:
+            monitor._save_hosts()
+        return web.json_response({"ok": True})
+
+    async def icon_file(req):
+        fname = req.match_info["file"]
+        path = ICONS_DIR / fname
+        if not ICON_FILE.match(fname) or not path.exists():
+            raise web.HTTPNotFound()
+        # SVGs can carry script: shown through <img> it never runs, and this blocks it if opened directly.
+        return web.Response(body=path.read_bytes(), content_type=ICON_TYPES[fname.rsplit(".", 1)[1]], headers={
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",
+            "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})
+
     async def delete_host(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -3085,6 +3175,10 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts", editor_only(add_host))
     app.router.add_put("/api/hosts/{key}", editor_only(update_host))
     app.router.add_get("/api/hosts/{key}/snmp", host_snmp)
+    app.router.add_get("/api/icons", icons_get)
+    app.router.add_post("/api/icons", editor_only(icon_upload))
+    app.router.add_delete("/api/icons/{file}", editor_only(icon_delete))
+    app.router.add_get("/icons/{file}", icon_file)
     app.router.add_get("/api/hosts/{key}/syslog", host_syslog)
     app.router.add_post("/api/hosts/{key}/syslog/ack", editor_only(host_syslog_ack))
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
@@ -3231,6 +3325,9 @@ def make_backup(version: str | None) -> bytes:
         for f in sorted(AGENT_REPORTS.glob("*.json")) if AGENT_REPORTS.exists() else []:
             if re.match(r"^[0-9a-f]{6,32}\.json$", f.name):
                 z.write(f, "agent_reports/" + f.name)
+        for f in sorted(ICONS_DIR.iterdir()) if ICONS_DIR.exists() else []:
+            if ICON_FILE.match(f.name):
+                z.write(f, "icons/" + f.name)
         with tempfile.TemporaryDirectory() as tmp:
             # sqlite's backup API gives a consistent copy while the monitor keeps writing.
             snap = Path(tmp) / "history.db"
@@ -3274,7 +3371,7 @@ def stage_restore(data: bytes) -> dict:
             raise ValueError("That isn't an export file from this add-on")
         allowed = set(backup_files()) | {"manifest.json", "history.db", "options.json"}
         for n in names:
-            if n not in allowed and not REPORT_NAME.match(n):
+            if n not in allowed and not REPORT_NAME.match(n) and not (n.startswith("icons/") and ICON_FILE.match(n[6:])):
                 raise ValueError(f"Unexpected file in the export: {n}")
         if sum(i.file_size for i in z.infolist()) > 1024 ** 3:
             raise ValueError("The export is too large")
@@ -3330,6 +3427,10 @@ def apply_pending_restore() -> None:
         shutil.move(str(AGENT_REPORTS), keep / "agent_reports")
     if (RESTORE_DIR / "agent_reports").exists():
         shutil.move(str(RESTORE_DIR / "agent_reports"), AGENT_REPORTS)
+    if (RESTORE_DIR / "icons").exists():
+        if ICONS_DIR.exists():
+            shutil.move(str(ICONS_DIR), keep / "icons")
+        shutil.move(str(RESTORE_DIR / "icons"), ICONS_DIR)
     shutil.rmtree(RESTORE_DIR, ignore_errors=True)
     print(f"Imported an export; the previous data is kept in {keep}", flush=True)
 

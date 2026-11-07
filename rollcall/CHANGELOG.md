@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.22.0 - 2026-11-07
+
+### Added
+- **Device icons**: every computer shows an icon in the list and on the Overview. It's picked automatically from its name, agent or checks, or you choose one of 23 device types under **Icon** in Edit (rack/storage/tower server, NAS, switch, router, firewall, access point, cameras, printer, UPS and more). **Upload image** adds your own (PNG, JPEG, WebP or SVG, up to 300 KB), such as a manufacturer's logo or a photo of the hardware. Uploads are included in exports.
+- **Make and model** (optional), shown under the computer's name.
+
 ## 1.21.1 - 2026-11-07
 
 ### Added

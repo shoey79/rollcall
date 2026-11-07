@@ -277,6 +277,25 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   .alert .what small{white-space:normal}
   .tile b{font-size:22px}
 }
+.iconrow{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:end;margin-top:10px}
+.iconbtn{display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 10px;white-space:nowrap}
+.iconbtn .dicon{width:22px;height:22px}
+.icongrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);max-height:300px;overflow:auto}
+.icongrid h4{grid-column:1/-1;margin:4px 0 0;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.icongrid button{display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;font-size:11.5px;line-height:1.2;text-align:center;position:relative;border-radius:8px}
+.icongrid button.on{outline:2px solid var(--accent);outline-offset:-2px}
+.icongrid .dicon{width:30px;height:30px}
+.icongrid .del{position:absolute;top:2px;right:4px;font-size:12px;color:var(--muted);padding:0 3px}
+.icongrid label.upload{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:8px 4px;font-size:11.5px;border:1px dashed var(--line);border-radius:8px;cursor:pointer;color:var(--accent)}
+.icongrid label.upload input{display:none}
+.dicon{display:inline-flex;width:26px;height:26px;flex:none;color:var(--muted);align-items:center;justify-content:center}
+.dicon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.dicon img{max-width:100%;max-height:100%;object-fit:contain;border-radius:3px}
+.namewrap{display:flex;gap:10px;align-items:flex-start}
+.namewrap .dicon{margin-top:1px}
+.model{font-size:12px;color:var(--muted)}
+.gl .dicon{width:22px;height:22px;margin-top:1px}
+@media (max-width:760px){.iconrow{grid-template-columns:1fr}}
 .snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}
 .snmpbox .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 12px;margin-bottom:6px}
 .snmpbox select,.snmpbox input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0;width:100%}
@@ -421,6 +440,11 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
         <label class="field">Name<input id="fName" maxlength="64" placeholder="SQL01" autocomplete="off"></label>
         <label class="field">IP address or hostname<input id="fHost" maxlength="253" placeholder="10.0.1.20" autocomplete="off" spellcheck="false"></label>
       </div>
+      <div class="iconrow">
+        <div class="field"><span>Icon</span><button type="button" id="fIconBtn" class="iconbtn" aria-expanded="false"><span id="fIconShow"></span><span id="fIconName">Automatic</span> ▾</button></div>
+        <label class="field">Make and model<input id="fModel" maxlength="64" placeholder="Optional, e.g. Dell PowerEdge R720xd" autocomplete="off"></label>
+      </div>
+      <div id="iconGrid" class="icongrid" hidden></div>
       <fieldset>
         <legend>Services to check <small>— ping is always checked</small></legend>
         <input type="search" id="presetFilter" class="preset-filter" placeholder="Find a service, e.g. sql, proxmox, plex" autocomplete="off" spellcheck="false">
@@ -679,7 +703,7 @@ function render() {
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model ? `<div class="model">${esc(h.model)}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -699,6 +723,107 @@ function render() {
     </tr>`;
   }).join("");
 }
+
+// ---- Device icons: drawn for Rollcall (no company logos); upload your own for those ----
+const ICONS = {
+  server: ["Rack server", '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M6.5 7.5h.01M6.5 16.5h.01M11 7.5h6M11 16.5h6"/>'],
+  storage: ["Storage server", '<rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M5.5 9v6M8 9v6M10.5 9v6M13 9v6M15.5 9v6M18.5 12h.01"/>'],
+  tower: ["Tower server", '<rect x="7" y="2.5" width="10" height="19" rx="1.5"/><path d="M9.5 6h5M9.5 8.5h5M12 17h.01"/>'],
+  desktop: ["Desktop PC", '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/>'],
+  laptop: ["Laptop", '<rect x="5" y="5" width="14" height="10" rx="1"/><path d="M2.5 18.5h19L20 15H4z"/>'],
+  vm: ["Virtual machine", '<path d="M12 2.5l8.5 4.75v9.5L12 21.5l-8.5-4.75v-9.5z"/><path d="M3.5 7.25L12 12l8.5-4.75M12 12v9.5"/>'],
+  database: ["Database", '<ellipse cx="12" cy="5.5" rx="7" ry="2.5"/><path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/>'],
+  nas: ["NAS", '<rect x="5" y="2.5" width="14" height="19" rx="2"/><rect x="8" y="5.5" width="8" height="2.5" rx=".5"/><rect x="8" y="9.5" width="8" height="2.5" rx=".5"/><rect x="8" y="13.5" width="8" height="2.5" rx=".5"/><path d="M12 18.8h.01"/>'],
+  switch: ["Switch", '<rect x="2" y="8" width="20" height="8" rx="1.5"/><path d="M5 12h1.5M8.5 12H10M12 12h1.5M15.5 12H17M19.5 12h.01"/>'],
+  router: ["Router", '<rect x="3" y="12" width="18" height="7" rx="1.5"/><path d="M7 12V7.5M17 12V7.5M7 15.5h.01M10 15.5h.01M14 15.5h3"/>'],
+  firewall: ["Firewall", '<path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M4.6 10h14.8M5.8 14.5h12.4M12 6.2V10M8.5 10v4.5M15.5 10v4.5M12 14.5v4.6"/>'],
+  ap: ["Access point", '<ellipse cx="12" cy="16" rx="7.5" ry="3"/><path d="M8.8 10.2a4.6 4.6 0 0 1 6.4 0M6.3 7.6a8.2 8.2 0 0 1 11.4 0"/>'],
+  hub: ["Smart home hub", '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M12 15.5h.01M9.2 8a4 4 0 0 1 5.6 0M6.8 5.4a7.5 7.5 0 0 1 10.4 0"/>'],
+  camera: ["CCTV camera", '<path d="M2.5 7.5l12.5 3-1.6 5.2L1.8 12z"/><path d="M15 10.5l4.5-1.2 1 4-4.4 1.3M8.5 14.5V19H4"/>'],
+  dome: ["Dome camera", '<path d="M4 5h16v3H4z"/><path d="M6 8a6 6 0 0 0 12 0"/><circle cx="12" cy="11" r="2"/>'],
+  printer: ["Printer", '<path d="M7 9V3.5h10V9"/><rect x="3.5" y="9" width="17" height="8" rx="1.5"/><rect x="7" y="14" width="10" height="6.5" rx=".5"/>'],
+  ups: ["UPS / power", '<rect x="6" y="3" width="12" height="18" rx="1.5"/><path d="M12.8 7l-2.6 5h3.6l-2.6 5"/>'],
+  tv: ["TV / media player", '<rect x="2.5" y="4.5" width="19" height="12" rx="1.5"/><path d="M8 20h8"/>'],
+  phone: ["Phone / tablet", '<rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18.5h2"/>'],
+  sbc: ["Single-board computer", '<rect x="3" y="5" width="18" height="14" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M6 8h.01M6 11h.01M6 14h.01M18 8v8"/>'],
+  web: ["Web service", '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.4 2.5 3.5 5.5 3.5 9s-1.1 6.5-3.5 9c-2.4-2.5-3.5-5.5-3.5-9S9.6 5.5 12 3z"/>'],
+  cloud: ["Cloud", '<path d="M7 18.5h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.5 9.2 4.7 4.7 0 0 0 7 18.5z"/>'],
+  device: ["Other device", '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/>'],
+};
+let uploadedIcons = [];
+const svgIcon = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${(ICONS[k] || ICONS.device)[1]}</svg>`;
+function autoIcon(h) {
+  const n = (h.name + " " + (h.model || "")).toLowerCase(), checks = (h.checks || []).join(" ").toLowerCase();
+  const os = (h.agent && h.agent.os || "").toLowerCase();
+  const rules = [[/zigbee|slzb|z-?wave|hue bridge|\bhub\b|bridge/, "hub"], [/\b(ap|uap)\d*\b|access ?point|u6|nanohd|ac ?pro|ac ?lite/, "ap"], [/\bnas\b|terastation|synology|qnap|readynas/, "nas"],
+    [/switch|\bpoe|\bsw\d|\bgs\d{3}/, "switch"], [/\bnvr\b|\bdvr\b|\bcctv\b|\bcam(era)?\b|\byi\b|dome/, "camera"], [/print|laserjet|mfp/, "printer"],
+    [/firewall|\bfw\d*\b|sophos|\bxg\d*|pfsense|opnsense|fortigate/, "firewall"],
+    [/\btv\b|youview|roku|apple ?tv|shield|firestick/, "tv"], [/\bups\b|inverter|battery/, "ups"], [/router|gateway|\budm|\busg|edgerouter|draytek/, "router"],
+    [/\bpi\d?\b|raspberry|odroid/, "sbc"], [/esxi?|proxmox|hyper-?v|\bpve\b|\bvmhost/, "server"], [/r7\d0xd|storage/, "storage"],
+    [/\bsql|\bdb\d*\b|database|mysql|postgres/, "database"], [/laptop|notebook/, "laptop"], [/\b(dc|exch|rds?|srv|server|app|web)\d*\b/, "server"]];
+  for (const [re, k] of rules) if (re.test(n)) return k;
+  if (h.agent) return /server/.test(os) || h.agent.os_family === "linux" ? "server" : "desktop";
+  if (/printer/.test(checks)) return "printer";
+  if (/\bsnmp/.test(checks)) return "switch";
+  if (/proxmox|esxi|hyperv|truenas|unraid/.test(checks)) return "server";
+  if (/https?:/.test(checks)) return "web";
+  return "device";
+}
+function iconHtml(h, auto = true) {
+  const ic = h.icon || "";
+  if (ic.startsWith("u:")) {
+    const u = uploadedIcons.find(x => x.id === ic);
+    if (u) return `<span class="dicon"><img src="${esc(u.url)}" alt="" loading="lazy"></span>`;
+  }
+  const k = ic.startsWith("b:") ? ic.slice(2) : auto ? autoIcon(h) : "device";
+  return `<span class="dicon" title="${esc((ICONS[k] || ICONS.device)[0])}">${svgIcon(k)}</span>`;
+}
+async function loadIcons() {
+  try { const r = await fetch("api/icons", {cache: "no-store"}); if (r.ok) uploadedIcons = (await r.json()).icons; } catch (e) {}
+}
+let pickIcon = "";
+function showPicked(h) {
+  const fake = {...(h || {name: fName.value, checks: []}), icon: pickIcon, name: fName.value || (h && h.name) || "", model: document.getElementById("fModel").value};
+  document.getElementById("fIconShow").innerHTML = iconHtml(fake);
+  const u = uploadedIcons.find(x => x.id === pickIcon);
+  document.getElementById("fIconName").textContent = !pickIcon ? `Automatic (${(ICONS[autoIcon(fake)] || ICONS.device)[0]})`
+    : pickIcon.startsWith("b:") ? (ICONS[pickIcon.slice(2)] || ICONS.device)[0] : u ? u.name : "Uploaded";
+}
+function renderIconGrid() {
+  const g = document.getElementById("iconGrid"), canEdit = data && data.can_edit === true;
+  g.innerHTML = `<button type="button" data-pick="" class="${!pickIcon ? "on" : ""}"><span class="dicon" style="font-size:20px">✨</span>Automatic</button>` +
+    Object.entries(ICONS).map(([k, [label]]) => `<button type="button" data-pick="b:${k}" class="${pickIcon === "b:" + k ? "on" : ""}"><span class="dicon">${svgIcon(k)}</span>${esc(label)}</button>`).join("") +
+    `<h4>Your images</h4>` + uploadedIcons.map(u => `<button type="button" data-pick="${esc(u.id)}" class="${pickIcon === u.id ? "on" : ""}"><span class="dicon"><img src="${esc(u.url)}" alt=""></span>${esc(u.name)}${canEdit ? `<span class="del" data-delicon="${esc(u.id.slice(2))}" title="Delete this image">✕</span>` : ""}</button>`).join("") +
+    (canEdit ? `<label class="upload">＋ Upload image<small class="muted">PNG, JPEG, WebP, SVG · 300 KB</small><input type="file" id="iconFile" accept="image/png,image/jpeg,image/webp,image/svg+xml"></label>` : "");
+}
+document.getElementById("fIconBtn").addEventListener("click", () => {
+  const g = document.getElementById("iconGrid"), open = g.hidden;
+  g.hidden = !open; document.getElementById("fIconBtn").setAttribute("aria-expanded", String(open));
+  if (open) renderIconGrid();
+});
+document.getElementById("iconGrid").addEventListener("click", async e => {
+  const del = e.target.closest("[data-delicon]");
+  if (del) {
+    e.stopPropagation();
+    if (!confirm("Delete this image? Computers using it go back to an automatic icon.")) return;
+    await fetch("api/icons/" + encodeURIComponent(del.dataset.delicon), {method: "DELETE"});
+    if (pickIcon === "u:" + del.dataset.delicon) pickIcon = "";
+    await loadIcons(); renderIconGrid(); showPicked(editing); return;
+  }
+  const b = e.target.closest("[data-pick]");
+  if (!b) return;
+  pickIcon = b.dataset.pick; renderIconGrid(); showPicked(editing);
+});
+document.getElementById("iconGrid").addEventListener("change", async e => {
+  if (e.target.id !== "iconFile" || !e.target.files[0]) return;
+  const f = e.target.files[0];
+  if (f.size > 300 * 1024) return alert("Images must be under 300 KB.");
+  const r = await fetch("api/icons", {method: "POST", headers: {"Content-Type": f.type || "application/octet-stream", "X-Icon-Name": f.name.replace(/\.[^.]+$/, "").slice(0, 40)}, body: f});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) return alert(j.error || "Upload failed (" + r.status + ")");
+  await loadIcons(); pickIcon = j.id; renderIconGrid(); showPicked(editing);
+});
+for (const id of ["fName", "fModel"]) document.getElementById(id).addEventListener("input", () => { if (!pickIcon) showPicked(editing); });
 
 // ---- Overview: status at a glance, and every alert one click from its details ----
 const checkKey = s => s.key.replace(/^agent_/, "");
@@ -761,7 +886,7 @@ function renderHome() {
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
     const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
-    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span><span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
+    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.model ? " · " + h.model : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
   }).join("")}</div></div>`;
   const unk = data.syslog_unknown || [];
   if (unk.length) {
@@ -1991,6 +2116,11 @@ async function openDialog(h) {
   document.getElementById("dlgTitle").textContent = h ? `Edit ${h.name}` : "Add computer";
   fName.value = h ? h.name : "";
   fHost.value = h ? h.host : "";
+  document.getElementById("fModel").value = h ? (h.model || "") : "";
+  pickIcon = h ? (h.icon || "") : "";
+  document.getElementById("iconGrid").hidden = true;
+  document.getElementById("fIconBtn").setAttribute("aria-expanded", "false");
+  showPicked(h);
   form.querySelectorAll(".preset input").forEach(cb => cb.checked = false);
   document.getElementById("customList").innerHTML = "";
   const presetNames = new Set(PRESETS.map(p => p.name));
@@ -2038,6 +2168,7 @@ form.addEventListener("submit", async e => {
   const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
+    icon: pickIcon, model: document.getElementById("fModel").value.trim(),
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
   const commIn = document.getElementById("fSnmpComm").value;
@@ -2110,7 +2241,7 @@ document.getElementById("sortMobile").addEventListener("change", e => {
   setSort(key, +dir);
 });
 renderHead();
-loadViews().then(load);
+Promise.all([loadViews(), loadIcons()]).then(load);
 setInterval(load, 10000);
 setInterval(() => loadViews().then(render), 60000);  // pick up tabs other people have changed
 </script>

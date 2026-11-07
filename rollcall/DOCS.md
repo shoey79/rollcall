@@ -243,6 +243,14 @@ In **Edit**, search under **Home Assistant sensors** (it starts with the compute
 
 The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and like other checks they pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
+### Icons and make/model
+
+Each computer shows an icon next to its name, in the list and on the Overview. By default it's picked from what the computer is: its name (e.g. "AP1", "NAS", "SQL01", "CCTV"), its agent (Windows Server or desktop, Linux), or its checks (printer, SNMP). To choose one yourself, click **Icon** in Edit. There are 23 device types: rack, storage and tower servers, desktop, laptop, VM, database, NAS, switch, router, firewall, access point, smart home hub, CCTV and dome cameras, printer, UPS, TV, phone, single-board computer, web service, cloud and other.
+
+The built-in icons are generic and drawn for Rollcall; there are no company logos. For a manufacturer's logo or a photo of the actual hardware, choose **Upload image** in the icon picker. It takes PNG, JPEG, WebP or SVG files up to 300 KB, and up to 200 images in total. Uploaded images can be used for any computer, are included in exports, and can be deleted from the picker; computers using a deleted image go back to an automatic icon. Only use images you have the right to use.
+
+**Make and model** (optional) is shown under the name, e.g. "Dell PowerEdge R720xd", and helps pick the automatic icon.
+
 ### SNMP (switches and NAS units)
 
 For network kit you can't install an agent on, tick **SNMP** (under Network) when adding or editing the device, and choose the SNMP version:
