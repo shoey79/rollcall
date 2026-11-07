@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.22.1 - 2026-11-07
+
+### Fixed
+- The add-on could stop with `RuntimeError: dictionary changed size during iteration`. Its once-a-minute republishing of sensors to Home Assistant broke if a computer was added or deleted while that was running. Loops over the computer list now work on a copy. The monitoring loop also logs any unexpected error and carries on, instead of stopping the add-on.
+
 ## 1.22.0 - 2026-11-07
 
 ### Added

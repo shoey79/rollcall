@@ -1548,8 +1548,16 @@ class Monitor:
     async def run(self) -> None:
         last_publish = last_prune = 0.0
         while True:
+            try:
+                last_publish, last_prune = await self._tick(last_publish, last_prune)
+            except Exception:  # noqa: BLE001 - one bad pass mustn't stop monitoring
+                log.exception("Monitoring loop hit an error; carrying on")
+            await asyncio.sleep(1)
+
+    async def _tick(self, last_publish: float, last_prune: float) -> tuple[float, float]:
+        if True:
             now = time.time()
-            for h in self.hosts.values():
+            for h in list(self.hosts.values()):
                 if not h.checking and now >= h.next_due:
                     h.checking = True
                     task = asyncio.create_task(self.check(h))
@@ -1558,8 +1566,8 @@ class Monitor:
             # Re-publish periodically so sensors reappear quickly after an HA restart.
             if now - last_publish >= 60:
                 last_publish = now
-                for h in self.hosts.values():
-                    if h.status != UNKNOWN:
+                for h in list(self.hosts.values()):
+                    if h.status != UNKNOWN and not h.removed:
                         await self.publish(h)
             if now - last_prune >= 3600:
                 last_prune = now
@@ -1567,7 +1575,7 @@ class Monitor:
                 self.logs.prune(now - int(self.opts["history_days"]) * DAY)
             if self.agents:
                 await self.check_stale_agents(now)
-            await asyncio.sleep(1)
+        return last_publish, last_prune
 
     async def check(self, h: Host) -> None:
         try:
@@ -2014,7 +2022,7 @@ class Monitor:
 
     async def revoke_agent(self, aid: str) -> dict:
         agent = self.agents.revoke(aid)
-        for h in self.hosts.values():
+        for h in list(self.hosts.values()):
             if h.agent_id == aid:
                 for s in h.agent_checks:
                     await self.dismiss(f"ping_monitor_{svc_key(h, s)}")
@@ -2362,7 +2370,7 @@ class Monitor:
 
     async def check_stale_agents(self, now: float) -> None:
         limit = float(self.opts.get("agent_stale_minutes", 15)) * 60
-        for h in self.hosts.values():
+        for h in list(self.hosts.values()):
             if not h.agent_id or not h.agent_seen or not h.agent_checks:
                 continue
             if h.maint_until or h.off_schedule:
@@ -2510,7 +2518,7 @@ class Monitor:
 
     def snapshot(self) -> dict:
         hosts = []
-        for h in self.hosts.values():
+        for h in list(self.hosts.values()):
             hosts.append({
                 "key": h.key, "name": h.name, "host": h.host, "ip": h.ip,
                 "status": h.status, "failures": h.failures, "latency_ms": h.latency,
@@ -3139,7 +3147,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             raise web.HTTPNotFound()
         (ICONS_DIR / fname).unlink(missing_ok=True)
         changed = False
-        for h in monitor.hosts.values():
+        for h in list(monitor.hosts.values()):
             if h.icon == "u:" + fname:
                 h.icon, changed = "", True
         if changed:
