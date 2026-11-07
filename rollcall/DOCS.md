@@ -243,6 +243,12 @@ In **Edit**, search under **Home Assistant sensors** (it starts with the compute
 
 The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and like other checks they pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
+### Physical or virtual
+
+Agents (Windows 1.0.13, Linux 1.0.7 and later) report the machine's manufacturer, model and serial number (a Dell service tag, for instance), and whether it's a VM: Hyper-V, VMware, KVM/QEMU (including Proxmox), VirtualBox, Xen or a cloud VM, or a container (LXC, Docker) on Linux. Computers without an agent count as Hyper-V VMs when a Hyper-V host's agent lists a VM with the same name. You can also put "VM" or "Hyper-V" in **Make and model**.
+
+The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. PowerEdge R720xd · ABC1234*) unless you've typed a make and model. To split the list, make a tab with **Physical or virtual** is *Physical*, *Virtual (any)*, *Hyper-V VM*, *VMware VM*, *KVM / QEMU / Proxmox VM*, *Container* or *Not known*. The **+ New tab** templates include Physical machines, Virtual machines and Hyper-V VMs.
+
 ### Other addresses
 
 A firewall, router or multi-homed server can have more than one address worth watching, e.g. a WAN IP and an internal IP. Under **Other addresses** in Edit, add each one with a name (e.g. *WAN*), the IP address or hostname, and optionally ports to check there (e.g. `443, 4444`).

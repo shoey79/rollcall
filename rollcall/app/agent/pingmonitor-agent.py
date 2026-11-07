@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.6"
+AGENT_VERSION = "1.0.7"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -179,6 +179,29 @@ def cpu_percent(interval=1.0):
     return int(round(100 * (1 - (i2 - i1) / max(1, t2 - t1))))
 
 
+VIRT_NAMES = {"kvm": "KVM / QEMU", "qemu": "KVM / QEMU", "microsoft": "Hyper-V", "vmware": "VMware", "oracle": "VirtualBox",
+              "xen": "Xen", "parallels": "Parallels", "amazon": "AWS", "google": "Google Cloud", "bochs": "KVM / QEMU",
+              "lxc": "LXC container", "lxc-libvirt": "LXC container", "openvz": "OpenVZ container", "docker": "Docker container",
+              "podman": "Podman container", "wsl": "WSL", "systemd-nspawn": "nspawn container"}
+
+
+def virtual_kind(vendor: str, model: str) -> str:
+    """What the machine runs on ('' for physical): systemd-detect-virt if there is one, else its DMI vendor/model."""
+    rc, out, _ = run(["systemd-detect-virt"])
+    kind = out.strip().lower()
+    if kind and kind != "none":
+        return VIRT_NAMES.get(kind, kind)
+    if rc == 0 or kind == "none":
+        return ""
+    t = f"{vendor} {model}"
+    for pat, name in ((r"Microsoft.*Virtual", "Hyper-V"), (r"VMware", "VMware"), (r"VirtualBox|innotek", "VirtualBox"),
+                      (r"QEMU|KVM|Proxmox|Standard PC \(|oVirt|Red Hat|Bochs", "KVM / QEMU"), (r"Xen", "Xen"),
+                      (r"Amazon EC2", "AWS"), (r"Google Compute", "Google Cloud")):
+        if re.search(pat, t, re.I):
+            return name
+    return ""
+
+
 def system_info():
     info = {}
     osr = dict(re.findall(r'^(\w+)="?([^"\n]*)"?$', read("/etc/os-release"), re.M))
@@ -206,6 +229,11 @@ def system_info():
     info["domain"] = fqdn.split(".", 1)[1] if "." in fqdn else ""
     info["part_of_domain"] = False
     info["workstation"] = False
+    dmi = {k: read(f"/sys/class/dmi/id/{k}").strip() for k in ("sys_vendor", "product_name", "product_serial")}
+    info["hw_vendor"], info["hw_model"] = dmi["sys_vendor"][:80], dmi["product_name"][:80]
+    if dmi["product_serial"] and not re.match(r"^(0+|None|Default string|To be filled by O\.E\.M\.|System Serial Number)$", dmi["product_serial"], re.I):
+        info["serial"] = dmi["product_serial"][:60]
+    info["virtual"] = virtual_kind(dmi["sys_vendor"], dmi["product_name"])
     ips = []
     rc, out, _ = run(["ip", "-4", "-o", "addr", "show", "scope", "global"])
     for m in re.finditer(r"^\d+:\s+(\S+)\s+inet (\d+\.\d+\.\d+\.\d+)/", out, re.M):

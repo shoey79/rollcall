@@ -2427,7 +2427,21 @@ class Monitor:
                 # Before the first report, the OS comes from the enrolment request.
                 "os_family": r.get("os_family") or ((self.agents.agents.get(h.agent_id) if self.agents else None) or {}).get("os_family") or "windows",
                 "load": r.get("load"),
-                "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot")}
+                "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot"),
+                "hw_vendor": str(r.get("hw_vendor") or "")[:80], "hw_model": str(r.get("hw_model") or "")[:80],
+                "serial": str(r.get("serial") or "")[:60],
+                # None: an agent too old to say; "": physical; else what it runs on
+                "virtual": None if "virtual" not in r else str(r.get("virtual") or "")[:40]}
+
+    def vm_hosts(self) -> dict[str, str]:
+        """VM name (lower case, short) -> the Hyper-V host it's on, from the hosts' agent reports."""
+        out: dict[str, str] = {}
+        for h in list(self.hosts.values()):
+            for vm in ((h.agent_report or {}).get("checks") or {}).get("hyperv") or []:
+                n = str(vm.get("name") or "").strip().lower().split(".")[0]
+                if n:
+                    out.setdefault(n, h.name)
+        return out
 
     def _metrics(self, h: Host) -> list[tuple[str, str, dict]]:
         r = h.agent_report
@@ -2542,9 +2556,13 @@ class Monitor:
 
     def snapshot(self) -> dict:
         hosts = []
+        vmh = self.vm_hosts()
         for h in list(self.hosts.values()):
+            short = h.name.strip().lower().split(".")[0]
+            on = vmh.get(short) or vmh.get(str(h.host).lower().split(".")[0])
             hosts.append({
                 "key": h.key, "name": h.name, "host": h.host, "ip": h.ip,
+                "vm_host": on if on and on != h.name else None,
                 "status": h.status, "failures": h.failures, "latency_ms": h.latency,
                 "uptime_24h": self.uptime_24h(h.key), "history": self.history(h.key),
                 "last_check": h.last_check, "last_change": h.last_change,
@@ -3259,7 +3277,9 @@ VIEW_FIELDS = {
     "role": {"contains", "notcontains"},
     "check": {"contains", "notcontains"},
     "uptime": {"below", "above"},
+    "hardware": {"is", "not"},
 }
+VIEW_HARDWARE = {"physical", "virtual", "hyperv", "vmware", "kvm", "container", "unknown"}
 VIEW_OS = {"windows", "linux", "none"}
 VIEW_STATUS = {"green", "amber", "red", "degraded", "maintenance", "unknown", "problem", "offschedule"}
 IP_RANGE_RE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}(/\d{1,2}|-\d{1,3}(\.\d{1,3}){3}|-\d{1,3})?|\d{1,3}(\.(\d{1,3}|\*)){1,3})$")
@@ -3299,6 +3319,8 @@ def clean_views(raw) -> list[dict]:
                         raise ValueError(f"'{name}': '{part}' isn't an IP range (use 10.0.1.0/24, 10.0.1.10-50 or 10.0.1.*)")
             if field == "os" and value not in VIEW_OS:
                 raise ValueError(f"'{name}': unknown OS '{value}'")
+            if field == "hardware" and value not in VIEW_HARDWARE:
+                raise ValueError(f"'{name}': unknown hardware type '{value}'")
             if field == "status" and value not in VIEW_STATUS:
                 raise ValueError(f"'{name}': unknown status '{value}'")
             if field == "uptime":

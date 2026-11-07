@@ -714,7 +714,7 @@ function render() {
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model ? `<div class="model">${esc(h.model)}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model || hwText(h) ? `<div class="model" title="${esc(hwText(h))}">${esc(h.model || hwText(h))}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -773,6 +773,8 @@ function autoIcon(h) {
     [/\bpi\d?\b|raspberry|odroid/, "sbc"], [/esxi?|proxmox|hyper-?v|\bpve\b|\bvmhost/, "server"], [/r7\d0xd|storage/, "storage"],
     [/\bsql|\bdb\d*\b|database|mysql|postgres/, "database"], [/laptop|notebook/, "laptop"], [/\b(dc|exch|rds?|srv|server|app|web)\d*\b/, "server"]];
   for (const [re, k] of rules) if (re.test(n)) return k;
+  const vk = virtOf(h);
+  if (vk) return "vm";
   if (h.agent) return /server/.test(os) || h.agent.os_family === "linux" ? "server" : "desktop";
   if (/printer/.test(checks)) return "printer";
   if (/\bsnmp/.test(checks)) return "switch";
@@ -995,7 +997,36 @@ const FIELDS = {
   role:    {label: "Server role (agent)", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "Domain controller, IIS, Immich"},
   check:   {label: "Service check", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "SQL, HTTPS, Plex"},
   uptime:  {label: "Uptime (24 h)", ops: {below: "is below %", above: "is above %"}, ph: "99.5"},
+  hardware: {label: "Physical or virtual", ops: {is: "is", not: "is not"}, values: {physical: "Physical", virtual: "Virtual (any)",
+    hyperv: "Hyper-V VM", vmware: "VMware VM", kvm: "KVM / QEMU / Proxmox VM", container: "Container (LXC, Docker)", unknown: "Not known"}},
 };
+// Physical or virtual: from the agent's hardware report, a Hyper-V host's VM list, or the make/model typed in.
+function virtOf(h) {
+  const a = h.agent;
+  if (a && a.virtual) return a.virtual;
+  if (h.vm_host) return "Hyper-V";
+  if (a && a.virtual === "") return "";
+  if (/virtual|\bvm\b|hyper-?v|vmware|proxmox|kvm|qemu/i.test(h.model || "")) return /hyper-?v/i.test(h.model) ? "Hyper-V" : /vmware/i.test(h.model) ? "VMware" : "Virtual";
+  return null;  // not known
+}
+function hwMatch(h, v) {
+  const k = virtOf(h);
+  if (v === "unknown") return k === null;
+  if (v === "physical") return k === "";
+  if (k === null || k === "") return false;
+  if (v === "virtual") return true;
+  if (v === "hyperv") return k === "Hyper-V";
+  if (v === "vmware") return k === "VMware";
+  if (v === "kvm") return /kvm|qemu|proxmox/i.test(k);
+  if (v === "container") return /container|lxc|docker|podman|openvz/i.test(k);
+  return false;
+}
+function hwText(h) {
+  const a = h.agent, k = virtOf(h);
+  if (k) return `${/container/i.test(k) ? k : k + " VM"}${h.vm_host ? " on " + h.vm_host : ""}`;
+  if (a && (a.hw_vendor || a.hw_model)) return [a.hw_vendor, a.hw_model].filter(Boolean).join(" ") + (a.serial ? ` · ${a.serial}` : "");
+  return "";
+}
 const PROBLEM = new Set(["red", "degraded", "amber"]);
 const osOf = h => h.agent ? (h.agent.os_family || "windows") : "none";
 const BUILTIN = [
@@ -1055,6 +1086,7 @@ function ruleMatch(h, r) {
     case "check": { const hay = h.services.filter(s => !s.agent).map(s => (s.label + " " + s.target).toLowerCase()).join(" | ");
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "uptime": return h.uptime_24h != null && (r.op === "below" ? h.uptime_24h < +v : h.uptime_24h > +v);
+    case "hardware": return hwMatch(h, v) === (r.op === "is");
   }
   return true;
 }
@@ -1124,6 +1156,9 @@ const TEMPLATES = [
   {label: "Windows servers", name: "Windows", rules: [{field: "os", op: "is", value: "windows"}]},
   {label: "Linux servers", name: "Linux", rules: [{field: "os", op: "is", value: "linux"}]},
   {label: "Domain controllers", name: "Domain controllers", rules: [{field: "role", op: "contains", value: "Domain controller"}]},
+  {label: "Physical machines", name: "Physical", rules: [{field: "hardware", op: "is", value: "physical"}]},
+  {label: "Virtual machines", name: "Virtual", rules: [{field: "hardware", op: "is", value: "virtual"}]},
+  {label: "Hyper-V VMs", name: "Hyper-V VMs", rules: [{field: "hardware", op: "is", value: "hyperv"}]},
   {label: "Web servers", name: "Web servers", rules: [{field: "role", op: "contains", value: "IIS"}, {field: "check", op: "contains", value: "http"}], match: "any"},
   {label: "Low uptime", name: "Low uptime", rules: [{field: "uptime", op: "below", value: "99"}]},
 ];

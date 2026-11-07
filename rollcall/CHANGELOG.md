@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.24.0 - 2026-11-07
+
+### Added
+- **Physical or virtual**: agents now report the manufacturer, model, serial number (e.g. a Dell service tag) and whether the machine is a VM (Hyper-V, VMware, KVM/QEMU/Proxmox, VirtualBox, Xen, cloud) or, on Linux, a container. Computers without an agent count as Hyper-V VMs when a Hyper-V host's VM list includes them.
+  - The list shows the hardware under the name, e.g. "Hyper-V VM on HV01".
+  - The new tab condition **Physical or virtual**, and the templates Physical machines, Virtual machines and Hyper-V VMs, split the list.
+  - VMs get the virtual machine icon automatically.
+- Windows agent 1.0.13, Linux agent 1.0.7. Agents set to update automatically pick these up at their next report.
+
 ## 1.23.0 - 2026-11-07
 
 ### Added

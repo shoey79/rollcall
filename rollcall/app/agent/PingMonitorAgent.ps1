@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.12'
+$AgentVersion = '1.0.13'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -355,6 +355,20 @@ $NoisyAutoServices = @(
     'IntelAudioService', 'RtkAudioUniversalService', 'AGMService', 'AGSService'
 )
 
+function Get-VirtualKind([string]$Vendor, [string]$Model) {
+    # What the machine is running on, from its system manufacturer and model; '' for physical.
+    $t = "$Vendor $Model"
+    if ($Vendor -match 'Microsoft' -and $Model -match 'Virtual') { return 'Hyper-V' }
+    if ($t -match 'VMware') { return 'VMware' }
+    if ($t -match 'VirtualBox|innotek') { return 'VirtualBox' }
+    if ($t -match 'QEMU|KVM|Proxmox|Standard PC \(|oVirt|Red Hat|Nutanix|Bochs') { return 'KVM / QEMU' }
+    if ($t -match 'Xen') { return 'Xen' }
+    if ($t -match 'Parallels') { return 'Parallels' }
+    if ($t -match 'Amazon EC2') { return 'AWS' }
+    if ($t -match 'Google Compute') { return 'Google Cloud' }
+    return ''
+}
+
 function Get-SystemInfo {
     $info = [ordered]@{}
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -372,6 +386,15 @@ function Get-SystemInfo {
     $info.mem_free_mb = [int]($os.FreePhysicalMemory / 1024)
     $info.domain = [string]$cs.Domain
     $info.part_of_domain = [bool]$cs.PartOfDomain
+    $info.hw_vendor = Limit-Text ([string]$cs.Manufacturer).Trim() 80
+    $info.hw_model = Limit-Text ([string]$cs.Model).Trim() 80
+    $info.virtual = Get-VirtualKind ([string]$cs.Manufacturer) ([string]$cs.Model)
+    try {
+        $serial = [string](Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber
+        if ($serial -and $serial.Trim() -notmatch '^(0+|None|Default string|To be filled by O\.E\.M\.|System Serial Number)$') {
+            $info.serial = Limit-Text $serial.Trim() 60
+        }
+    } catch { }
     $info.workstation = ([int]$os.ProductType -eq 1)
     try {
         $cpu = Measure-Step 'cpu' { (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average }
