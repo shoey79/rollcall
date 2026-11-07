@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.21.1 - 2026-11-07
+
+### Added
+- Syslog alerts on the Overview now have their own **Acknowledge** button.
+
+### Fixed
+- Syslog: **Acknowledge** in Logs was missing on busy devices. It only counted alerts among the newest 500 messages shown, so an alert followed by many ordinary messages left the check amber or red with no button. Alerts are now counted over the whole 24 hours.
+
 ## 1.21.0 - 2026-11-07
 
 ### Added

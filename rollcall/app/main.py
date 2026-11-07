@@ -3044,7 +3044,9 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                               sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore))
         n, last = monitor.logs.stats(h.key, now - DAY)
         svc = next((s for s in h.services if s.kind == "syslog"), None)
-        return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "rows": rows, "count_24h": n, "last": last,
+        pending = sum(1 for r in monitor.logs.query(h.key, since=since, max_sev=7, limit=5000)
+                      if sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore))
+        return web.json_response({"name": h.name, "pending": pending, "ip": h.ip, "host": h.host, "rows": rows, "count_24h": n, "last": last,
                                   "alert": h.syslog_alert, "keywords": h.syslog_keywords, "ignore": h.syslog_ignore,
                                   "ack": h.syslog_ack, "status": svc.status if svc else None,
                                   "detail": svc.detail if svc else None, "port": monitor.syslog_port, "now": now})

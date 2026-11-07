@@ -263,7 +263,7 @@ Rollcall receives syslog on **UDP port 514** of the Home Assistant machine. You 
 
 - **Logs** next to the device shows its messages, newest first, with search and a severity filter. They're kept for `history_days`, up to 20,000 per device.
 - **Alert on** sets which messages alert: critical and worse, errors and worse (the default), warnings and worse, or only your words. Critical, alert and emergency messages, and any message containing one of your **Always alert** words, go red and notify. Others you alert on go amber. Messages containing a **Never alert** word are kept but never alert.
-- Alerts last 24 hours. **Acknowledge** in Logs clears them now; a new message that alerts sets it off again.
+- Alerts last 24 hours. **Acknowledge**, in Logs or next to the alert on the Overview, clears them now; a new message that alerts sets it off again.
 - Messages from devices that aren't in Rollcall, or that don't have Syslog ticked, aren't kept. They're listed on the Overview under **Syslog from unknown devices**, with a button to add the device or tick Syslog for it.
 
 Each device can send up to 100 messages a second (with bursts up to 200); more than that are dropped, so a chatty device can't fill the database. Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof.

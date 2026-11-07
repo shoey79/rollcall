@@ -255,6 +255,12 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 .alert .when{color:var(--muted);font-size:12px;white-space:nowrap}
 .alert .go{color:var(--accent);font-size:12px;white-space:nowrap}
 .alert.sev0,.alert.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
+.alertwrap{display:flex;align-items:center;border-bottom:1px solid var(--line)}
+.alertwrap:last-child{border-bottom:none}
+.alertwrap .alert{border-bottom:none;flex:1;min-width:0}
+.alertwrap.sev0,.alertwrap.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
+.alertwrap .alert.sev0,.alertwrap .alert.sev1{background:transparent}
+.ackmini{flex:none;margin-right:14px;font-size:12px;padding:4px 10px}
 .allok{padding:22px 14px;text-align:center;color:var(--muted)}
 .allok b{display:block;color:var(--green);font-size:15px;margin-bottom:2px}
 .glance{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;padding:12px}
@@ -741,11 +747,12 @@ function renderHome() {
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
       const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
-      return `<button type="button" class="alert sev${a.sev}" data-alert="${i}">
+      const ack = a.check && a.check.kind === "syslog";
+      return `${ack ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
         <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
         <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
-        <span class="go">${target} ›</span></button>`;
+        <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" data-sysack="${esc(a.h.key)}" title="Acknowledge this device's syslog alerts">Acknowledge</button></div>` : ""}`;
     }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + `</div>`;
   const sorted = hosts.slice().sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || collator.compare(a.name, b.name));
   html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"}</small></h2><div class="glance">${sorted.map(h => {
@@ -817,6 +824,13 @@ document.getElementById("home").addEventListener("click", async e => {
     await openDialog(data.hosts.find(x => x.key === se.dataset.sysedit));
     const cb = form.querySelector('.preset input[value="syslog"]'); if (cb) cb.checked = true;
     return updatePicked();
+  }
+  const sk = e.target.closest("[data-sysack]");
+  if (sk) {
+    sk.disabled = true;
+    const r = await fetch("api/hosts/" + encodeURIComponent(sk.dataset.sysack) + "/syslog/ack", {method: "POST"});
+    if (!r.ok) { alert("That didn't work (" + r.status + ")"); sk.disabled = false; }
+    setTimeout(load, 1500); return;
   }
   const sf = e.target.closest("[data-sysforget]");
   if (sf) { await fetch("api/syslog/forget", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ip: sf.dataset.sysforget})}); return load(); }
@@ -1584,12 +1598,13 @@ function renderLogs(x) {
   document.getElementById("detTitle").textContent = x.name + " · Logs";
   document.getElementById("detSub").textContent = `${x.count_24h} message${x.count_24h === 1 ? "" : "s"} in the last 24 hours` +
     (x.last ? ` · last ${ago(x.last, x.now)}` : "") + ` · from ${x.ip || x.host}`;
-  const alerting = x.rows.filter(r => r.alert).length;
+  const alerting = x.pending || x.rows.filter(r => r.alert).length || (x.status === "amber" || x.status === "red" ? 1 : 0);
   const alertText = x.alert < 0 ? "only the words you set" : SEV[x.alert].toLowerCase() + (x.alert < 7 ? " and worse" : "");
   let html = `<div class="logbar">
       <input type="search" id="logQ" placeholder="Search messages" value="${esc(logQ)}" autocomplete="off" spellcheck="false">
       <select id="logSev" aria-label="Severity">${SEV.map((n, i) => `<option value="${i}" ${i === logSev ? "selected" : ""}>${i === 7 ? "All severities" : n + " and worse"}</option>`).join("")}</select>
       ${alerting && canEdit ? `<button type="button" id="logAck" class="primary">Acknowledge ${alerting} alert${alerting === 1 ? "" : "s"}</button>` : ""}
+      ${alerting && !canEdit ? `<span class="hint">${alerting} unacknowledged alert${alerting === 1 ? "" : "s"}</span>` : ""}
     </div>
     <p class="hint" style="margin:6px 0 10px">Alerts on ${esc(alertText)}${x.keywords.length ? `, and always on <b>${x.keywords.map(esc).join("</b>, <b>")}</b>` : ""}${x.ignore.length ? `; never on <b>${x.ignore.map(esc).join("</b>, <b>")}</b>` : ""}. Change this with Edit. Messages are kept for the add-on's history days.</p>`;
   if (!x.rows.length) {
