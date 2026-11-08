@@ -237,6 +237,8 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 #home{display:grid;gap:14px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 .tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);text-align:left;font-size:13px}
+.tile.skel{background:color-mix(in srgb,var(--line) 35%,var(--card));animation:skel 1.4s ease-in-out infinite}
+@keyframes skel{50%{opacity:.55}}
 .tile b{font-size:26px;line-height:1.1;font-variant-numeric:tabular-nums}
 .tile small{color:var(--muted);font-size:12px}
 .tile .lbl{display:flex;align-items:center;gap:6px;color:var(--muted);font-weight:600;font-size:12px}
@@ -349,7 +351,7 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
 </style>
 </head>
 <!-- Starts view-only: admin controls only appear once the add-on confirms this user can make changes. -->
-<body class="view-only">
+<body class="view-only home-on">
 <main>
   <header>
     <div>
@@ -371,7 +373,7 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
   </div>
   <nav class="tabs" id="tabs" aria-label="Device lists"></nav>
   <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
-  <section id="home" hidden aria-label="Overview"></section>
+  <section id="home" aria-label="Overview"><div class="tiles"><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div></div><div class="panel"><h2>Alerts</h2><div class="allok">Loading…</div></div></section>
   <div class="wrap">
     <table>
       <thead><tr id="head"></tr></thead>

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.24.2 - 2026-11-08
+
+### Fixed
+- Opening Rollcall briefly showed the list's empty column headings before switching to the Overview. It now starts on the Overview, with placeholder tiles until the data arrives.
+
 ## 1.24.1 - 2026-11-08
 
 ### Fixed
