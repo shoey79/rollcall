@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.33.1 - 2026-11-08
+
+### Fixed
+- SNMP: PoE information went missing on Netgear switches, and polls took over a minute.
+  - Rollcall walked the whole PoE table; it now reads the list of PoE ports, then only the columns it uses, in small batches.
+  - After the switch stalled once, the request size stayed at 1 row for good, so every poll took hundreds of requests. It now doubles again after each poll without timeouts, up to the largest size the device has coped with, and tries larger sizes again after 6 hours.
+
 ## 1.33.0 - 2026-11-08
 
 ### Added

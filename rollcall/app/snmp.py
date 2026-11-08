@@ -248,6 +248,7 @@ class Session:
                  per: int = 25, v3: V3 | None = None):
         self.host, self.community, self.timeout, self.retries, self.port = host, community, timeout, retries, port
         self.requests = 0
+        self.timeouts = 0
         self.per = per  # rows asked for at a time; lowered if the device can't keep up
         self.v3 = v3
         self.engine, self.boots, self.etime, self.etime_at = b"", 0, 0, 0.0
@@ -280,6 +281,7 @@ class Session:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             self.proto.waiting.pop(key, None)
+            self.timeouts += 1
             return None
         except OSError as e:  # e.g. port unreachable
             self.proto.waiting.pop(key, None)
@@ -556,8 +558,29 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out["ports"].sort(key=lambda p: p["index"])
 
         # PoE (POWER-ETHERNET-MIB), if the switch has it
-        ports = _cols(await timed("PoE", s.walk("1.3.6.1.2.1.105.1.1.1")))
-        mains = _cols(await timed("PoE", s.walk("1.3.6.1.2.1.105.1.3.1.1")))
+        # Only the columns used: the PoE ports from one column, then the rest with small GETs
+        # (some switches are very slow to walk the whole table).
+        ports: dict[str, dict] = {}
+        mains: dict[str, dict] = {}
+        pse = "1.3.6.1.2.1.105.1.1.1"
+        detect = await timed("PoE", s.walk(f"{pse}.6", limit=200))
+        if detect:
+            idx = list(detect)
+            for i in idx:
+                ports[i] = {"6": detect[i]}
+            wanted = [(i, c) for i in idx for c in ("3", "7", "10", "12", "13", "14")]
+            for n in range(0, len(wanted), 12):
+                chunk = wanted[n:n + 12]
+                got = await timed("PoE", s.get([f"{pse}.{c}.{i}" for i, c in chunk]))
+                for i, c in chunk:
+                    v = got.get(f"{pse}.{c}.{i}")
+                    if v is not None:
+                        ports[i][c] = v
+            main = "1.3.6.1.2.1.105.1.3.1.1"
+            groups = sorted({i.split(".")[0] for i in idx if "." in i}) or ["1"]
+            got = await timed("PoE", s.get([f"{main}.{c}.{g}" for g in groups for c in ("2", "3", "4", "5")]))
+            for g in groups:
+                mains[g] = {c: got.get(f"{main}.{c}.{g}") for c in ("2", "3", "4", "5")}
         if ports or mains:
             m = next(iter(mains.values()), {})
             out["poe"] = {
@@ -603,6 +626,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
             out["nas"] = nas
         out["requests"] = s.requests
         out["per"] = s.per
+        out["timeouts"] = s.timeouts
         out["timing"] = timing
         out["missing"] = sorted(set(missing))
     out["took_ms"] = int((time.monotonic() - t0) * 1000)

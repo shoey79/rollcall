@@ -1796,6 +1796,17 @@ class Monitor:
                 log.info("%s %s (%s): %s -> %s [%s]", h.name, s.label, s.desc, old, new, detail)
                 await self.on_service_change(h, s, old, new)
 
+    @staticmethod
+    def _snmp_per(prev: dict | None) -> int:
+        """Rows per request: what worked last time, doubled after a poll without timeouts, up to the
+        most this device has coped with (so a device that dropped large requests isn't pushed again)."""
+        if not prev:
+            return 25
+        per = int(prev.get("per") or 25)
+        if not prev.get("timeouts"):
+            per *= 2
+        return max(1, min(per, int(prev.get("per_cap") or 25), 25))
+
     async def snmp_check(self, h: Host, now: float) -> tuple:
         """Poll the device over SNMP. Warnings (e.g. PoE near its budget) stay amber;
         problems (a watched port down, a failed disk) go red if they're still there next time."""
@@ -1807,12 +1818,17 @@ class Monitor:
                 v3 = snmplib.V3(c.get("user", ""), c.get("auth"), c.get("auth_pass", ""), c.get("priv"), c.get("priv_pass", ""))
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
                                   v3=v3,
-                                  per=int((prev or {}).get("per") or 25),  # what worked last time
+                                  per=self._snmp_per(prev),
                                   ask_hr=(prev or {}).get("hr") is not False,  # stop asking a device that didn't answer
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:
             h.snmp_items = [{"level": "crit", "what": "SNMP", "detail": str(err)}]
             return False, None, str(err)
+        # Remember the most rows per request this device copes with, so it isn't pushed past it again.
+        if d.get("timeouts"):
+            d["per_cap"], d["per_cap_at"] = d["per"], now
+        elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
+            d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         h.snmp_data, h.snmp_polled = d, now
         worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev)
         h.snmp_items = items
