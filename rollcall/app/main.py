@@ -45,6 +45,7 @@ import agents as agentlib
 import snmp as snmplib
 import syslogrx as sysloglib
 import certcheck
+import msi as msilib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -2962,6 +2963,24 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         return web.Response(body=body, content_type="application/octet-stream", headers={
             "Content-Disposition": f'attachment; filename="{"pingmonitor-agent.py" if linux else "PingMonitorAgent.ps1"}"'})
 
+    async def agents_msi(req):
+        """A Windows installer with the addresses and enrolment key built in: for people who just double-click."""
+        server = clean_servers(req.query.get("server") or "") or ",".join(monitor.agent_servers())
+        if not server:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Enter the address first"}), content_type="application/json")
+        if not msilib.available():
+            return web.json_response({"error": "This add-on build can't make installers (msitools is missing)"}, status=501)
+        script = build_agent_script("windows", server, monitor.agents.enrol_key, req.query.get("ignore_cert") == "1")
+        version = _script_version() or "1.0.0"
+        try:
+            body = await msilib.build(script, version)
+        except (RuntimeError, OSError, asyncio.TimeoutError) as err:
+            log.error("Couldn't build the agent installer: %s", err)
+            return web.json_response({"error": "Couldn't build the installer; see the add-on log"}, status=500)
+        log.info("Built the Windows agent installer (version %s) for %s", version, server)
+        return web.Response(body=body, content_type="application/x-msi", headers={
+            "Content-Disposition": f'attachment; filename="RollcallAgent-{version}.msi"'})
+
     async def agents_servers(req):
         body = await req.json()
         out = {}
@@ -3315,6 +3334,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/agents/script", editor_only(agents_script))
     app.router.add_post("/api/agents/auto-update", editor_only(agents_auto_update))
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
+    app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app
 

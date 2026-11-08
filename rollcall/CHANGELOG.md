@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.29.0 - 2026-11-08
+
+### Added
+- **Windows installer (.msi)**: **Download installer (.msi)** on the Agents dialog's Windows card builds an MSI with the agent, the addresses and the enrolment key built in.
+  - Double-click, accept the administrator prompt, done. It's listed in Installed apps as "Rollcall agent" and uninstalls from there.
+  - Upgrades keep the computer's approval, failures roll back, and it supports `msiexec /i ... /qn`.
+  - Built in the add-on with msitools, which the add-on image now includes. It isn't code-signed.
+
 ## 1.28.0 - 2026-11-08
 
 ### Added

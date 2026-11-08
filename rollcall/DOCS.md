@@ -386,6 +386,19 @@ Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and por
 
 These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
 
+### Windows installer (.msi)
+
+For computers looked after by people who aren't in IT, use **Download installer (.msi)** on the Windows card. The installer has the agent, the addresses and the enrolment key built in, so they only need to double-click it and accept the administrator prompt. It then:
+
+- copies the agent to `C:\Program Files\Rollcall`, and runs its install as SYSTEM, which creates the scheduled task;
+- shows up in *Installed apps* as **Rollcall agent**; removing it there uninstalls the agent (task and data);
+- lets a newer .msi replace an older one, keeping the computer's approval;
+- rolls back and shows an error if the agent couldn't be installed.
+
+The computer then appears under Agents for approval, as usual. For silent installs (Intune, MECM, Group Policy software installation): `msiexec /i RollcallAgent-1.0.15.msi /qn`.
+
+The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC" (choose **More info → Run anyway**). Many email systems block .msi attachments, so share it with a link (e.g. OneDrive) instead. Agents installed this way update themselves like any other if automatic updates are on.
+
 ### Inside and outside addresses
 
 Under **Agents → Where the agents report to**, there are two addresses: **Inside your network** (e.g. `http://192.168.1.5:8100`) and, optionally, **From outside** (e.g. `https://rollcall.example.com:8100`). Downloads have both built in. Agents try them in order and remember which one worked, so a laptop away from the office goes straight to the outside address next time, and back to the inside one when it returns. An address that can't be reached is skipped after 3 seconds.

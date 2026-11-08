@@ -201,6 +201,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 @keyframes flash{0%{background:color-mix(in srgb,var(--accent) 14%,transparent)}100%{background:transparent}}
 .osgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
 .hint.ok{color:var(--green)}.hint.bad{color:var(--red)}
+.dlrow{display:flex;flex-wrap:wrap;gap:8px}
 .srvgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
 .srvgrid input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%;min-width:0}
 @media (max-width:760px){.srvgrid{grid-template-columns:1fr}}
@@ -2075,7 +2076,8 @@ function renderAgents() {
   const card = (o) => `<div class="oscard">
       <div class="oshead"><h4>${o.title}</h4><small class="muted">${o.version ? "version " + esc(o.version) : ""}</small></div>
       <p class="osreq">${o.req}</p>
-      <button type="button" class="primary" id="${o.btn}">Download ${o.file}</button>
+      <div class="dlrow"><button type="button" class="primary" id="${o.btn}">Download ${o.file}</button>${o.msi ? `<button type="button" id="agDownloadMsi" title="A Windows installer with the addresses and key built in">Download installer (.msi)</button>` : ""}</div>
+      ${o.msi ? `<p class="hint">${o.msi}</p>` : ""}
       <h5>Install</h5><ol class="steps">${o.install.map(x => `<li>${x}</li>`).join("")}</ol>
       ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
       <h5>Update</h5><p>${o.update}</p>
@@ -2088,6 +2090,7 @@ function renderAgents() {
     ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>agent_ssl</b> in the add-on's configuration is still recommended.</p>` : "";
   html += sect("2. Download and install", updWarn + `<div class="osgrid">${card({
       title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
+      msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the computer appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
       req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
       install: [
         `Copy the file to <code>${share}</code> or another share the servers can read.`,
@@ -2153,8 +2156,8 @@ document.getElementById("agBody").addEventListener("click", async e => {
     if (!r.ok) alert("That didn't work (" + r.status + ")");
     await loadAgents(); load();
   };
-  if (t.id === "agDownload" || t.id === "agDownloadLinux") {
-    const linuxDl = t.id === "agDownloadLinux";
+  if (t.id === "agDownload" || t.id === "agDownloadLinux" || t.id === "agDownloadMsi") {
+    const linuxDl = t.id === "agDownloadLinux", msiDl = t.id === "agDownloadMsi";
     const inside = document.getElementById("agServer").value.trim().replace(/\/+$/, "");
     const outside = document.getElementById("agServerExt").value.trim().replace(/\/+$/, "");
     for (const v of [inside, outside].filter(Boolean)) if (!/^https?:\/\/[^\s'",;]+$/.test(v)) return alert(`Enter each address as http://host:port ("${v}" isn't)`);
@@ -2163,14 +2166,15 @@ document.getElementById("agBody").addEventListener("click", async e => {
     try { localStorage.setItem("pm_agent_server", inside); localStorage.setItem("pm_agent_server_ext", outside); } catch (err) {}
     await saveServers();
     const ign = document.getElementById("agIgnoreCert");
-    const url = "api/agents/script?server=" + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : "");
+    const url = (msiDl ? "api/agents/msi?server=" : "api/agents/script?server=") + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : "");
     t.disabled = true;
     try {
       const r = await fetch(url);
       if (!r.ok) { let m = "Download failed (" + r.status + ")"; try { m = (await r.json()).error || m; } catch (x) {} return alert(m); }
       const blob = await r.blob();
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob); link.download = linuxDl ? "pingmonitor-agent.py" : "PingMonitorAgent.ps1";
+      link.href = URL.createObjectURL(blob);
+      link.download = linuxDl ? "pingmonitor-agent.py" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } finally { t.disabled = false; }
