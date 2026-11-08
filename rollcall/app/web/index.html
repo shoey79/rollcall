@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'><rect width='64' height='64' rx='14' fill='%231b2230'/><circle cx='17' cy='19' r='6' fill='%232fb36d'/><circle cx='17' cy='33' r='6' fill='%23e0a21b'/><circle cx='17' cy='47' r='6' fill='%23e0524c'/><rect x='28' y='16.5' width='25' height='5' rx='2.5' fill='%23dfe4ec'/><rect x='28' y='30.5' width='18' height='5' rx='2.5' fill='%23dfe4ec'/><rect x='28' y='44.5' width='11' height='5' rx='2.5' fill='%23dfe4ec'/></svg>">
 <title>Rollcall</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--text:#1b2027;--muted:#5d6a79;--line:#e2e6eb;--green:#1f9d55;--amber:#d99a00;--red:#d64545;--grey:#9aa5b1;--accent:#2b6cb0;--blue:#3b6fd8;--orange:#e8590c}
@@ -58,10 +59,16 @@ button:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 button:disabled{opacity:.5;cursor:default}
 button.danger{color:var(--red)}
 button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
-#resetAll{margin-left:auto;font-size:13px;padding:7px 12px}
+.menuwrap{position:relative;margin-left:auto}
+#menuBtn{font-size:13px;padding:7px 14px;white-space:nowrap}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:2px}
+.menu button{border:none;background:transparent;text-align:left;padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);display:flex;align-items:center;gap:8px;justify-content:space-between}
+.menu button:hover,.menu button:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.menu button.danger{color:var(--red)}
+.menu hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
 #pauseTab,#resumeTab{font-size:13px;padding:7px 12px}
 body.home-on #pauseTab,body.home-on #resumeTab{display:none!important}
-#pauseTab:not([hidden])~#resetAll,#resumeTab:not([hidden])~#resetAll{margin-left:0}
+#pauseTab:not([hidden])~.menuwrap,#resumeTab:not([hidden])~.menuwrap{margin-left:0}
 #pauseTab:not([hidden]){margin-left:auto}
 #pauseTab[hidden]+#resumeTab:not([hidden]){margin-left:auto}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
@@ -315,6 +322,8 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 @media (min-width:761px) and (max-width:860px){th[data-sort="latency"],#rows td[data-label="Latency"]{display:none}}
 @media (max-width:760px){#rows td[data-label="Name"]{max-width:none;min-width:0}#rows td[data-label=""] .actions{justify-content:flex-start;max-width:none}}
 .gl .dicon{width:22px;height:22px;margin-top:1px}
+.gsort{display:inline-flex;align-items:center;gap:6px}
+.gsort select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 @media (max-width:760px){.iconrow{grid-template-columns:1fr}}
 .snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}
 .snmpbox .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 12px;margin-bottom:6px}
@@ -327,6 +336,7 @@ ul.plain{margin:0;padding-left:18px}
 table.logs td.msg{max-width:none;white-space:pre-wrap;word-break:break-word;color:var(--text)}
 table.logs td:first-child{white-space:nowrap;color:var(--muted)}
 @media (max-width:760px){table.logs td.msg{white-space:normal;min-width:240px}}
+h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radius:7px}
 .tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
 .rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
@@ -355,7 +365,7 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
 <main>
   <header>
     <div>
-      <h1>Rollcall</h1>
+      <h1><svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#1b2230"/><circle cx="17" cy="19" r="6" fill="#2fb36d"/><circle cx="17" cy="33" r="6" fill="#e0a21b"/><circle cx="17" cy="47" r="6" fill="#e0524c"/><rect x="28" y="16.5" width="25" height="5" rx="2.5" fill="#dfe4ec"/><rect x="28" y="30.5" width="18" height="5" rx="2.5" fill="#dfe4ec"/><rect x="28" y="44.5" width="11" height="5" rx="2.5" fill="#dfe4ec"/></svg>Rollcall</h1>
       <div class="sub" id="meta">Loading…</div>
     </div>
     <div class="summary" id="summary"></div>
@@ -366,10 +376,16 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
     <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
     <button id="pauseTab" class="edit-only" hidden title="Pause alerts for every computer shown in this tab"></button>
     <button id="resumeTab" class="edit-only" hidden title="Resume monitoring for every paused computer in this tab"></button>
-    <button id="resetAll" class="danger edit-only" title="Clear uptime history for every host">Reset all uptime</button>
-    <button id="backupBtn" class="edit-only" title="Export everything to move it to another install, or import an export">Export / import</button>
-    <button id="agentsBtn" class="edit-only" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
-    <button id="addHost" class="primary edit-only">+ Add computer</button>
+    <div class="menuwrap edit-only">
+      <button type="button" id="menuBtn" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="mainMenu">Manage<span class="badge" id="menuBadge" hidden></span> ▾</button>
+      <div class="menu" id="mainMenu" role="menu" hidden>
+        <button type="button" id="addHost" role="menuitem">Add computer</button>
+        <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
+        <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export">Export / import</button>
+        <hr>
+        <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host">Reset all uptime…</button>
+      </div>
+    </div>
   </div>
   <nav class="tabs" id="tabs" aria-label="Device lists"></nav>
   <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
@@ -739,9 +755,7 @@ function render() {
       <td data-label="Since">${ago(h.last_change, now)}</td>
       <td data-label=""><div class="actions">
         <button data-key="${esc(h.key)}" ${h.checking ? "disabled" : ""}>Check now</button>
-        ${h.agent ? `<button data-details="${esc(h.key)}" title="Disks, services, logs and more from the agent">Details</button>`
-          : h.snmp ? `<button data-snmp="${esc(h.key)}" title="Ports, PoE, disks and more over SNMP">Details</button>` : ""}
-        ${h.syslog ? `<button data-logs="${esc(h.key)}" title="Syslog messages from this device">Logs</button>` : ""}
+        ${h.agent || h.snmp || h.syslog ? `<button data-device="${esc(h.key)}" title="${esc([h.agent && "agent details", h.snmp && "SNMP", h.syslog && "logs"].filter(Boolean).join(", ").replace(/^./, c => c.toUpperCase()))}">Details</button>` : ""}
         ${h.maint_until
           ? `<button class="edit-only" data-resume="${esc(h.key)}" title="Resume monitoring and alerts now">Resume</button>`
           : `<button class="edit-only" data-pause="${esc(h.key)}" data-name="${esc(h.name)}" title="Pause alerts, e.g. for a reboot">Pause</button>`}
@@ -908,8 +922,10 @@ function renderHome() {
         <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
         <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" data-sysack="${esc(a.h.key)}" title="Acknowledge this device's syslog alerts">Acknowledge</button></div>` : ""}`;
     }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + `</div>`;
-  const sorted = hosts.slice().sort((a, b) => (ORDER[a.status] - ORDER[b.status]) || collator.compare(a.name, b.name));
-  html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"}</small></h2><div class="glance">${sorted.map(h => {
+  const gs = GLANCE_SORT[glanceSort] ? glanceSort : "status";
+  const sorted = hosts.slice().sort((a, b) => GLANCE_SORT[gs][1](a, b) || collator.compare(a.name, b.name));
+  html += `<div class="panel"><h2>At a glance<small><label class="gsort">${hosts.length} computer${hosts.length === 1 ? "" : "s"} · sort by
+    <select id="glanceSort" aria-label="Sort at a glance by">${Object.entries(GLANCE_SORT).map(([k, [n]]) => `<option value="${k}"${k === gs ? " selected" : ""}>${n}</option>`).join("")}</select></label></small></h2><div class="glance">${sorted.map(h => {
     const bad = h.services.filter(s => s.status === "red" || s.status === "amber").length;
     const sub = h.status === "green" && bad ? `${bad} check${bad === 1 ? "" : "s"} amber`
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
@@ -932,6 +948,23 @@ function renderHome() {
   homeAlerts = list;
 }
 let homeAlerts = [], shownHosts = [];
+const num = (v, d) => v == null ? d : v;
+const GLANCE_SORT = {
+  status: ["Status", (a, b) => ORDER[a.status] - ORDER[b.status]],
+  name: ["Name", (a, b) => collator.compare(a.name, b.name)],
+  uptime: ["Uptime (24 h), lowest first", (a, b) => num(a.uptime_24h, 101) - num(b.uptime_24h, 101)],
+  latency: ["Latency, slowest first", (a, b) => num(b.latency_ms, -1) - num(a.latency_ms, -1)],
+  changed: ["Recently changed", (a, b) => num(b.last_change, 0) - num(a.last_change, 0)],
+  ip: ["IP address", (a, b) => num(ipNum(a.ip), Infinity) - num(ipNum(b.ip), Infinity) || 0],
+};
+let glanceSort = "status";
+try { glanceSort = localStorage.getItem("pm_glance_sort") || "status"; } catch (e) {}
+document.getElementById("home").addEventListener("change", e => {
+  if (e.target.id !== "glanceSort") return;
+  glanceSort = e.target.value;
+  try { localStorage.setItem("pm_glance_sort", glanceSort); } catch (err) {}
+  renderHome();
+});
 document.getElementById("pauseTab").addEventListener("click", async e => {
   const list = shownHosts.slice(); if (!list.length) return;
   const tab = currentTab(), name = document.getElementById("filter").value.trim() ? "the computers shown" : `everything in "${tab.name}"`;
@@ -999,7 +1032,7 @@ document.getElementById("home").addEventListener("click", async e => {
   const g = e.target.closest("[data-glance]");
   if (g) {
     const h = data.hosts.find(x => x.key === g.dataset.glance);
-    return h && h.agent ? openDetails(h.key) : h && h.snmp ? openSnmp(h.key) : showInList(g.dataset.glance);
+    return h && (h.agent || h.snmp || h.syslog) ? openDevice(h.key) : showInList(g.dataset.glance);
   }
 });
 
@@ -1044,6 +1077,12 @@ function hwText(h) {
   return "";
 }
 const PROBLEM = new Set(["red", "degraded", "amber"]);
+// Down, degraded or missed a check, or up but with a check in amber/red: the same things the Overview lists as alerts.
+function needsAttention(h) {
+  if (PROBLEM.has(h.status)) return true;
+  if (h.maint_until || h.off_schedule || h.status === "maintenance") return false;
+  return h.services.some(s => s.status === "red" || s.status === "amber");
+}
 const osOf = h => h.agent ? (h.agent.os_family || "windows") : "none";
 const BUILTIN = [
   {id: "home", name: "Overview", rules: [], builtin: true, home: true},
@@ -1096,7 +1135,7 @@ function ruleMatch(h, r) {
       return r.op === "in" ? hit : !hit;
     }
     case "os": return (osOf(h) === v) === (r.op === "is");
-    case "status": return (v === "problem" ? PROBLEM.has(h.status) : v === "offschedule" ? !!h.off_schedule : h.status === v) === (r.op === "is");
+    case "status": return (v === "problem" ? needsAttention(h) : v === "offschedule" ? !!h.off_schedule : h.status === v) === (r.op === "is");
     case "role": { const roles = ((h.agent && h.agent.roles) || []).join(" | ").toLowerCase();
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => roles.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "check": { const hay = h.services.filter(s => !s.agent).map(s => (s.label + " " + s.target).toLowerCase()).join(" | ");
@@ -1340,6 +1379,8 @@ async function load() {
     const pend = data.agents_pending || 0, badge = document.getElementById("pendBadge");
     badge.hidden = !pend; badge.textContent = pend;
     badge.title = pend ? `${pend} server(s) waiting for approval` : "";
+    const mb = document.getElementById("menuBadge");
+    mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
     document.body.classList.add("loaded");
     if (viewOnly) ["dlg", "agDlg", "bkDlg", "tabDlg"].forEach(id => { const d = document.getElementById(id); if (d && d.open) d.close(); });
@@ -1351,13 +1392,35 @@ async function load() {
 }
 
 async function resetUptime(key, name) {
-  const what = key ? `uptime history for ${name}` : "uptime history for ALL hosts";
-  if (!confirm(`Clear ${what}? This can't be undone.`)) return;
+  if (key) {
+    if (!confirm(`Clear uptime history for ${name}? This can't be undone.`)) return;
+  } else {
+    const typed = prompt(`This clears the uptime history of all ${data ? data.hosts.length : ""} computers, and can't be undone.\n\nType RESET to confirm:`);
+    if (typed === null) return;
+    if (typed.trim().toUpperCase() !== "RESET") return alert("Nothing was reset.");
+  }
   const r = await fetch(key ? "api/reset/" + encodeURIComponent(key) : "api/reset", {method: "POST"});
   if (!r.ok) alert("Reset failed (" + r.status + ")");
   load();
 }
 document.getElementById("resetAll").addEventListener("click", () => resetUptime(null));
+// Manage menu
+const menuBtn = document.getElementById("menuBtn"), mainMenu = document.getElementById("mainMenu");
+function setMenu(open) {
+  mainMenu.hidden = !open; menuBtn.setAttribute("aria-expanded", String(open));
+  if (open) mainMenu.querySelector("button").focus();
+}
+menuBtn.addEventListener("click", e => { e.stopPropagation(); setMenu(mainMenu.hidden); });
+mainMenu.addEventListener("click", e => { if (e.target.closest("button")) setMenu(false); });
+document.addEventListener("click", e => { if (!mainMenu.hidden && !e.target.closest(".menuwrap")) setMenu(false); });
+document.addEventListener("keydown", e => {
+  if (mainMenu.hidden) return;
+  if (e.key === "Escape") { setMenu(false); menuBtn.focus(); }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const items = [...mainMenu.querySelectorAll("button")], i = items.indexOf(document.activeElement);
+    items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus(); e.preventDefault();
+  }
+});
 
 document.getElementById("rows").addEventListener("click", async e => {
   const db = e.target.closest("[data-details]");
@@ -1366,6 +1429,8 @@ document.getElementById("rows").addEventListener("click", async e => {
   if (sn) return openSnmp(sn.dataset.snmp);
   const lg = e.target.closest("[data-logs]");
   if (lg) return openLogs(lg.dataset.logs);
+  const dv = e.target.closest("[data-device]");
+  if (dv) return openDevice(dv.dataset.device);
   const eb = e.target.closest("button[data-edit]");
   if (eb) return openDialog(data.hosts.find(h => h.key === eb.dataset.edit));
   const pb = e.target.closest("button[data-pause]");
@@ -1437,7 +1502,7 @@ function renderDetails(d) {
   document.getElementById("detSub").textContent = d.received
     ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^Python/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
     : "No report from the agent yet. It reports every 5 minutes once approved.";
-  if (!d.received) { document.getElementById("detBody").innerHTML = ""; document.getElementById("detTabs").hidden = true; return; }
+  if (!d.received) { document.getElementById("detBody").innerHTML = ""; showSourceTabs(detKey, "agent"); return; }
 
   // Ignore helpers: an item can be ignored on this server, on all servers, or in the add-on's Configuration.
   const linux = r.os_family === "linux";
@@ -1669,9 +1734,50 @@ function renderDetails(d) {
   const nav = document.getElementById("detTabs");
   nav.innerHTML = order.map(k => `<button type="button" role="tab" class="dtab${k === detTab ? " on" : ""}" data-dtab="${k}" aria-selected="${k === detTab}">${names[k]}${bad[k] ? ` <span class="bad">${bad[k]}</span>` : ""}</button>`).join("");
   nav.hidden = false;
+  appendSourceTabs(detKey);
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
 }
+// ---- One Details dialog per device: agent tabs, SNMP and Logs, whichever it has ----
+function openDevice(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (h && h.agent) return openDetails(key);
+  if (h && h.snmp) return openSnmp(key);
+  return openLogs(key);
+}
+function deviceSources(h) {
+  const out = [];
+  if (h && h.agent) out.push(["agent", "Agent details"]);
+  if (h && h.snmp) out.push(["snmp", "SNMP"]);
+  if (h && h.syslog) out.push(["logs", "Logs"]);
+  return out;
+}
+function srcBadge(h, kind) {
+  const s = h && h.services.find(x => x.kind === kind);
+  return s && (s.status === "red" || s.status === "amber") ? ` <span class="bad">!</span>` : "";
+}
+// In SNMP or Logs view: a tab for each source (Agent opens the agent's own tabs).
+function showSourceTabs(key, active) {
+  const h = data && data.hosts.find(x => x.key === key), src = deviceSources(h), nav = document.getElementById("detTabs");
+  if (src.length < 2) { nav.hidden = true; return; }
+  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : ""}</button>`).join("");
+  nav.hidden = false;
+}
+// In agent view: SNMP and Logs added after the agent's tabs.
+function appendSourceTabs(key) {
+  const h = data && data.hosts.find(x => x.key === key), nav = document.getElementById("detTabs");
+  const extra = deviceSources(h).filter(([k]) => k !== "agent");
+  if (!extra.length) return;
+  nav.insertAdjacentHTML("beforeend", `<span class="tabsep"></span>` + extra.map(([k, n]) =>
+    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : srcBadge(h, "syslog")}</button>`).join(""));
+}
+document.getElementById("detTabs").addEventListener("click", e => {
+  const t = e.target.closest("[data-dsrc]");
+  if (!t || !detKey) return;
+  const k = t.dataset.dsrc;
+  if (k === "agent") openDetails(detKey); else if (k === "snmp") openSnmp(detKey); else openLogs(detKey);
+});
+
 // ---- SNMP devices (switches, NAS) ----
 const fmtUp = s => s == null ? "—" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min" : Math.floor(s / 86400) + " days";
 let snmpInfo = null;
@@ -1698,7 +1804,7 @@ function renderSnmp(x) {
   const d = x.data, now = Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
   const canEdit = data && data.can_edit === true;
   document.getElementById("detTitle").textContent = x.name;
-  document.getElementById("detTabs").hidden = true;
+  showSourceTabs(detKey, "snmp");
   document.getElementById("detSub").textContent = d
     ? [d.descr && d.descr.slice(0, 80), "polled " + ago(x.polled, now), d.uptime_s != null ? "up " + fmtUp(d.uptime_s) : ""].filter(Boolean).join(" · ")
     : "Not polled yet";
@@ -1782,7 +1888,8 @@ async function openLogs(key) {
 function renderLogs(x) {
   const body = document.getElementById("detBody"), canEdit = data && data.can_edit === true;
   const hadFocus = document.activeElement && document.activeElement.id === "logQ";
-  document.getElementById("detTitle").textContent = x.name + " · Logs";
+  document.getElementById("detTitle").textContent = x.name;
+  showSourceTabs(detKey, "logs");
   document.getElementById("detSub").textContent = `${x.count_24h} message${x.count_24h === 1 ? "" : "s"} in the last 24 hours` +
     (x.last ? ` · last ${ago(x.last, x.now)}` : "") + ` · from ${x.ip || x.host}`;
   const alerting = x.pending || x.rows.filter(r => r.alert).length || (x.status === "amber" || x.status === "red" ? 1 : 0);

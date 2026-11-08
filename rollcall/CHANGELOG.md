@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.26.0 - 2026-11-08
+
+### Changed
+- **One Details button**: each device has a single **Details**, with tabs for whatever it has: the agent's tabs, **SNMP** and **Logs**. Before, a NAS had separate Details and Logs buttons.
+- **Manage menu**: Add computer, Agents, Export / import and Reset all uptime are now in a **Manage** menu, instead of being separate buttons. Reset all uptime also asks you to type RESET. The menu shows a badge when agents are waiting for approval.
+- **At a glance** can be sorted by status, name, uptime, latency, most recently changed or IP address. Your choice is remembered.
+- New Rollcall logo at the top of the page and as the browser tab icon. The sidebar icon is now `mdi:list-status`, to match.
+
+### Fixed
+- **Needs attention** was empty for alerts on computers that were up but had a check in amber or red, such as a stopped service or a syslog error. It now includes the same computers the Overview lists as alerts, so clicking the **Need attention** tile shows them.
+
 ## 1.25.0 - 2026-11-08
 
 ### Added
