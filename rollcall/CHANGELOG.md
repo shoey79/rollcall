@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.32.1 - 2026-11-08
+
+### Fixed
+- SNMP: switches could go up and down with "no SNMP reply" (seen on Netgear smart switches). Since 1.20.2, every poll also asked for the device's own uptime (HOST-RESOURCES-MIB). Switches without that MIB can stall their SNMP service when asked for it, so the next poll got no answer. Rollcall now asks once per device, with a short timeout and no retry. A device that doesn't answer isn't asked again, and its SNMP-service uptime is shown instead, as before 1.20.2.
+
 ## 1.32.0 - 2026-11-08
 
 ### Added

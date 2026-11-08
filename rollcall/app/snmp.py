@@ -421,8 +421,8 @@ class Session:
             return vbinds
         raise SnmpError("no SNMP v3 reply (check the privacy password and protocol: devices ignore requests they can't decrypt)")
 
-    async def get(self, oids: list[str]) -> dict[str, object]:
-        return {o: v for o, v in await self._ask(0xA0, oids) if v is not END}
+    async def get(self, oids: list[str], timeout: float | None = None) -> dict[str, object]:
+        return {o: v for o, v in await self._ask(0xA0, oids, timeout=timeout) if v is not END}
 
     async def walk(self, root: str, limit: int = 3000, timeout: float | None = None, per: int | None = None) -> dict[str, object]:
         """Every value under root, keyed by the OID suffix after root (e.g. '3.1.2').
@@ -488,7 +488,8 @@ def _smart(v) -> str:
     return str(v)
 
 
-async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25, v3: V3 | None = None) -> dict:
+async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25, v3: V3 | None = None,
+               ask_hr: bool = True) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     timing: dict[str, int] = {}
@@ -516,12 +517,21 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                "ports": [], "poe": None, "nas": None, "uptime_source": "snmp"}
         # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
         # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
-        try:
-            hr = (await s.get(["1.3.6.1.2.1.25.1.1.0"])).get("1.3.6.1.2.1.25.1.1.0")
-            if isinstance(hr, int) and hr > 0:
-                out["uptime_s"], out["uptime_source"] = hr // 100, "system"
-        except SnmpError:
-            pass
+        # Asked once per device: some switches (e.g. Netgear smart switches) stall their SNMP service
+        # when asked for something they don't have, so a device that doesn't answer isn't asked again.
+        out["hr"] = False
+        if ask_hr:
+            t = time.monotonic()
+            retries, s.retries = s.retries, 0
+            try:
+                hr = (await s.get(["1.3.6.1.2.1.25.1.1.0"], timeout=min(timeout, 1.5))).get("1.3.6.1.2.1.25.1.1.0")
+                if isinstance(hr, int) and hr > 0:
+                    out["uptime_s"], out["uptime_source"], out["hr"] = hr // 100, "system", True
+            except SnmpError:
+                pass
+            finally:
+                s.retries = retries
+                timing["device uptime"] = int((time.monotonic() - t) * 1000)
 
         # Interfaces: physical ports only (not VLANs, LAGs, the CPU or absent slots)
         cols = {}
