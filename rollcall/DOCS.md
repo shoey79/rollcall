@@ -388,13 +388,13 @@ These settings are stored in the add-on's data folder (`agent_settings.json`) an
 
 ### Computers that report over the internet
 
-A computer that reports through the outside address (e.g. a laptop away from the office) usually can't be pinged from Home Assistant, so ping would show it as down even though its agent is reporting. In Edit, set **Tell it's up by** to **Its agent reporting in**. It's then:
+A computer that reports through the outside address (e.g. a laptop away from the office) usually can't be pinged from Home Assistant. **Tell it's up by** (in Edit) handles this:
 
-- **up** while its reports arrive (the list shows "report 2 min ago" instead of a ping time);
-- **amber** ("Report late") once a report is more than about 11 minutes old;
-- **down**, with a notification, after `agent_stale_minutes` (at least 12) without a report.
+- **Automatic** (the default): it's up while it answers ping or, if it has an agent, while the agent has reported in the last 10 minutes. The status then says **Up (agent)**, and the list shows "report 2 min ago" instead of a ping time. It's only treated as down when both fail: no ping reply and no report for over 10 minutes (amber at the first miss, red at the next). Computers without an agent are checked by ping as before.
+- **Ping only**: the fastest down alerts, within a minute or two, for servers that are always on the network. With Automatic, a crashed server with an agent can take up to about 10 minutes to show as down.
+- **Agent only**: never pinged. It's up while reports arrive, amber ("Report late") once a report is over about 11 minutes old, and down with a notification after `agent_stale_minutes` (at least 12).
 
-It's up again as soon as a report arrives. Port, web and certificate checks on it still need to be reachable from Home Assistant, so leave those off for computers that are only reachable over the internet.
+In each case it's up again as soon as a report arrives. Port, web and certificate checks on it still need to be reachable from Home Assistant, so leave those off for computers that are only reachable over the internet.
 
 ### Windows installer (.msi)
 

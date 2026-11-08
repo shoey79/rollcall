@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.31.0 - 2026-11-08
+
+### Changed
+- **Tell it's up by** now defaults to **Automatic**: a computer with an agent counts as up if it answers ping or its agent has reported in the last 10 minutes, so laptops reporting over the internet no longer show as down. Without an agent, it's checked by ping as before.
+  - **Ping only** is still available, for the fastest down alerts on always-on servers.
+  - **Agent only** is too.
+  - Computers that are up only through their agent show **Up (agent)**.
+
 ## 1.30.0 - 2026-11-08
 
 ### Added

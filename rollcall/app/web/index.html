@@ -555,8 +555,10 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         </div>
         <div class="checkby" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
           <b style="font-size:13px">Tell it's up by</b>
-          <label class="schedopt"><input type="radio" name="checkBy" value="ping" checked> <span><b>Ping</b>: it's up while it answers (the usual way)</span></label>
-          <label class="schedopt"><input type="radio" name="checkBy" value="agent"> <span><b>Its agent reporting in</b>: for computers that connect over the internet and can't be pinged, e.g. laptops away from the office. Up while reports arrive, amber when one is late, down after <span class="stalemin">15</span> minutes without one. Port and web checks on it still need to be reachable from Home Assistant.</span></label>
+          <label class="schedopt"><input type="radio" name="checkBy" value="auto" checked> <span><b>Automatic</b>: up while it answers ping or, if it has an agent, while the agent has reported in the last 10 minutes. Suits laptops that are sometimes on the internet. Without an agent, this is the same as ping.</span></label>
+          <label class="schedopt"><input type="radio" name="checkBy" value="ping"> <span><b>Ping only</b>: the fastest down alerts (a minute or two) for servers that are always on the network</span></label>
+          <label class="schedopt"><input type="radio" name="checkBy" value="agent"> <span><b>Agent only</b>: never pinged; up while reports arrive, amber when one is late, down after <span class="stalemin">15</span> minutes without one</span></label>
+          <p class="hint" style="margin:4px 0 0">Port and web checks still need the computer to be reachable from Home Assistant.</p>
         </div>
         <label class="schedopt" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><input type="checkbox" id="fNoAlerts"> <span><b>Never alert for this computer</b>: no phone or Home Assistant notifications for it at all; the dashboard still shows its status and checks</span></label>
       </fieldset>
@@ -664,6 +666,7 @@ function statusLabel(h) {
   if (h.starting_up) return "Starting up";
   if (h.check_by === "agent" && h.status === "amber") return "Report late";
   if (h.check_by === "agent" && h.status === "red") return "Not reporting";
+  if (h.via_agent && h.status === "green") return "Up (agent)";
   return LABEL[h.status];
 }
 function schedNote(h) {
@@ -761,7 +764,7 @@ function render() {
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
-      <td data-label="Latency" class="num">${h.check_by === "agent" ? `<span class="muted" title="Checked by its agent reporting in, not by ping">${h.agent && h.agent.last_seen ? "report " + ago(h.agent.last_seen, data.now) : "agent"}</span>` : h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
+      <td data-label="Latency" class="num">${h.check_by === "agent" || h.via_agent ? `<span class="muted" title="${h.check_by === "agent" ? "Checked by its agent reporting in, not by ping" : "Not answering ping, but up because its agent is reporting"}">${h.agent && h.agent.last_seen ? "report " + ago(h.agent.last_seen, data.now) : "agent"}</span>` : h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
       <td data-label="Last check">${h.checking ? "checking…" : ago(h.last_check, now)}</td>
       <td data-label="Since">${ago(h.last_change, now)}</td>
       <td data-label=""><div class="actions">
@@ -890,7 +893,8 @@ function alerts() {
       out.push({h, sev: h.status === "red" ? 0 : 2, dot: h.status, check: null,
         title: h.check_by === "agent" ? (h.status === "red" ? "Agent not reporting" : "Agent report late") : h.status === "red" ? "Not responding" : "Missed a check",
         detail: h.check_by === "agent" ? (h.agent && h.agent.last_seen ? `Last report ${ago(h.agent.last_seen, data.now)}` : "No report yet")
-          : h.status === "red" ? `No reply from ${h.ip || h.host}` : "Didn't reply to the last check; re-checking",
+          : h.status === "red" ? `No reply from ${h.ip || h.host}${h.agent && h.check_by !== "ping" ? h.agent.last_seen ? `, and no agent report since ${ago(h.agent.last_seen, data.now)}` : "" : ""}`
+          : "Didn't reply to the last check; re-checking",
         since: h.last_change});
       if (h.status === "red") continue;  // its checks are down with it
     }
@@ -2409,7 +2413,7 @@ async function openDialog(h) {
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
   setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
   document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
-  const cb = h && h.check_by === "agent" ? "agent" : "ping";
+  const cb = h && ["ping", "agent"].includes(h.check_by) ? h.check_by : "auto";
   form.querySelectorAll('input[name="checkBy"]').forEach(r => r.checked = r.value === cb);
   form.querySelectorAll(".stalemin").forEach(el => el.textContent = Math.max(12, (data && data.agent_stale_minutes) || 15));
   document.getElementById("fSysAlert").value = String(h && h.syslog_alert != null ? h.syslog_alert : 3);
@@ -2449,7 +2453,7 @@ form.addEventListener("submit", async e => {
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean), addrChecks);
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
     icon: pickIcon, model: document.getElementById("fModel").value.trim(),
-    check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "ping",
+    check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
   const commIn = document.getElementById("fSnmpComm").value;

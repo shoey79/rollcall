@@ -84,6 +84,7 @@ ICON_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "sv
 ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)$")
 ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$")
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
+AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
@@ -559,9 +560,9 @@ def validate_entry(raw: dict) -> dict:
                     clean[k] = pw
             entry["snmp_v3"] = clean
     if "check_by" in raw:
-        cb = str(raw.get("check_by") or "ping")
-        if cb not in ("ping", "agent"):
-            raise ValueError("check_by must be ping or agent")
+        cb = str(raw.get("check_by") or "auto")
+        if cb not in ("auto", "ping", "agent"):
+            raise ValueError("check_by must be auto, ping or agent")
         entry["check_by"] = cb
     if "icon" in raw:
         icon = str(raw.get("icon") or "")
@@ -1162,7 +1163,8 @@ class Host:
     no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
-    check_by: str = "ping"             # how to tell it's up: "ping", or "agent" (reports arriving, e.g. over the internet)
+    check_by: str = "auto"             # how to tell it's up: "auto" (ping, or a recent agent report), "ping" or "agent"
+    via_agent: bool = False            # up only because its agent is reporting (no ping reply)
     icon: str = ""                     # "b:<built-in>" or "u:<uploaded file>"; blank = pick from what it is
     model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
@@ -1316,7 +1318,7 @@ class Monitor:
                             **({"schedule": h.schedule} if h.schedule else {}),
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
-                            **({"check_by": h.check_by} if h.check_by != "ping" else {}),
+                            **({"check_by": h.check_by} if h.check_by != "auto" else {}),
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
@@ -1333,7 +1335,7 @@ class Monitor:
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         h.snmp_community = entry.get("snmp_community") or None
-        h.check_by = "agent" if entry.get("check_by") == "agent" else "ping"
+        h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
         h.snmp_version = "3" if entry.get("snmp_version") == "3" else "2c"
@@ -1630,6 +1632,7 @@ class Monitor:
                 if os.environ.get("PM_AGENT_LATE"):  # for testing
                     late, stale = (int(x) for x in os.environ["PM_AGENT_LATE"].split(","))
                 ok, latency, ip = age is not None and age <= late, None, h.ip
+                h.via_agent = ok
                 h.last_check = now
                 h.latency = None
                 h.failures = 0 if ok else (1 if age is None or age <= stale else 2)  # never reported: amber, not a down alert
@@ -1647,11 +1650,17 @@ class Monitor:
                     else:
                         ok, latency = False, None
                 now = time.time()
+                # Automatic: a computer whose agent reported in the last 10 minutes is up even if it
+                # doesn't answer ping (e.g. a laptop reporting over the internet, or ICMP blocked).
+                h.via_agent = bool(not ok and h.check_by == "auto" and h.agent_id and h.agent_seen
+                                   and now - h.agent_seen <= AGENT_FRESH)
+                if h.via_agent:
+                    ok = True
                 h.last_check = now
-                h.latency = latency if ok else None
+                h.latency = latency if ok and not h.via_agent else None
                 h.failures = 0 if ok else h.failures + 1
                 old = h.status
-                reason = "unresolved" if ip is None else "down"
+                reason = "unresolved" if ip is None else ("down_agent" if h.check_by == "auto" and h.agent_id else "down")
 
             on, since, _next = schedule_state(h.schedule, now)
             if h.expect_off:
@@ -1880,6 +1889,7 @@ class Monitor:
                 "unresolved": "Hostname could not be resolved.",
                 "maint_timeout": "It did not reply before the maintenance window ended.",
                 "sched_timeout": "It didn't come up after its monitoring window started.",
+                "down_agent": "No reply to ping, and its agent hasn't reported for over 10 minutes.",
                 "agent_late": f"Its agent hasn't reported for over {max(int(self.opts['agent_stale_minutes']), 12)} minutes.",
                 "agent_never": "Its agent hasn't reported yet.",
             }.get(reason, "No reply to ping on two consecutive checks.")
@@ -2296,7 +2306,7 @@ class Monitor:
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
         h.agent_report, h.agent_seen = report, received
-        if h.check_by == "agent" and h.status != GREEN and not restoring:
+        if h.check_by != "ping" and h.status not in (GREEN, DEGRADED) and not restoring:
             h.next_due = 0  # it's reporting again: show it as up now, not at the next check
         notable = result["notable"]
         # Events ignored since they arrived no longer keep the Events chip amber.
@@ -2644,7 +2654,7 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
-                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "check_by": h.check_by,
+                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "check_by": h.check_by, "via_agent": h.via_agent,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
