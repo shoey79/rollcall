@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.27.0 - 2026-11-08
+
+### Added
+- **Inside and outside addresses for agents**: set an inside address and, optionally, an outside (internet) one under Agents. Downloads have both built in.
+  - Agents try the addresses in order and remember which one worked, so laptops away from the office report through the outside address without waiting.
+  - An address that can't be reached is skipped after 3 seconds.
+  - The dialog warns if the outside address isn't HTTPS.
+- Windows agent 1.0.14 and Linux agent 1.0.8. Agents updating themselves keep their list of addresses.
+
 ## 1.26.2 - 2026-11-08
 
 ### Changed

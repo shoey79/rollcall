@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.7"
+AGENT_VERSION = "1.0.8"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -774,8 +774,47 @@ def build_report(state, conf):
 # --------------------------------------------------------------------------
 # Talking to the add-on
 # --------------------------------------------------------------------------
+ACTIVE = {"server": None, "preferred": None}
+
+
+def server_list(server):
+    """The add-on's addresses: server can list several, e.g. internal then external
+    ("http://10.0.0.5:8100,https://rollcall.example.com:8100"). The one that worked last goes first."""
+    allx = [x.strip().rstrip("/") for x in re.split(r"[,;\s]+", server or SERVER) if x.strip()]
+    pref = ACTIVE["preferred"]
+    return ([pref] + [x for x in allx if x != pref]) if pref in allx else allx
+
+
+def reachable(url, timeout=3):
+    import urllib.parse
+    u = urllib.parse.urlsplit(url)
+    try:
+        socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 def send(path, body, token=None, server=None, ignore_cert=False):
-    url = (server or SERVER).rstrip("/") + path
+    servers = server_list(server)
+    last = None
+    for srv in servers:
+        if len(servers) > 1 and not reachable(srv):
+            last = "can't reach " + srv
+            continue
+        try:
+            result = send_to(srv, path, body, token, ignore_cert)
+            ACTIVE["server"] = srv
+            return result
+        except (urllib.error.URLError, OSError) as err:
+            last = str(getattr(err, "reason", err))
+            if len(servers) > 1:
+                log("WARN %s didn't answer (%s); trying the next address" % (srv, last))
+    raise SystemExit("Couldn't reach Rollcall at any of its addresses (%s): %s" % (", ".join(servers), last))
+
+
+def send_to(srv, path, body, token=None, ignore_cert=False):
+    url = srv + path
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json; charset=utf-8"})
     if token:
@@ -805,7 +844,8 @@ def self_update(offer, token, server, ignore):
     version = str((offer or {}).get("version") or "")
     if not version or not newer(version, AGENT_VERSION) or not os.path.exists(INSTALL_PATH):
         return
-    url = server.rstrip("/") + "/agent/update?os=linux&server=" + urllib.request.quote(server, safe="")
+    full = ",".join(x.strip().rstrip("/") for x in re.split(r"[,;\s]+", server) if x.strip())
+    url = (ACTIVE["server"] or server_list(server)[0]) + "/agent/update?os=linux&server=" + urllib.request.quote(full, safe="")
     if ignore:
         url += "&ignore_cert=1"
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
@@ -844,6 +884,7 @@ def agent_run(conf, report_only=False):
         print(json.dumps(report, indent=1))
         return
     ignore = bool(conf.get("ignore_cert", IGNORE_CERT))
+    ACTIVE["preferred"] = state.get("last_server")
     status, body = send("/agent/report", report, state["token"], server, ignore)
     if status == 401:
         log("Not enrolled yet: asking to join")
@@ -866,6 +907,8 @@ def agent_run(conf, report_only=False):
         raise SystemExit("Report rejected (HTTP %s)" % status)
     state["watch"] = (body or {}).get("watch_services") or []
     state["last_run"] = utc(time.time())
+    if ACTIVE["server"]:
+        state["last_server"] = ACTIVE["server"]
     save_json(STATE_PATH, state)
     slow = max(TIMINGS.items(), key=lambda kv: kv[1]) if TIMINGS else None
     log("Report sent: %d role(s), %d error(s); run took %.1f s%s" % (

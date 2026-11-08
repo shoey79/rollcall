@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.13'
+$AgentVersion = '1.0.14'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1140,8 +1140,45 @@ function Get-Report($State, [string[]]$ExtraWatch) {
 # ---------------------------------------------------------------------------
 # Talking to the add-on
 # ---------------------------------------------------------------------------
+function Get-ServerList {
+    # -Server can list several addresses, e.g. internal then external:
+    # 'http://10.0.0.5:8100,https://rollcall.example.com:8100'. The one that worked last is tried first.
+    $all = @($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') })
+    if ($script:PreferredServer -and $all -contains $script:PreferredServer) {
+        $all = @($script:PreferredServer) + @($all | Where-Object { $_ -ne $script:PreferredServer })
+    }
+    return $all
+}
+
+function Test-Reachable([string]$Url, [int]$Ms = 3000) {
+    # Quick TCP check, so an address that can't be reached from here doesn't hold up the run.
+    try {
+        $u = [uri]$Url
+        $port = if ($u.Port -gt 0) { $u.Port } elseif ($u.Scheme -eq 'https') { 443 } else { 80 }
+        $c = New-Object System.Net.Sockets.TcpClient
+        try { $t = $c.ConnectAsync($u.Host, $port); return ($t.Wait($Ms) -and $c.Connected) } finally { $c.Close() }
+    } catch { return $false }
+}
+
 function Send-Json([string]$Path, $Body, [string]$Token) {
-    $uri = $Server.TrimEnd('/') + $Path
+    $servers = @(Get-ServerList)
+    $lastErr = $null
+    foreach ($srv in $servers) {
+        if ($servers.Count -gt 1 -and -not (Test-Reachable $srv)) { $lastErr = "can't reach $srv"; continue }
+        try {
+            $r = Send-JsonTo $srv $Path $Body $Token
+            $script:ActiveServer = $srv
+            return $r
+        } catch {
+            $lastErr = $_.Exception.Message
+            if ($servers.Count -gt 1) { Write-AgentLog "WARN $srv didn't answer ($lastErr); trying the next address" }
+        }
+    }
+    throw "Couldn't reach Rollcall at any of its addresses ($($servers -join ', ')): $lastErr"
+}
+
+function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
+    $uri = $Srv + $Path
     $json = $Body | ConvertTo-Json -Depth 10 -Compress
     $params = @{
         Uri = $uri; Method = 'Post'; Body = [Text.Encoding]::UTF8.GetBytes($json)
@@ -1180,7 +1217,8 @@ function Invoke-AgentUpdate($State, $Offer) {
     if (-not $Offer -or -not $Offer.version -or -not (Test-NewerVersion ([string]$Offer.version) $AgentVersion)) { return }
     $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
     if (-not (Test-Path $dest)) { return }  # only an installed agent updates itself
-    $uri = $Server.TrimEnd('/') + '/agent/update?os=windows&server=' + [uri]::EscapeDataString($Server.TrimEnd('/'))
+    $active = if ($script:ActiveServer) { $script:ActiveServer } else { @(Get-ServerList)[0] }
+    $uri = $active + '/agent/update?os=windows&server=' + [uri]::EscapeDataString((@($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') }) -join ','))
     if ($IgnoreCertificate) { $uri += '&ignore_cert=1' }
     $params = @{ Uri = $uri; Method = 'Get'; TimeoutSec = 60; UseBasicParsing = $true; Headers = @{ Authorization = "Bearer $($State.token)" } }
     if ($uri -like 'https:*' -and $IgnoreCertificate) {
@@ -1212,6 +1250,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if (-not (Test-Path $DataPath)) { New-Item -ItemType Directory -Path $DataPath -Force | Out-Null; Protect-DataFolder }
     $state = Read-State
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
+    $script:PreferredServer = [string]$state.last_server
 
     $extra = @($ExtraServices) + @($state.watch) | Where-Object { $_ } | Select-Object -Unique
     $report = Get-Report $state $extra
@@ -1237,6 +1276,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
 
     if ($res.body -and $res.body.watch_services) { $state.watch = @($res.body.watch_services) } else { $state.watch = @() }
     $state.last_run = ConvertTo-UtcString (Get-Date)
+    if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
     Save-State $state
     $slow = $script:Timings.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
     $took = if ($report.run_ms) { '{0:N1} s' -f ($report.run_ms / 1000) } else { '?' }

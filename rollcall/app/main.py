@@ -2946,9 +2946,9 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         return web.json_response({"key_hint": "…" + monitor.agents.enrol_key[-4:]})
 
     async def agents_script(req):
-        server = (req.query.get("server") or "").strip().rstrip("/")
-        if not SERVER_RE.match(server):
-            raise web.HTTPBadRequest(text=json.dumps({"error": "Enter the address as http://host:port"}),
+        server = clean_servers(req.query.get("server") or "")
+        if not server:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Enter each address as http://host:port (up to 4)"}),
                                      content_type="application/json")
         linux = req.query.get("os") == "linux"
         body = build_agent_script("linux" if linux else "windows", server, monitor.agents.enrol_key,
@@ -3521,7 +3521,24 @@ def apply_pending_restore() -> None:
     print(f"Imported an export; the previous data is kept in {keep}", flush=True)
 
 
-SERVER_RE = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+$")
+_ONE_SERVER = re.compile(r"^https?://[A-Za-z0-9.\-\[\]:]+$")
+
+
+def clean_servers(raw: str) -> str | None:
+    """One address, or several tried in order (e.g. internal then external), as "a,b"."""
+    parts = [p.strip().rstrip("/") for p in re.split(r"[,;\s]+", raw or "") if p.strip()]
+    if not parts or len(parts) > 4 or not all(_ONE_SERVER.match(p) for p in parts):
+        return None
+    return ",".join(dict.fromkeys(parts))
+
+
+class _ServerRE:  # keeps the old SERVER_RE.match(...) call sites working
+    @staticmethod
+    def match(v):
+        return clean_servers(v) is not None
+
+
+SERVER_RE = _ServerRE()
 
 
 def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: bool) -> bytes:
@@ -3635,8 +3652,8 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         os_name = "linux" if agent.get("os_family") == "linux" else "windows"
         if not monitor.agent_update_offer(agent, {"os_family": os_name, "agent_version": agent.get("agent_version")}):
             return web.json_response({"error": "no update offered"}, status=404)
-        server = (req.query.get("server") or "").strip().rstrip("/")
-        if not SERVER_RE.match(server):
+        server = clean_servers(req.query.get("server") or "")
+        if not server:
             raise web.HTTPBadRequest(text="invalid server address")
         body = build_agent_script(os_name, server, store.enrol_key, req.query.get("ignore_cert") == "1")
         key = bytes.fromhex(agentlib.token_hash(token))

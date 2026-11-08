@@ -386,6 +386,14 @@ Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and por
 
 These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
 
+### Inside and outside addresses
+
+Under **Agents → Where the agents report to**, there are two addresses: **Inside your network** (e.g. `http://192.168.1.5:8100`) and, optionally, **From outside** (e.g. `https://rollcall.example.com:8100`). Downloads have both built in. Agents try them in order and remember which one worked, so a laptop away from the office goes straight to the outside address next time, and back to the inside one when it returns. An address that can't be reached is skipped after 3 seconds.
+
+For the outside address to work, forward its port on your firewall to Home Assistant's agent port, or publish it through a reverse proxy. Use HTTPS for it: turn on `agent_ssl` (see above), otherwise reports and each server's token cross the internet unencrypted. Servers still have to be approved before their reports count, and every report is checked against that server's own token.
+
+To give an existing agent the new addresses, download it again and run `-Install` or `--install`. On Linux you can instead set `server` in `/etc/pingmonitor/agent.conf` to a comma-separated list. Needs Windows agent 1.0.14 or Linux agent 1.0.8.
+
 ### Updating agents automatically
 
 Each add-on release carries the latest agents. Under **Agents → Download and install**, tick **Update Windows agents automatically** and/or **Update Linux agents automatically**. At its next report, any agent older than the add-on's copy downloads it from Home Assistant and replaces itself; the new version runs from the report after that. To update just one server, use **Update** next to it in the Approved list. Both are off by default, and the Agent column shows which servers are out of date.
