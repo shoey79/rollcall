@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.30.0 - 2026-11-08
+
+### Added
+- **Tell it's up by: Its agent reporting in.** For computers that report over the internet and can't be pinged, such as laptops away from the office.
+  - Up while reports arrive, amber when a report is late, down with a notification after `agent_stale_minutes`, and up again as soon as it reports.
+  - The list shows when it last reported instead of a ping time.
+
 ## 1.29.0 - 2026-11-08
 
 ### Added

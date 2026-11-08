@@ -558,6 +558,11 @@ def validate_entry(raw: dict) -> dict:
                         raise ValueError("SNMP v3 passwords must be 8 to 64 characters")
                     clean[k] = pw
             entry["snmp_v3"] = clean
+    if "check_by" in raw:
+        cb = str(raw.get("check_by") or "ping")
+        if cb not in ("ping", "agent"):
+            raise ValueError("check_by must be ping or agent")
+        entry["check_by"] = cb
     if "icon" in raw:
         icon = str(raw.get("icon") or "")
         if icon and not ICON_REF.match(icon):
@@ -1157,6 +1162,7 @@ class Host:
     no_alerts: bool = False            # show its status, never notify
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
+    check_by: str = "ping"             # how to tell it's up: "ping", or "agent" (reports arriving, e.g. over the internet)
     icon: str = ""                     # "b:<built-in>" or "u:<uploaded file>"; blank = pick from what it is
     model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
@@ -1310,6 +1316,7 @@ class Monitor:
                             **({"schedule": h.schedule} if h.schedule else {}),
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
+                            **({"check_by": h.check_by} if h.check_by != "ping" else {}),
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
@@ -1326,6 +1333,7 @@ class Monitor:
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         h.snmp_community = entry.get("snmp_community") or None
+        h.check_by = "agent" if entry.get("check_by") == "agent" else "ping"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
         h.snmp_version = "3" if entry.get("snmp_version") == "3" else "2c"
@@ -1360,6 +1368,9 @@ class Monitor:
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
+        if "check_by" in entry:
+            h.check_by = entry["check_by"]
+            h.next_due = 0
         if "icon" in entry:
             h.icon = entry["icon"]
         if "model" in entry:
@@ -1610,22 +1621,37 @@ class Monitor:
 
     async def check(self, h: Host) -> None:
         try:
-            async with self.sem:
-                ip = await resolve(h.host)
-                if ip:
-                    h.ip = ip
-                    ok, latency = await ping(
-                        ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
-                        [s.port for s in h.services if s.port and not s.target and s.kind != "cert"],
-                    )
-                else:
-                    ok, latency = False, None
-            now = time.time()
-            h.last_check = now
-            h.latency = latency if ok else None
-            h.failures = 0 if ok else h.failures + 1
-            old = h.status
-            reason = "unresolved" if ip is None else "down"
+            if h.check_by == "agent":
+                # Up while its agent reports on time: for computers that report over the internet
+                # and can't be pinged. Late (more than 2 runs) is amber; past agent_stale_minutes, down.
+                now = time.time()
+                age = now - h.agent_seen if h.agent_seen else None
+                late, stale = 11 * 60, max(int(self.opts["agent_stale_minutes"]) * 60, 12 * 60)
+                if os.environ.get("PM_AGENT_LATE"):  # for testing
+                    late, stale = (int(x) for x in os.environ["PM_AGENT_LATE"].split(","))
+                ok, latency, ip = age is not None and age <= late, None, h.ip
+                h.last_check = now
+                h.latency = None
+                h.failures = 0 if ok else (1 if age is None or age <= stale else 2)  # never reported: amber, not a down alert
+                old = h.status
+                reason = "agent_never" if age is None else "agent_late"
+            else:
+                async with self.sem:
+                    ip = await resolve(h.host)
+                    if ip:
+                        h.ip = ip
+                        ok, latency = await ping(
+                            ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
+                            [s.port for s in h.services if s.port and not s.target and s.kind != "cert"],
+                        )
+                    else:
+                        ok, latency = False, None
+                now = time.time()
+                h.last_check = now
+                h.latency = latency if ok else None
+                h.failures = 0 if ok else h.failures + 1
+                old = h.status
+                reason = "unresolved" if ip is None else "down"
 
             on, since, _next = schedule_state(h.schedule, now)
             if h.expect_off:
@@ -1854,6 +1880,8 @@ class Monitor:
                 "unresolved": "Hostname could not be resolved.",
                 "maint_timeout": "It did not reply before the maintenance window ended.",
                 "sched_timeout": "It didn't come up after its monitoring window started.",
+                "agent_late": f"Its agent hasn't reported for over {max(int(self.opts['agent_stale_minutes']), 12)} minutes.",
+                "agent_never": "Its agent hasn't reported yet.",
             }.get(reason, "No reply to ping on two consecutive checks.")
             msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
             await self.notify(f"🔴 {h.name} is down", msg, tag)
@@ -2268,6 +2296,8 @@ class Monitor:
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
         h.agent_report, h.agent_seen = report, received
+        if h.check_by == "agent" and h.status != GREEN and not restoring:
+            h.next_due = 0  # it's reporting again: show it as up now, not at the next check
         notable = result["notable"]
         # Events ignored since they arrived no longer keep the Events chip amber.
         ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + settings["ignore"])
@@ -2614,7 +2644,7 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
-                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model,
+                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "check_by": h.check_by,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
@@ -2630,6 +2660,7 @@ class Monitor:
                 "agent": self._agent_summary(h),
             })
         return {"now": time.time(), "interval": self.interval,
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)),
                 "syslog_port": self.syslog_port, "syslog_unknown": sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),

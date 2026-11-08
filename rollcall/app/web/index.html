@@ -553,6 +553,11 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           <label class="tabfield">Allow <input type="number" id="schedGrace" min="0" max="240" value="15" style="width:70px"> minutes for it to start up when a window opens, before alerting</label>
           <p class="hint">Times are in Home Assistant's time zone. A window can run past midnight, e.g. 22:00 to 06:00 (it belongs to the day it starts).</p>
         </div>
+        <div class="checkby" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <b style="font-size:13px">Tell it's up by</b>
+          <label class="schedopt"><input type="radio" name="checkBy" value="ping" checked> <span><b>Ping</b>: it's up while it answers (the usual way)</span></label>
+          <label class="schedopt"><input type="radio" name="checkBy" value="agent"> <span><b>Its agent reporting in</b>: for computers that connect over the internet and can't be pinged, e.g. laptops away from the office. Up while reports arrive, amber when one is late, down after <span class="stalemin">15</span> minutes without one. Port and web checks on it still need to be reachable from Home Assistant.</span></label>
+        </div>
         <label class="schedopt" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><input type="checkbox" id="fNoAlerts"> <span><b>Never alert for this computer</b>: no phone or Home Assistant notifications for it at all; the dashboard still shows its status and checks</span></label>
       </fieldset>
     </div>
@@ -657,6 +662,8 @@ function statusLabel(h) {
   if (h.maint_until) return LABEL[h.status];
   if (h.off_schedule) return h.expect_off ? "Off" : h.reachable ? "On · off schedule" : "Off schedule";
   if (h.starting_up) return "Starting up";
+  if (h.check_by === "agent" && h.status === "amber") return "Report late";
+  if (h.check_by === "agent" && h.status === "red") return "Not reporting";
   return LABEL[h.status];
 }
 function schedNote(h) {
@@ -754,7 +761,7 @@ function render() {
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
-      <td data-label="Latency" class="num">${h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
+      <td data-label="Latency" class="num">${h.check_by === "agent" ? `<span class="muted" title="Checked by its agent reporting in, not by ping">${h.agent && h.agent.last_seen ? "report " + ago(h.agent.last_seen, data.now) : "agent"}</span>` : h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
       <td data-label="Last check">${h.checking ? "checking…" : ago(h.last_check, now)}</td>
       <td data-label="Since">${ago(h.last_change, now)}</td>
       <td data-label=""><div class="actions">
@@ -881,8 +888,9 @@ function alerts() {
     if (h.maint_until || h.off_schedule || h.status === "maintenance") continue;
     if (h.status === "red" || h.status === "amber") {
       out.push({h, sev: h.status === "red" ? 0 : 2, dot: h.status, check: null,
-        title: h.status === "red" ? "Not responding" : "Missed a check",
-        detail: h.status === "red" ? `No reply from ${h.ip || h.host}` : "Didn't reply to the last check; re-checking",
+        title: h.check_by === "agent" ? (h.status === "red" ? "Agent not reporting" : "Agent report late") : h.status === "red" ? "Not responding" : "Missed a check",
+        detail: h.check_by === "agent" ? (h.agent && h.agent.last_seen ? `Last report ${ago(h.agent.last_seen, data.now)}` : "No report yet")
+          : h.status === "red" ? `No reply from ${h.ip || h.host}` : "Didn't reply to the last check; re-checking",
         since: h.last_change});
       if (h.status === "red") continue;  // its checks are down with it
     }
@@ -2401,6 +2409,9 @@ async function openDialog(h) {
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
   setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
   document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
+  const cb = h && h.check_by === "agent" ? "agent" : "ping";
+  form.querySelectorAll('input[name="checkBy"]').forEach(r => r.checked = r.value === cb);
+  form.querySelectorAll(".stalemin").forEach(el => el.textContent = Math.max(12, (data && data.agent_stale_minutes) || 15));
   document.getElementById("fSysAlert").value = String(h && h.syslog_alert != null ? h.syslog_alert : 3);
   document.getElementById("fSysWords").value = h && h.syslog_keywords ? h.syslog_keywords.join(", ") : "";
   document.getElementById("fSysIgnore").value = h && h.syslog_ignore ? h.syslog_ignore.join(", ") : "";
@@ -2438,6 +2449,7 @@ form.addEventListener("submit", async e => {
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean), addrChecks);
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
     icon: pickIcon, model: document.getElementById("fModel").value.trim(),
+    check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "ping",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
   const commIn = document.getElementById("fSnmpComm").value;

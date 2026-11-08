@@ -386,6 +386,16 @@ Requirements: Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and por
 
 These settings are stored in the add-on's data folder (`agent_settings.json`) and kept across restarts and agent updates.
 
+### Computers that report over the internet
+
+A computer that reports through the outside address (e.g. a laptop away from the office) usually can't be pinged from Home Assistant, so ping would show it as down even though its agent is reporting. In Edit, set **Tell it's up by** to **Its agent reporting in**. It's then:
+
+- **up** while its reports arrive (the list shows "report 2 min ago" instead of a ping time);
+- **amber** ("Report late") once a report is more than about 11 minutes old;
+- **down**, with a notification, after `agent_stale_minutes` (at least 12) without a report.
+
+It's up again as soon as a report arrives. Port, web and certificate checks on it still need to be reachable from Home Assistant, so leave those off for computers that are only reachable over the internet.
+
 ### Windows installer (.msi)
 
 For computers looked after by people who aren't in IT, use **Download installer (.msi)** on the Windows card. The installer has the agent, the addresses and the enrolment key built in, so they only need to double-click it and accept the administrator prompt. It then:
