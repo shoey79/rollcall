@@ -1395,9 +1395,10 @@ async function resetUptime(key, name) {
   if (key) {
     if (!confirm(`Clear uptime history for ${name}? This can't be undone.`)) return;
   } else {
-    const typed = prompt(`This clears the uptime history of all ${data ? data.hosts.length : ""} computers, and can't be undone.\n\nType RESET to confirm:`);
+    const code = String(1000 + Math.floor(Math.random() * 9000));  // a new 4-digit code each time
+    const typed = prompt(`This clears the uptime history of all ${data ? data.hosts.length : ""} computers, and can't be undone.\n\nTo confirm, type this number: ${code}`);
     if (typed === null) return;
-    if (typed.trim().toUpperCase() !== "RESET") return alert("Nothing was reset.");
+    if (typed.trim() !== code) return alert("That number didn't match, so nothing was reset.");
   }
   const r = await fetch(key ? "api/reset/" + encodeURIComponent(key) : "api/reset", {method: "POST"});
   if (!r.ok) alert("Reset failed (" + r.status + ")");

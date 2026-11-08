@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.26.1 - 2026-11-08
+
+### Changed
+- **Reset all uptime** now shows a random 4-digit number, different each time, which you type to confirm, instead of typing RESET. Anything else, or cancelling, resets nothing.
+
 ## 1.26.0 - 2026-11-08
 
 ### Changed
