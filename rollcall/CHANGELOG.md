@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.33.0 - 2026-11-08
+
+### Added
+- **Check now**, **Pause** and **Resume** in the Details dialog's footer, so a device opened from the Overview can be paused or resumed straight away. It shows when a pause ends. Pause and Resume are hidden for view-only users.
+
 ## 1.32.1 - 2026-11-08
 
 ### Fixed
