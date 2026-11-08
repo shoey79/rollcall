@@ -1736,7 +1736,9 @@ function renderDetails(d) {
   if (tm.length || r.run_ms) {
     const secs = ms => ms >= 10000 ? Math.round(ms / 1000) + " s" : (ms / 1000).toFixed(1) + " s";
     const total = Math.max(1, ...tm.map(x => x[1]));
-    html += sect("Agent run", `<p class="empty-note">Took ${r.run_ms ? secs(r.run_ms) : "?"}${linux ? "" : " including PowerShell starting up"} · CPU ${r.cpu_ms != null ? secs(r.cpu_ms) : "?"} · peak memory ${r.peak_mem_mb != null ? r.peak_mem_mb + " MB" : "?"}${r.last_patch_cached ? " · update history from cache" : ""}</p>` +
+    const hs = data && data.hosts.find(x => x.key === detKey), ag = hs && hs.agent;
+    const via = ag && ag.sent_to ? `<p class="empty-note">Last report sent to <b>${esc(ag.sent_to)}</b>, from ${esc(ag.forwarded_for ? ag.forwarded_for + " (through " + (ag.source_ip || "a proxy") + ")" : ag.source_ip || "?")}</p>` : "";
+    html += sect("Agent run", via + `<p class="empty-note">Took ${r.run_ms ? secs(r.run_ms) : "?"}${linux ? "" : " including PowerShell starting up"} · CPU ${r.cpu_ms != null ? secs(r.cpu_ms) : "?"} · peak memory ${r.peak_mem_mb != null ? r.peak_mem_mb + " MB" : "?"}${r.last_patch_cached ? " · update history from cache" : ""}</p>` +
       tm.map(([k, v]) => `<div class="diskrow"><b style="font-weight:500;font-size:12px">${esc(k)}</b><div class="bar"><i class="${v >= 30000 ? "red" : v >= 10000 ? "amber" : ""}" style="width:${Math.max(1, 100 * v / total)}%"></i></div><span>${secs(v)}</span></div>`).join(""));
   }
   if ((r.errors || []).length) html += sect("Agent warnings", `<ul class="steps">${r.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`);
@@ -2136,9 +2138,10 @@ function renderAgents() {
     const latest = x.os_family === "linux" ? a.latest_linux_version : a.latest_version;
     const old = latest && x.version && cmpVer(latest, x.version) > 0;
     const auto = a.auto_update && a.auto_update[x.os_family === "linux" ? "linux" : "windows"];
+    const from = x.forwarded_for ? `${x.forwarded_for} (through ${x.source_ip || "a proxy"})` : x.source_ip;
     return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
       <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
-      <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}</td>
+      <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}${x.sent_to ? `<br><small class="muted" title="${esc("Sent to " + x.sent_to + (from ? ", from " + from : ""))}">to ${esc(x.sent_to.replace(/^https?:\/\//, ""))}${from ? `<br>from ${esc(from)}` : ""}</small>` : ""}</td>
       <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (x.os_family === "linux" ? "download it and run --install again" : "update the script on the share") : ""}">${esc(x.version || "?")} <small class="muted">${x.os_family === "linux" ? "Linux" : "Windows"}</small></td>
       <td><small>${esc((x.roles || []).join(", "))}</small></td>
       <td><div class="actions">${old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`

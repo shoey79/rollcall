@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.32.0 - 2026-11-08
+
+### Added
+- **Which address each agent uses**:
+  - Agents' logs now say where each report went ("Report sent to https://…: …").
+  - Rollcall stores the address each agent last reported to and the IP the report came from. For reports through a reverse proxy, such as the firewall's WAF, that's the original IP from `X-Forwarded-For` and the proxy's own IP.
+  - Shown under Last report in the Agents list, and in Details → Agent. The add-on log notes when an agent switches address.
+- Windows agent 1.0.16 and Linux agent 1.0.10.
+
 ## 1.31.0 - 2026-11-08
 
 ### Changed

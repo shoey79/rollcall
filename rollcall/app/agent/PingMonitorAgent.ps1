@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.15'
+$AgentVersion = '1.0.16'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1183,6 +1183,7 @@ function Send-Json([string]$Path, $Body, [string]$Token) {
 
 function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
     $uri = $Srv + $Path
+    if ($Body -is [System.Collections.IDictionary]) { $Body['sent_to'] = $Srv }  # so Rollcall knows which address was used
     $json = $Body | ConvertTo-Json -Depth 10 -Compress
     $params = @{
         Uri = $uri; Method = 'Post'; Body = [Text.Encoding]::UTF8.GetBytes($json)
@@ -1292,7 +1293,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     Save-State $state
     $slow = $script:Timings.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
     $took = if ($report.run_ms) { '{0:N1} s' -f ($report.run_ms / 1000) } else { '?' }
-    Write-AgentLog ("Report sent: {0} role(s), {1} error(s); run took {2}{3}" -f @($report.roles).Count, @($report.errors).Count, $took,
+    Write-AgentLog ("Report sent to {0}: {1} role(s), {2} error(s); run took {3}{4}" -f $script:ActiveServer, @($report.roles).Count, @($report.errors).Count, $took,
         $(if ($slow) { '; slowest: {0} {1:N1} s' -f $slow.Key, ($slow.Value / 1000) } else { '' }))
     if ($res.body -and $res.body.agent_update) {
         try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }

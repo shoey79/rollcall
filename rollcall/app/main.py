@@ -2131,10 +2131,14 @@ class Monitor:
         log.info("Revoked the agent on %s", agent["hostname"])
         return agent
 
-    async def receive_report(self, agent: dict, report: dict, source_ip: str | None) -> None:
+    async def receive_report(self, agent: dict, report: dict, source_ip: str | None, forwarded_for: str | None = None) -> None:
         now = time.time()
         report = agentlib.normalize_report(report)
-        agent.update(last_report=now, source_ip=source_ip,
+        sent_to = str(report.get("sent_to") or "")[:200]
+        if sent_to and sent_to != agent.get("sent_to") and agent.get("sent_to"):
+            log.info("%s now reports via %s (was %s)", agent.get("hostname"), sent_to, agent.get("sent_to"))
+        agent.update(last_report=now, source_ip=source_ip, sent_to=sent_to or agent.get("sent_to"),
+                     forwarded_for=(forwarded_for or "")[:60] or None,
                      agent_version=str(report.get("agent_version") or "")[:20],
                      os=str(report.get("os") or "")[:120], os_family=report.get("os_family"),
                      ips=[str(i) for i in (report.get("ips") or [])][:8] or agent.get("ips"),
@@ -2500,7 +2504,9 @@ class Monitor:
         mem = None
         if r.get("mem_total_mb"):
             mem = round(100 * (1 - (r.get("mem_free_mb") or 0) / r["mem_total_mb"]), 1)
+        rec = (self.agents.agents.get(h.agent_id) if self.agents else None) or {}
         return {"id": h.agent_id, "last_seen": h.agent_seen, "version": r.get("agent_version"),
+                "sent_to": rec.get("sent_to"), "source_ip": rec.get("source_ip"), "forwarded_for": rec.get("forwarded_for"),
                 "roles": r.get("roles") or [], "os": r.get("os"), "uptime_s": r.get("uptime_s"),
                 # Before the first report, the OS comes from the enrolment request.
                 "os_family": r.get("os_family") or ((self.agents.agents.get(h.agent_id) if self.agents else None) or {}).get("os_family") or "windows",
@@ -2941,6 +2947,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                 "os": a.get("os"), "version": a.get("agent_version"), "roles": a.get("roles") or [],
                 "os_family": a.get("os_family") or "windows",
                 "approved_at": a.get("approved_at"), "last_report": a.get("last_report"),
+                "sent_to": a.get("sent_to"), "source_ip": a.get("source_ip"), "forwarded_for": a.get("forwarded_for"),
                 "host_key": h.key if h else None, "host_name": h.name if h else None,
                 "update_queued": a["id"] in (monitor.agent_settings.get("update_now") or [])}
 
@@ -3708,8 +3715,11 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         if state != "approved":
             return web.json_response({"error": "unknown agent"}, status=401)
         body = await read_json(req)
+        # Through a reverse proxy (e.g. the firewall's WAF) the sender is the proxy; it usually passes on the
+        # original address. Shown for information only: it's whatever the proxy (or client) says.
+        fwd = (req.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or None
         try:
-            await monitor.receive_report(agent, body, req.remote)
+            await monitor.receive_report(agent, body, req.remote, fwd)
         except Exception as err:  # noqa: BLE001
             log.exception("Couldn't process the report from %s: %s", agent["hostname"], err)
             try:  # keep a copy to diagnose with

@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.9"
+AGENT_VERSION = "1.0.10"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -816,6 +816,8 @@ def send(path, body, token=None, server=None, ignore_cert=False):
 
 def send_to(srv, path, body, token=None, ignore_cert=False):
     url = srv + path
+    if isinstance(body, dict):
+        body["sent_to"] = srv  # so Rollcall knows which address was used
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json; charset=utf-8"})
     if token:
@@ -918,7 +920,7 @@ def agent_run(conf, report_only=False):
         state["servers"] = pushed
     save_json(STATE_PATH, state)
     slow = max(TIMINGS.items(), key=lambda kv: kv[1]) if TIMINGS else None
-    log("Report sent: %d role(s), %d error(s); run took %.1f s%s" % (
+    log("Report sent to %s: %d role(s), %d error(s); run took %.1f s%s" % (ACTIVE["server"],
         len(report["roles"]), len(report["errors"]), report["run_ms"] / 1000,
         "; slowest: %s %.1f s" % (slow[0], slow[1] / 1000) if slow else ""))
     if (body or {}).get("agent_update"):
