@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.25.0 - 2026-11-08
+
+### Added
+- **Certificate expiry checks**: tick **Certificate expiry on HTTPS (443)**, or add `cert:PORT` or `cert:HOST:PORT`.
+  - Any TLS port works, including self-signed and internal certificates. Mail ports (25, 587, 110, 143, 21) use STARTTLS, which covers Exchange SMTP.
+  - Amber within `cert_warn_days` (30) of expiry, red with a notification within `cert_crit_days` (7) or once expired.
+  - Each check shows the expiry date, days left, the certificate's name and its issuer.
+
 ## 1.24.2 - 2026-11-08
 
 ### Fixed

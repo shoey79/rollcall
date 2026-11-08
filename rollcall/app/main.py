@@ -44,6 +44,7 @@ from aiohttp import ClientSession, ClientTimeout, web
 import agents as agentlib
 import snmp as snmplib
 import syslogrx as sysloglib
+import certcheck
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -109,6 +110,8 @@ DEFAULTS = {
     "notification_url": "",
     "admin_only_changes": True,
     "editors": [],
+    "cert_warn_days": 30,
+    "cert_crit_days": 7,
     "agent_stale_minutes": 15,
     "agent_slow_seconds": 120,
     "agent_disk_warn": 15,
@@ -202,6 +205,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
     ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
     ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID (e.g. Netgear, Buffalo)", _NET, [("SNMP", "snmp:device")]),
+    ("cert", "Certificate expiry on HTTPS (443)", _NET, [("Cert 443", "cert:443")]),
     ("syslog", "Syslog: keep this device's log messages and alert on errors", _NET, [("Syslog", "syslog:device")]),
     ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
     # Home & automation
@@ -267,6 +271,7 @@ _LABELLED = re.compile(r"^([^=:/]+)=(.+)$")
 _TCP = re.compile(r"^tcp:(\d{1,5})$", re.I)
 _ADDR = r"(?:[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])"
 _PING = re.compile(rf"^ping:({_ADDR})$", re.I)             # another address of the same device
+_CERT = re.compile(rf"^cert(?::({_ADDR}))?(?::(\d{{1,5}}))?$", re.I)  # certificate expiry: cert, cert:8443, cert:host:443
 _TCP_AT = re.compile(rf"^tcp:({_ADDR}):(\d{{1,5}})$", re.I)  # a port on another address
 _REL_HTTP = re.compile(r"^(https?):(\d{1,5})(/.*)?$", re.I)
 # A Home Assistant entity, optionally with a condition: ha:sensor.office_ap_cpu_utilization>90
@@ -300,6 +305,16 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         items = PRESETS[name]
         return [d for lab, spec in items
                 for d in parse_check(spec, label if label and len(items) == 1 else lab)]
+    if (m := _CERT.match(entry)) and not (m.group(1) and m.group(1).isdigit() and m.group(2)):
+        addr, port = m.group(1), m.group(2)
+        if addr and addr.isdigit() and not port:  # "cert:8443"
+            addr, port = None, addr
+        port = int(port or 443)
+        if not 1 <= port <= 65535:
+            raise ValueError(f"port out of range in '{entry}'")
+        addr = addr.strip("[]") if addr else None
+        return [{"label": label or (f"Cert {port}" + (f" {addr}" if addr else "")), "kind": "cert", "port": port, "url": None,
+                 "desc": f"certificate on {addr}:{port}" if addr else f"certificate on port {port}", "target": addr}]
     if m := _PING.match(entry):
         addr = m.group(1).strip("[]")
         return [{"label": label or addr, "kind": "ping", "port": None, "url": None, "desc": f"ping {addr}", "target": addr}]
@@ -1600,7 +1615,7 @@ class Monitor:
                     h.ip = ip
                     ok, latency = await ping(
                         ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
-                        [s.port for s in h.services if s.port and not s.target],
+                        [s.port for s in h.services if s.port and not s.target and s.kind != "cert"],
                     )
                 else:
                     ok, latency = False, None
@@ -1700,6 +1715,13 @@ class Monitor:
             if s.kind == "syslog":
                 return self.syslog_state(h, now)
             async with self.sem:
+                if s.kind == "cert":
+                    ip = await resolve(s.target) if s.target else h.ip
+                    if not ip:
+                        return False, None, f"can't resolve {s.target}"
+                    s.resolved = ip if s.target else None
+                    return await certcheck.check(ip, s.port, s.target or h.host, int(self.opts["cert_warn_days"]),
+                                                 int(self.opts["cert_crit_days"]), self.svc_timeout)
                 if s.target:
                     ip = await resolve(s.target)
                     if not ip:
@@ -1853,6 +1875,16 @@ class Monitor:
             "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
         })
         tag = f"ping_monitor_{svc_key(h, s)}"
+        if new == RED and s.kind == "cert":
+            msg = f"{h.name} ({h.ip or h.host}) port {s.port}: certificate {s.detail}"
+            await self.notify(f"🟠 {h.name}: certificate expiring", msg, tag)
+            await self.persist(tag, f"Rollcall: {h.name} certificate", msg)
+            return
+        if old == RED and new == GREEN and s.kind == "cert":
+            await self.dismiss(tag)
+            if self.opts["notify_recovery"]:
+                await self.notify(f"🟢 {h.name}: certificate renewed", f"{h.name} port {s.port}: {s.detail}.", tag)
+            return
         if new == RED and s.kind == "syslog":
             msg = f"{h.name} ({h.ip or h.host}) logged {s.detail}"
             await self.notify(f"🟠 {h.name}: syslog alert", msg, tag)

@@ -76,6 +76,8 @@ notify_services:           # notify.* services, without the "notify." prefix
 persistent_notification: true   # bell-icon notification in HA while something is down
 notify_recovery: true           # also notify when something comes back
 maintenance_minutes: 30         # default time limit when pausing a host
+cert_warn_days: 30              # certificate checks: amber this many days before expiry
+cert_crit_days: 7               # ...and red (with a notification) this many days before, or once expired
 admin_only_changes: true        # only HA admins (and editors) can add/edit/pause/reset
 agent_stale_minutes: 15         # agents: alert if no report for this long
 agent_disk_warn: 15             # % free: amber below this
@@ -248,6 +250,16 @@ The condition describes the problem. Operators: `>` `>=` `<` `<=` `=` `!=`. A se
 Agents (Windows 1.0.13, Linux 1.0.7 and later) report the machine's manufacturer, model and serial number (a Dell service tag, for instance), and whether it's a VM: Hyper-V, VMware, KVM/QEMU (including Proxmox), VirtualBox, Xen or a cloud VM, or a container (LXC, Docker) on Linux. Computers without an agent count as Hyper-V VMs when a Hyper-V host's agent lists a VM with the same name. You can also put "VM" or "Hyper-V" in **Make and model**.
 
 The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. PowerEdge R720xd · ABC1234*) unless you've typed a make and model. To split the list, make a tab with **Physical or virtual** is *Physical*, *Virtual (any)*, *Hyper-V VM*, *VMware VM*, *KVM / QEMU / Proxmox VM*, *Container* or *Not known*. The **+ New tab** templates include Physical machines, Virtual machines and Hyper-V VMs.
+
+### Certificate expiry
+
+Tick **Certificate expiry on HTTPS (443)** under Network, or add custom checks:
+
+- `cert:8443`: the certificate on another port of this computer.
+- `SMTP=cert:25`: mail ports use STARTTLS (25 and 587 SMTP, 110 POP3, 143 IMAP, 21 FTP), so Exchange's SMTP certificate can be checked.
+- `cert:mail.example.com:443`: a certificate on another name or address. The name is also sent as SNI, so it picks the right certificate on a server that has several.
+
+Each check reads the certificate the service presents (internal and self-signed ones count too). It's green while it has more than `cert_warn_days` (30) left, amber within that, and red within `cert_crit_days` (7) or once expired; red notifies, and so does renewal if `notify_recovery` is on. The chip's detail shows the expiry date, days left, the name on the certificate and who issued it. If the certificate can't be read (port closed, not TLS), the check goes amber and says why.
 
 ### Other addresses
 

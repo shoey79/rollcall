@@ -517,6 +517,7 @@ table.logs td:first-child{white-space:nowrap;color:var(--muted)}
           A port: <code>tcp:5985</code> · a web page on this computer: <code>https:443/owa</code> ·
           a full URL: <code>https://mail.example.local/owa</code><br>
           Give it a name with <code>Name=</code>, e.g. <code>Reporting=tcp:50123</code><br>
+          Certificate expiry: <code>cert:443</code>, <code>SMTP=cert:25</code> (mail ports use STARTTLS), or on another name or address <code>cert:mail.example.com:443</code><br>
           A Home Assistant sensor: <code>CPU=ha:sensor.office_ap_cpu_utilization&gt;90</code> goes amber, then red, while the condition is true
           (<code>&gt;</code> <code>&lt;</code> <code>=</code> <code>!=</code>). Without a condition it only needs to be available.
         </p>
