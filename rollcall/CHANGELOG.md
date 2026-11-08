@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.26.2 - 2026-11-08
+
+### Changed
+- List tabs now wrap onto extra lines, so every tab is visible without scrolling sideways. The selected tab is shown as a box.
+
 ## 1.26.1 - 2026-11-08
 
 ### Changed

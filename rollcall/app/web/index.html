@@ -227,10 +227,9 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .harow small{display:block;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
 .harow .val{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
 /* Tabs */
-/* The underline is an inset shadow, so the open tab can cover it without overlapping the
-   container (a negative margin there made Chrome show a vertical scrollbar). */
-.tabs{display:flex;gap:2px;align-items:flex-end;box-shadow:inset 0 -1px 0 var(--line);margin-bottom:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
-.tab{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;background:transparent;color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;flex:none}
+/* Tabs wrap onto as many lines as they need, so every one is visible without scrolling. */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.tab{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;flex:none}
 .tab:hover{background:color-mix(in srgb,var(--accent) 6%,transparent);color:var(--text)}
 .tab.on{background:var(--card);border-color:var(--line);color:var(--text)}
 .tab .n{font-weight:500;color:var(--muted);font-variant-numeric:tabular-nums}
