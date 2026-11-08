@@ -299,6 +299,19 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 .namewrap{display:flex;gap:10px;align-items:flex-start}
 .namewrap .dicon{margin-top:1px}
 .model{font-size:12px;color:var(--muted)}
+/* The name column wraps (make/model, schedule, chips) so long details can't push the buttons off-screen */
+#rows td[data-label="Name"]{white-space:normal;min-width:190px;max-width:340px}
+#rows td[data-label="Name"] .model,#rows td[data-label="Name"] .sched,#rows td[data-label="Name"] .host{overflow-wrap:anywhere}
+#rows td[data-label="Name"] .name{overflow-wrap:anywhere}
+@media (min-width:761px) and (max-width:1200px){
+  #rows td[data-label=""]{white-space:normal}
+  #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:130px}
+}
+/* On narrower screens, drop the least useful columns rather than scroll sideways */
+@media (min-width:761px) and (max-width:1080px){th[data-sort="since"],#rows td[data-label="Since"]{display:none}}
+@media (min-width:761px) and (max-width:960px){th[data-sort="check"],#rows td[data-label="Last check"]{display:none}}
+@media (min-width:761px) and (max-width:860px){th[data-sort="latency"],#rows td[data-label="Latency"]{display:none}}
+@media (max-width:760px){#rows td[data-label="Name"]{max-width:none;min-width:0}#rows td[data-label=""] .actions{justify-content:flex-start;max-width:none}}
 .gl .dicon{width:22px;height:22px;margin-top:1px}
 @media (max-width:760px){.iconrow{grid-template-columns:1fr}}
 .snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.24.1 - 2026-11-08
+
+### Fixed
+- A long name or hardware line (e.g. a laptop's full model and serial number) widened the list, pushing the buttons off-screen behind a sideways scroll bar at the bottom of the list. The name column now wraps onto more lines. On narrower screens the buttons wrap too, and the Since, Last check and Latency columns are hidden in turn so the list fits without scrolling sideways.
+
 ## 1.24.0 - 2026-11-07
 
 ### Added
