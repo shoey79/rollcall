@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.33.2 - 2026-11-08
+
+### Fixed
+- SNMP: slow switches (e.g. Netgear smart switches) still timed out and sometimes didn't answer at all. Each poll walked every interface, including VLANs and LAGs, column by column: hundreds of requests.
+  - Rollcall now finds the physical ports, their names and descriptions, and the PoE ports every 6 hours.
+  - Each check fetches only those ports' live values (up/down, speed, errors, PoE state and power), ten per request. A 16-port PoE switch now needs about 15 requests per check instead of about 450.
+  - A request a device rejects is retried value by value.
+
 ## 1.33.1 - 2026-11-08
 
 ### Fixed

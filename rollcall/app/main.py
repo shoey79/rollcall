@@ -1818,7 +1818,7 @@ class Monitor:
                 v3 = snmplib.V3(c.get("user", ""), c.get("auth"), c.get("auth_pass", ""), c.get("priv"), c.get("priv_pass", ""))
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
                                   v3=v3,
-                                  per=self._snmp_per(prev),
+                                  per=self._snmp_per(prev), discovery=(prev or {}).get("discovery"),
                                   ask_hr=(prev or {}).get("hr") is not False,  # stop asking a device that didn't answer
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:

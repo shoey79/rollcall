@@ -490,8 +490,29 @@ def _smart(v) -> str:
     return str(v)
 
 
+async def get_many(s: "Session", oids: list[str], batch: int = 10) -> dict[str, object]:
+    """GET a list of OIDs, a batch per request. A batch that fails is retried an OID at a time
+    (some devices reject a whole request if one OID is unknown)."""
+    out: dict[str, object] = {}
+    for n in range(0, len(oids), batch):
+        chunk = oids[n:n + batch]
+        try:
+            out.update(await s.get(chunk))
+        except SnmpError as err:
+            if err.status is None and len(chunk) > 1 and s.timeouts > 6:
+                raise  # the device has stopped answering
+            if len(chunk) == 1:
+                continue
+            for o in chunk:
+                try:
+                    out.update(await s.get([o]))
+                except SnmpError:
+                    pass
+    return out
+
+
 async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25, v3: V3 | None = None,
-               ask_hr: bool = True) -> dict:
+               ask_hr: bool = True, discovery: dict | None = None) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     timing: dict[str, int] = {}
@@ -535,63 +556,59 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                 s.retries = retries
                 timing["device uptime"] = int((time.monotonic() - t) * 1000)
 
-        # Interfaces: physical ports only (not VLANs, LAGs, the CPU or absent slots)
-        cols = {}
-        for col, oid in (("descr", "1.3.6.1.2.1.2.2.1.2"), ("type", "1.3.6.1.2.1.2.2.1.3"),
-                         ("admin", "1.3.6.1.2.1.2.2.1.7"), ("oper", "1.3.6.1.2.1.2.2.1.8"),
-                         ("in_err", "1.3.6.1.2.1.2.2.1.14"), ("out_err", "1.3.6.1.2.1.2.2.1.20"),
-                         ("name", "1.3.6.1.2.1.31.1.1.1.1"), ("speed", "1.3.6.1.2.1.31.1.1.1.15"),
-                         ("alias", "1.3.6.1.2.1.31.1.1.1.18")):
-            cols[col] = await timed({"descr": "ports", "type": "ports", "oper": "ports", "admin": "port admin state",
-                                     "in_err": "port errors", "out_err": "port errors", "name": "port names",
-                                     "speed": "port speeds", "alias": "port descriptions"}[col], s.walk(oid),
-                                    optional=col not in ("descr", "type", "oper"))
-        for idx, typ in cols["type"].items():
-            oper = cols["oper"].get(idx)
-            if typ not in IF_TYPES_PHYSICAL or oper == 6:  # 6 = notPresent
-                continue
+        # Discovery (every 6 hours, or when there's none): which interfaces are physical ports, their
+        # names and descriptions, and which are PoE ports. Each check then only fetches the live values
+        # for those, a dozen per request: a few requests instead of walking every interface (VLANs,
+        # LAGs...) column by column, which slow switches can't keep up with.
+        IF, IFX, PSE, MAIN = "1.3.6.1.2.1.2.2.1", "1.3.6.1.2.1.31.1.1.1", "1.3.6.1.2.1.105.1.1.1", "1.3.6.1.2.1.105.1.3.1.1"
+        disc = discovery if discovery and time.time() - discovery.get("at", 0) < 6 * 3600 and discovery.get("ports") is not None else None
+        if disc is None:
+            types = await timed("ports", s.walk(f"{IF}.3"), optional=False)
+            if not types:
+                raise SnmpError("the device didn't list its interfaces")
+            opers = await timed("ports", s.walk(f"{IF}.8"))
+            phys = [i for i, t in types.items() if t in IF_TYPES_PHYSICAL and opers.get(i) != 6]  # 6 = notPresent
+            names = await timed("port names", get_many(s, [f"{IFX}.1.{i}" for i in phys] + [f"{IF}.2.{i}" for i in phys]))
+            alias = await timed("port descriptions", get_many(s, [f"{IFX}.18.{i}" for i in phys]))
+            poe_idx = list(await timed("PoE", s.walk(f"{PSE}.6", limit=200)))
+            groups = sorted({i.split(".")[0] for i in poe_idx if "." in i}) or (["1"] if poe_idx else [])
+            disc = {"at": time.time(), "poe": poe_idx, "poe_groups": groups,
+                    "ports": {i: {"name": str(names.get(f"{IFX}.1.{i}") or names.get(f"{IF}.2.{i}") or i),
+                                  "descr": str(names.get(f"{IF}.2.{i}") or ""), "alias": str(alias.get(f"{IFX}.18.{i}") or "")}
+                              for i in phys}}
+            if "port names" in missing or "port descriptions" in missing:
+                disc["at"] = time.time() - 6 * 3600 + 600  # try again in 10 minutes rather than 6 hours
+        out["discovery"] = disc
+
+        live = await timed("ports", get_many(s, [f"{c}.{i}" for i in disc["ports"]
+                                                   for c in (f"{IF}.7", f"{IF}.8", f"{IFX}.15", f"{IF}.14", f"{IF}.20")]))
+        if disc["ports"] and not any(k.startswith(f"{IF}.8.") for k in live):
+            raise SnmpError("no SNMP reply for the port states")
+        for i, meta in disc["ports"].items():
             out["ports"].append({
-                "index": int(idx), "name": str(cols["name"].get(idx) or cols["descr"].get(idx) or idx),
-                "descr": str(cols["descr"].get(idx) or ""), "alias": str(cols["alias"].get(idx) or ""),
-                "admin_up": cols["admin"].get(idx) == 1, "up": oper == 1, "speed_mbps": cols["speed"].get(idx),
-                "in_errors": cols["in_err"].get(idx), "out_errors": cols["out_err"].get(idx)})
+                "index": int(i), "name": meta["name"], "descr": meta["descr"], "alias": meta["alias"],
+                "admin_up": live.get(f"{IF}.7.{i}") == 1, "up": live.get(f"{IF}.8.{i}") == 1,
+                "speed_mbps": live.get(f"{IFX}.15.{i}"),
+                "in_errors": live.get(f"{IF}.14.{i}"), "out_errors": live.get(f"{IF}.20.{i}")})
         out["ports"].sort(key=lambda p: p["index"])
 
-        # PoE (POWER-ETHERNET-MIB), if the switch has it
-        # Only the columns used: the PoE ports from one column, then the rest with small GETs
-        # (some switches are very slow to walk the whole table).
-        ports: dict[str, dict] = {}
-        mains: dict[str, dict] = {}
-        pse = "1.3.6.1.2.1.105.1.1.1"
-        detect = await timed("PoE", s.walk(f"{pse}.6", limit=200))
-        if detect:
-            idx = list(detect)
-            for i in idx:
-                ports[i] = {"6": detect[i]}
-            wanted = [(i, c) for i in idx for c in ("3", "7", "10", "12", "13", "14")]
-            for n in range(0, len(wanted), 12):
-                chunk = wanted[n:n + 12]
-                got = await timed("PoE", s.get([f"{pse}.{c}.{i}" for i, c in chunk]))
-                for i, c in chunk:
-                    v = got.get(f"{pse}.{c}.{i}")
-                    if v is not None:
-                        ports[i][c] = v
-            main = "1.3.6.1.2.1.105.1.3.1.1"
-            groups = sorted({i.split(".")[0] for i in idx if "." in i}) or ["1"]
-            got = await timed("PoE", s.get([f"{main}.{c}.{g}" for g in groups for c in ("2", "3", "4", "5")]))
-            for g in groups:
-                mains[g] = {c: got.get(f"{main}.{c}.{g}") for c in ("2", "3", "4", "5")}
-        if ports or mains:
-            m = next(iter(mains.values()), {})
-            out["poe"] = {
-                "power_w": m.get("2"), "status": PSE_MAIN.get(m.get("3"), str(m.get("3") or "")),
-                "used_w": m.get("4"), "threshold_pct": m.get("5"),
-                "ports": sorted(({"index": int(idx.split(".")[-1]), "group": int(idx.split(".")[0]),
-                                  "enabled": r.get("3") == 1, "state": PSE_DETECT.get(r.get("6"), str(r.get("6"))),
-                                  "fault": r.get("6") in (4, 6), "priority": PRIORITY.get(r.get("7"), ""),
-                                  "class": (r.get("10") - 1) if isinstance(r.get("10"), int) and r.get("10") > 0 else None,
-                                  "denied": r.get("12") or 0, "overload": r.get("13") or 0, "short": r.get("14") or 0}
-                                 for idx, r in ports.items() if "." in idx), key=lambda p: (p["group"], p["index"]))}
+        # PoE (POWER-ETHERNET-MIB), if the switch has it: only the columns used
+        if disc.get("poe"):
+            got = await timed("PoE", get_many(s, [f"{PSE}.{c}.{i}" for i in disc["poe"] for c in ("3", "6", "7", "10", "12", "13", "14")]
+                                               + [f"{MAIN}.{c}.{g}" for g in disc["poe_groups"] for c in ("2", "3", "4", "5")]))
+            ports = {i: {c: got.get(f"{PSE}.{c}.{i}") for c in ("3", "6", "7", "10", "12", "13", "14")} for i in disc["poe"]}
+            mains = {g: {c: got.get(f"{MAIN}.{c}.{g}") for c in ("2", "3", "4", "5")} for g in disc["poe_groups"]}
+            if got:
+                m = next(iter(mains.values()), {})
+                out["poe"] = {
+                    "power_w": m.get("2"), "status": PSE_MAIN.get(m.get("3"), str(m.get("3") or "")),
+                    "used_w": m.get("4"), "threshold_pct": m.get("5"),
+                    "ports": sorted(({"index": int(idx.split(".")[-1]), "group": int(idx.split(".")[0]),
+                                      "enabled": r.get("3") == 1, "state": PSE_DETECT.get(r.get("6"), str(r.get("6"))),
+                                      "fault": r.get("6") in (4, 6), "priority": PRIORITY.get(r.get("7"), ""),
+                                      "class": (r.get("10") - 1) if isinstance(r.get("10"), int) and r.get("10") > 0 else None,
+                                      "denied": r.get("12") or 0, "overload": r.get("13") or 0, "short": r.get("14") or 0}
+                                     for idx, r in ports.items() if "." in idx), key=lambda p: (p["group"], p["index"]))}
 
         # Buffalo TeraStation (BUFFALO-NAS-MIB)
         if out["object_id"].startswith("1.3.6.1.4.1.5227") or "terastation" in out["descr"].lower():
