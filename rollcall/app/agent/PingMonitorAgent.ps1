@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.14'
+$AgentVersion = '1.0.15'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -131,6 +131,8 @@ function Read-State {
                 foreach ($p in $raw.cursors.PSObject.Properties) { $state.cursors[$p.Name] = [long]$p.Value }
             }
             if ($raw.watch) { $state.watch = @($raw.watch) }
+            if ($raw.last_server) { $state.last_server = [string]$raw.last_server }
+            if ($raw.servers) { $state.servers = @($raw.servers | ForEach-Object { [string]$_ }) }
             if ($raw.amd_raid) { $state.amd_raid = [string]$raw.amd_raid }
             if ($raw.veeam) { $state.veeam = [string]$raw.veeam }
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
@@ -1143,7 +1145,9 @@ function Get-Report($State, [string[]]$ExtraWatch) {
 function Get-ServerList {
     # -Server can list several addresses, e.g. internal then external:
     # 'http://10.0.0.5:8100,https://rollcall.example.com:8100'. The one that worked last is tried first.
-    $all = @($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') })
+    # Addresses the add-on sent (set under Agents) come first; the ones this copy was installed with
+    # stay on the end, so a mistake in the dashboard can't cut the agent off.
+    $all = @(@($script:PushedServers) + @($Server -split '[,;\s]+') | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') } | Select-Object -Unique)
     if ($script:PreferredServer -and $all -contains $script:PreferredServer) {
         $all = @($script:PreferredServer) + @($all | Where-Object { $_ -ne $script:PreferredServer })
     }
@@ -1251,6 +1255,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $state = Read-State
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     $script:PreferredServer = [string]$state.last_server
+    $script:PushedServers = @($state.servers | Where-Object { $_ -match '^https?://[^\s,;]+$' })
 
     $extra = @($ExtraServices) + @($state.watch) | Where-Object { $_ } | Select-Object -Unique
     $report = Get-Report $state $extra
@@ -1277,6 +1282,13 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($res.body -and $res.body.watch_services) { $state.watch = @($res.body.watch_services) } else { $state.watch = @() }
     $state.last_run = ConvertTo-UtcString (Get-Date)
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
+    if ($res.body -and $res.body.servers) {
+        $pushed = @($res.body.servers | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^https?://[^\s,;]+$' } | Select-Object -First 4)
+        if ($pushed.Count -and (($pushed -join ',') -ne (@($state.servers) -join ','))) {
+            Write-AgentLog ("Rollcall's addresses are now: " + ($pushed -join ', '))
+        }
+        if ($pushed.Count) { $state.servers = $pushed }
+    }
     Save-State $state
     $slow = $script:Timings.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
     $took = if ($report.run_ms) { '{0:N1} s' -f ($report.run_ms / 1000) } else { '?' }

@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.8"
+AGENT_VERSION = "1.0.9"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -774,13 +774,14 @@ def build_report(state, conf):
 # --------------------------------------------------------------------------
 # Talking to the add-on
 # --------------------------------------------------------------------------
-ACTIVE = {"server": None, "preferred": None}
+ACTIVE = {"server": None, "preferred": None, "pushed": []}
 
 
 def server_list(server):
     """The add-on's addresses: server can list several, e.g. internal then external
     ("http://10.0.0.5:8100,https://rollcall.example.com:8100"). The one that worked last goes first."""
-    allx = [x.strip().rstrip("/") for x in re.split(r"[,;\s]+", server or SERVER) if x.strip()]
+    # Addresses the add-on sent (set under Agents) first; the installed ones stay on the end.
+    allx = list(dict.fromkeys(x.strip().rstrip("/") for x in list(ACTIVE["pushed"]) + re.split(r"[,;\s]+", server or SERVER) if x.strip()))
     pref = ACTIVE["preferred"]
     return ([pref] + [x for x in allx if x != pref]) if pref in allx else allx
 
@@ -885,6 +886,7 @@ def agent_run(conf, report_only=False):
         return
     ignore = bool(conf.get("ignore_cert", IGNORE_CERT))
     ACTIVE["preferred"] = state.get("last_server")
+    ACTIVE["pushed"] = [x for x in state.get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))]
     status, body = send("/agent/report", report, state["token"], server, ignore)
     if status == 401:
         log("Not enrolled yet: asking to join")
@@ -909,6 +911,11 @@ def agent_run(conf, report_only=False):
     state["last_run"] = utc(time.time())
     if ACTIVE["server"]:
         state["last_server"] = ACTIVE["server"]
+    pushed = [str(x) for x in (body or {}).get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))][:4]
+    if pushed:
+        if pushed != state.get("servers"):
+            log("Rollcall's addresses are now: " + ", ".join(pushed))
+        state["servers"] = pushed
     save_json(STATE_PATH, state)
     slow = max(TIMINGS.items(), key=lambda kv: kv[1]) if TIMINGS else None
     log("Report sent: %d role(s), %d error(s); run took %.1f s%s" % (

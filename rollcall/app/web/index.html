@@ -200,6 +200,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .sect.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{background:color-mix(in srgb,var(--accent) 14%,transparent)}100%{background:transparent}}
 .osgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.hint.ok{color:var(--green)}.hint.bad{color:var(--red)}
 .srvgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
 .srvgrid input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%;min-width:0}
 @media (max-width:760px){.srvgrid{grid-template-columns:1fr}}
@@ -2034,16 +2035,33 @@ function agExtNote() {
 }
 document.addEventListener("input", e => { if (e.target && e.target.id === "agServerExt") agExtNote(); });
 function defaultServer() {
+  if (agInfo.servers && (agInfo.servers.inside || agInfo.servers.outside)) return agInfo.servers.inside || "";
   const saved = (() => { try { return localStorage.getItem("pm_agent_server"); } catch (e) { return null; } })();
   return saved || `${agInfo.ssl ? "https" : "http"}://${location.hostname}:${agInfo.port}`;
 }
+// Saved in the add-on: agents pick up changes at their next report, without a new download.
+async function saveServers() {
+  const inside = document.getElementById("agServer").value.trim().replace(/\/+$/, "");
+  const outside = document.getElementById("agServerExt").value.trim().replace(/\/+$/, "");
+  const note = document.getElementById("agSaved");
+  for (const v of [inside, outside].filter(Boolean)) if (!/^https?:\/\/[^\s'",;/]+$/.test(v)) { note.textContent = `"${v}" isn't an address like http://host:port`; note.className = "hint bad"; return false; }
+  if (!inside && !outside) return false;
+  const r = await fetch("api/agents/servers", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({inside, outside})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { note.textContent = j.error || "Couldn't save (" + r.status + ")"; note.className = "hint bad"; return false; }
+  agInfo.servers = j.servers;
+  note.textContent = "✓ Saved. Agents (Windows 1.0.15, Linux 1.0.9 and later) switch to these at their next report."; note.className = "hint ok";
+  return true;
+}
+document.addEventListener("change", e => { if (e.target && (e.target.id === "agServer" || e.target.id === "agServerExt")) saveServers(); });
 function renderAgents() {
   const a = agInfo, now = Date.now() / 1000;
   const staleSec = (a.stale_minutes || 15) * 60;
   const known = a.agents.concat(a.pending).map(x => (x.fqdn || "").split(".").slice(1).join(".")).find(Boolean);
   const share = `\\\\${esc(known || "your-domain")}\\NETLOGON`;
   let html = "";
-  const ext = (() => { try { return localStorage.getItem("pm_agent_server_ext") || ""; } catch (e) { return ""; } })();
+  const ext = agInfo.servers && (agInfo.servers.inside || agInfo.servers.outside) ? (agInfo.servers.outside || "")
+    : (() => { try { return localStorage.getItem("pm_agent_server_ext") || ""; } catch (e) { return ""; } })();
   html += sect("1. Where the agents report to", `
     <div class="srvgrid">
       <label class="field">Inside your network<input type="text" id="agServer" value="${esc(defaultServer())}" spellcheck="false" placeholder="http://192.168.1.5:${a.port}"></label>
@@ -2051,7 +2069,8 @@ function renderAgents() {
     </div>
     ${a.ssl ? `<label class="row-inline" style="margin-top:6px;font-size:13px"><input type="checkbox" id="agIgnoreCert"> Accept a self-signed certificate</label>` : ""}
     <p class="hint">Agents try the inside address first, then the outside one, and remember which worked so a laptop away from the office goes straight to the outside address next time.
-    Use the IP if servers can't resolve the name. Both downloads have these addresses and the enrolment key built in, so set them before downloading.</p>
+    Use the IP if servers can't resolve the name. Changes are saved here and sent to agents with their next report, so installed agents follow them without a new download.</p>
+    <p class="hint" id="agSaved"></p>
     <p class="hint" id="agExtWarn" hidden></p>`);
   const card = (o) => `<div class="oscard">
       <div class="oshead"><h4>${o.title}</h4><small class="muted">${o.version ? "version " + esc(o.version) : ""}</small></div>
@@ -2142,6 +2161,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
     if (!inside && !outside) return alert("Enter the address the servers use to reach Home Assistant");
     const server = [inside, outside].filter(Boolean).join(",");
     try { localStorage.setItem("pm_agent_server", inside); localStorage.setItem("pm_agent_server_ext", outside); } catch (err) {}
+    await saveServers();
     const ign = document.getElementById("agIgnoreCert");
     const url = "api/agents/script?server=" + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : "");
     t.disabled = true;

@@ -2114,6 +2114,11 @@ class Monitor:
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
 
+    def agent_servers(self) -> list[str]:
+        """The inside then outside address set under Agents ([] if never set)."""
+        sv = self.agent_settings.get("servers") or {}
+        return [v for v in (sv.get("inside"), sv.get("outside")) if v]
+
     def agent_update_offer(self, agent: dict, report: dict) -> dict | None:
         """Offer the agent the version in this add-on if updates are on for its OS (or an
         admin asked for this one) and it's older. Agents never update otherwise."""
@@ -2911,6 +2916,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             "latest_version": _script_version(),
             "latest_linux_version": _linux_script_version(),
             "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
+            "servers": monitor.agent_settings.get("servers") or {},
         })
 
     async def agents_approve(req):
@@ -2955,6 +2961,21 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                                   req.query.get("ignore_cert") == "1")
         return web.Response(body=body, content_type="application/octet-stream", headers={
             "Content-Disposition": f'attachment; filename="{"pingmonitor-agent.py" if linux else "PingMonitorAgent.ps1"}"'})
+
+    async def agents_servers(req):
+        body = await req.json()
+        out = {}
+        for k in ("inside", "outside"):
+            v = str(body.get(k) or "").strip().rstrip("/")
+            if v and not _ONE_SERVER.match(v):
+                return web.json_response({"error": f"Enter the {k} address as http://host:port"}, status=400)
+            out[k] = v
+        if not out["inside"] and not out["outside"]:
+            return web.json_response({"error": "Enter at least one address"}, status=400)
+        monitor.agent_settings["servers"] = out
+        monitor._save_agent_settings()
+        log.info("Agents will report to %s", " then ".join(v for v in (out["inside"], out["outside"]) if v))
+        return web.json_response({"servers": out})
 
     async def agents_auto_update(req):
         body = await req.json()
@@ -3293,6 +3314,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/agents/rotate-key", editor_only(agents_rotate))
     app.router.add_get("/api/agents/script", editor_only(agents_script))
     app.router.add_post("/api/agents/auto-update", editor_only(agents_auto_update))
+    app.router.add_post("/api/agents/servers", editor_only(agents_servers))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app
 
@@ -3636,6 +3658,9 @@ def build_agent_app(monitor: Monitor) -> web.Application:
             return web.json_response({"error": "report could not be processed"}, status=500)
         watch = [str(x) for x in monitor.opts.get("agent_watch_services") or [] if str(x).strip()]
         resp = {"ok": True, "watch_services": watch}
+        servers = monitor.agent_servers()
+        if servers:
+            resp["servers"] = servers  # agents use these from now on (plus the address they were installed with)
         offer = monitor.agent_update_offer(agent, body)
         if offer:
             resp["agent_update"] = offer
@@ -3655,6 +3680,7 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         server = clean_servers(req.query.get("server") or "")
         if not server:
             raise web.HTTPBadRequest(text="invalid server address")
+        server = ",".join(monitor.agent_servers()) or server  # the addresses set under Agents, if any
         body = build_agent_script(os_name, server, store.enrol_key, req.query.get("ignore_cert") == "1")
         key = bytes.fromhex(agentlib.token_hash(token))
         sig = hmac.new(key, body, hashlib.sha256).hexdigest()

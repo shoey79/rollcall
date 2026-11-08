@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.28.0 - 2026-11-08
+
+### Added
+- **Agent addresses are saved in the add-on** and sent to every agent with its next report. Change the inside or outside address under Agents and installed agents switch over without a new download. Each agent also keeps the address it was installed with as a last resort.
+  - Needs Windows agent 1.0.15 or Linux agent 1.0.9; auto-update installs them.
+  - Updates downloaded by agents also carry the saved addresses.
+
+### Fixed
+- Windows agent: the address that last worked wasn't read back on the next run, so agents always tried the inside address first. Laptops away from the office therefore waited on it every time.
+
 ## 1.27.0 - 2026-11-08
 
 ### Added

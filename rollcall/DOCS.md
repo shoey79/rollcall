@@ -392,7 +392,7 @@ Under **Agents → Where the agents report to**, there are two addresses: **Insi
 
 For the outside address to work, forward its port on your firewall to Home Assistant's agent port, or publish it through a reverse proxy. Use HTTPS for it: turn on `agent_ssl` (see above), otherwise reports and each server's token cross the internet unencrypted. Servers still have to be approved before their reports count, and every report is checked against that server's own token.
 
-To give an existing agent the new addresses, download it again and run `-Install` or `--install`. On Linux you can instead set `server` in `/etc/pingmonitor/agent.conf` to a comma-separated list. Needs Windows agent 1.0.14 or Linux agent 1.0.8.
+The addresses are saved in the add-on as soon as you change them, and sent to every agent with its next report (Windows agent 1.0.15, Linux agent 1.0.9 and later), so installed agents follow changes without a new download. Each agent also keeps the address it was installed with as a last resort, so a mistake in these boxes can't cut it off. Older agents get the new behaviour through **Update agents automatically**; or download again and run `-Install` / `--install`.
 
 ### Updating agents automatically
 
