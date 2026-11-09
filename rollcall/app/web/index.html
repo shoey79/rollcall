@@ -364,6 +364,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   table.small th,table.small td{display:table-cell;white-space:nowrap}
   table.small td::before{content:none}
 }
+.subh{margin:12px 0 4px;font-size:13px;font-weight:600}
 </style>
 </head>
 <!-- Starts view-only: admin controls only appear once the add-on confirms this user can make changes. -->
@@ -1727,6 +1728,7 @@ function renderDetails(d) {
     html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By"], sec.map(x =>
       `<tr class="${alertCls(x, "security")}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td></tr>`)) ||
       `<p class="empty-note">No notable security events in the last 24 hours.</p>`);
+    html += adminsSection(r, st, linux);
   } else {
     html += sect("Security events", `<p class="empty-note">Only Home Assistant admins can see security events.</p>`);
   }
@@ -1785,6 +1787,29 @@ function renderDetails(d) {
   appendSourceTabs(detKey);
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
+}
+// Who is in the Administrators group (Windows), or can act as root (Linux).
+function adminsSection(r, st, linux) {
+  const title = linux ? "Administrators (sudo and root)" : "Administrators group";
+  const list = (r.security || {}).admins;
+  if (!list) return sect(title, `<p class="empty-note">Needs agent ${linux ? "1.0.11" : "1.0.17"} or later: update the agent to see who has admin rights here.</p>`);
+  const recent = 30 * 86400, now = Date.now() / 1000;
+  const typeOrder = {group: 0, user: 1};
+  const rows = list.slice().sort((a, b) => (typeOrder[a.type] ?? 2) - (typeOrder[b.type] ?? 2) || collator.compare(a.account || "", b.account || ""));
+  const where = a => linux ? (a.via || []).join(", ") : a.source;
+  const added = a => a._since ? `${when(new Date(a._since * 1000).toISOString())}${now - a._since < recent ? ` <b class="old">new</b>` : ""}` : `<small class="muted">before monitoring</small>`;
+  const notes = a => [a.builtin ? "built-in Administrator" : "", a.disabled === true ? "disabled" : "",
+    a.source === "Unknown (deleted?)" ? "Windows can't name this SID; the account may have been deleted" : ""].filter(Boolean).join(" · ");
+  let html = tbl(["Account", "Type", linux ? "Granted by" : "Where from", "Added"], rows.map(a =>
+    `<tr class="${a._since && now - a._since < recent ? "hl" : a.disabled ? "dim" : ""}"><td><b>${esc(a.account || a.sid)}</b>${notes(a) ? `<br><small class="muted">${esc(notes(a))}</small>` : ""}${!linux && a.sid && a.sid !== a.account ? `<br><small class="muted">${esc(a.sid)}</small>` : ""}</td>
+     <td>${esc((a.type || "").replace(/^./, ch => ch.toUpperCase()))}</td><td>${esc(where(a))}</td><td>${added(a)}</td></tr>`))
+    || `<p class="empty-note">${linux ? "Only root can act as root here." : "The group is empty."}</p>`;
+  const ch = (st.admin_changes || []).slice().reverse();
+  if (ch.length) html += `<h4 class="subh">Changes</h4>` + tbl(["Seen", "Change", "Account"], ch.map(x =>
+    `<tr><td>${when(new Date(x.time * 1000).toISOString())}</td><td>${x.change === "added" ? "<b class='old'>Added</b>" : "Removed"}</td><td>${esc(x.account || "")}</td></tr>`));
+  const note = linux ? "Members of the sudo, wheel and admin groups, other accounts with uid 0, and users and groups given rules in sudoers."
+    : "Direct members only: groups in the list (such as Domain Admins) aren't expanded. On a domain controller this is the domain's built-in Administrators group.";
+  return sect(`${title} (${list.length})`, html + `<p class="hint">${note} Changes are noted when the agent next reports, so they can be up to one report late.</p>`);
 }
 // ---- One Details dialog per device: agent tabs, SNMP and Logs, whichever it has ----
 function openDevice(key) {

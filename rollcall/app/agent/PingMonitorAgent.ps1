@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.16'
+$AgentVersion = '1.0.17'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -608,6 +608,63 @@ function Get-SecurityReport($State, [DateTime]$Since) {
     return $report
 }
 
+function Get-AdsProperty($Object, [string]$Name) {
+    try { return $Object.GetType().InvokeMember($Name, 'GetProperty', $null, $Object, $null) } catch { return $null }
+}
+
+function Get-AdminGroupMembers([string]$Machine) {
+    # The built-in Administrators group is found by its well-known SID, so non-English Windows
+    # works too; on a domain controller it's the domain's built-in Administrators group.
+    $gname = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+    $group = [ADSI]"WinNT://$Machine/$gname,group"
+    foreach ($m in @($group.psbase.Invoke('Members'))) {
+        $sid = ''
+        $bytes = Get-AdsProperty $m 'objectSid'
+        if ($bytes) { try { $sid = (New-Object Security.Principal.SecurityIdentifier($bytes, 0)).Value } catch { } }
+        [pscustomobject]@{ path = [string](Get-AdsProperty $m 'ADsPath'); class = [string](Get-AdsProperty $m 'Class'); sid = $sid
+            flags = Get-AdsProperty $m 'UserFlags' }
+    }
+}
+
+function Get-LocalAdmins {
+    # Direct members of the Administrators group. Groups inside it are listed, not expanded.
+    $machine = if ($env:COMPUTERNAME) { $env:COMPUTERNAME } else { [Environment]::MachineName }
+    $list = @()
+    foreach ($m in @(Get-AdminGroupMembers $machine)) {
+        $parts = @(($m.path -replace '^WinNT://', '').Split('/') | Where-Object { $_ })
+        $sid = [string]$m.sid
+        $domain = ''; $name = ''
+        if ($parts.Count -ge 3) { $domain = $parts[-2]; $name = $parts[-1] }
+        elseif ($parts.Count -eq 2) { $domain = $parts[0]; $name = $parts[1] }
+        elseif ($parts.Count -eq 1) { $name = $parts[0] }
+        if (-not $sid -and $name -match '^S-1-\d') { $sid = $name }
+        $source = 'Domain'
+        if ($name -match '^S-1-\d') {
+            # Windows couldn't name it: an Azure AD (Entra ID) account or group, or one that's been deleted
+            $source = if ($name -like 'S-1-12-1-*') { 'Azure AD' } else { 'Unknown (deleted?)' }
+            try { $n = (New-Object Security.Principal.SecurityIdentifier $name).Translate([Security.Principal.NTAccount]).Value; $domain, $name = $n.Split('\', 2) } catch { }
+        }
+        elseif ($domain -eq $machine) { $source = 'Local' }
+        elseif ($domain -in 'NT AUTHORITY', 'BUILTIN', 'NT SERVICE') { $source = 'Built-in' }
+        elseif ($domain -eq 'AzureAD') { $source = 'Azure AD' }
+        $type = switch ($m.class) { 'User' { 'user' } 'Group' { 'group' } '' { 'unknown' } default { ([string]$m.class).ToLower() } }
+        $disabled = $null
+        if ($source -eq 'Local' -and $type -eq 'user' -and $null -ne $m.flags) { $disabled = [bool]([int]$m.flags -band 2) }
+        $list += [ordered]@{
+            account  = if ($domain) { "$domain\$name" } else { $name }
+            name     = $name
+            domain   = $domain
+            type     = $type
+            source   = $source
+            sid      = $sid
+            disabled = $disabled
+            builtin  = ($sid -match '^S-1-5-21-.+-500$')
+        }
+        if ($list.Count -ge 200) { break }
+    }
+    return $list
+}
+
 function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
     $checks = [ordered]@{}
     $null = Measure-Step 'iis' {
@@ -1114,6 +1171,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
+    try { $report.security.admins = @(Measure-Step 'administrators' { Get-LocalAdmins }) } catch { Add-CollectorError 'administrators' $_ }
     $report.checks = Get-RoleChecks $discovery.roles $since $State
     try {
         $bjobs = @()

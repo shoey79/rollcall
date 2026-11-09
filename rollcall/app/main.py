@@ -2196,6 +2196,38 @@ class Monitor:
             return {"version": latest}
         return None
 
+    def _track_admins(self, h: Host, report: dict, now: float) -> None:
+        """Remember who is in the Administrators group, so additions and removals show with a date.
+        Members there when Rollcall first looked have no date."""
+        adm = (report.get("security") or {}).get("admins")
+        if adm is None:
+            return
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        cur = {agentlib.admin_key(a): a for a in adm}
+        seen = hs.get("admins_seen")
+        if seen is None:
+            hs["admins_seen"] = {k: {"account": a.get("account"), "since": None} for k, a in cur.items()}
+            hs["admins_changes"] = []
+            self._save_agent_settings()
+            return
+        changes, changed = hs.setdefault("admins_changes", []), False
+        for k in cur.keys() - seen.keys():
+            seen[k] = {"account": cur[k].get("account"), "since": now}
+            changes.append({"time": now, "change": "added", "account": cur[k].get("account"), "type": cur[k].get("type")})
+            log.info("%s: %s added to Administrators", h.name, cur[k].get("account"))
+            changed = True
+        for k in seen.keys() - cur.keys():
+            gone = seen.pop(k)
+            changes.append({"time": now, "change": "removed", "account": gone.get("account")})
+            log.info("%s: %s removed from Administrators", h.name, gone.get("account"))
+            changed = True
+        for k, a in cur.items():  # e.g. an Azure AD SID that Windows can now name
+            if a.get("account") and seen[k].get("account") != a.get("account"):
+                seen[k]["account"], changed = a.get("account"), True
+        if changed:
+            hs["admins_changes"] = changes[-30:]
+            self._save_agent_settings()
+
     async def _backup_alerts(self, h: Host, report: dict) -> None:
         """One notification per failed Veeam job run, and one when a job becomes overdue."""
         jobs = ((report.get("checks") or {}).get("backups") or {}).get("jobs") or []
@@ -2404,6 +2436,7 @@ class Monitor:
             await self._alert_notables(h, notable)
             await self._immich_release(h, report)
             await self._backup_alerts(h, report)
+            self._track_admins(h, report, received)
         await self._recompute(h, quiet=restoring)
         if not restoring:
             await self.publish(h)
@@ -2589,6 +2622,13 @@ class Monitor:
                     "ack": hs.get("ack") or {},
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
+        if include_security and hs.get("admins_seen") is not None:
+            seen = hs["admins_seen"]
+            sec = r.get("security") or {}
+            if sec.get("admins") is not None:
+                r["security"] = {**sec, "admins": [{**a, "_since": (seen.get(agentlib.admin_key(a)) or {}).get("since")}
+                                                   for a in sec["admins"]]}
+            settings["admin_changes"] = hs.get("admins_changes") or []
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
                 "settings": settings,
                 "received": h.agent_seen, "security_visible": include_security,

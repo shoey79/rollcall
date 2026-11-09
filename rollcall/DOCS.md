@@ -349,7 +349,13 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 - **System log:** unexpected shutdowns and crashes (Kernel-Power 41, EventLog 6008, BugCheck 1001), disk and NTFS errors, plus any Critical-level event. The list is in `agent_event_watch`, as `Source:ID` or just an ID.
 - **Microsoft Defender:** every detection, saying whether it was removed.
 
-**Shown in Details** (the **Details** button on a server's row): system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 h of System/Application errors, and (admins only) failed logons and security events.
+**Shown in Details** (the **Details** button on a server's row): system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 h of System/Application errors, and (admins only) failed logons, security events and who is in the Administrators group.
+
+**Administrators group** (Security tab, admins only, agent 1.0.17 or later): every direct member of the computer's built-in Administrators group, with its type (user or group), where it's from (Local, Domain, Azure AD, Built-in) and its SID.
+- The built-in Administrator account and disabled local accounts are marked. A SID Windows can't name is shown as "Unknown (deleted?)", usually an account that has since been deleted; an Azure AD (Entra ID) SID is labelled as such.
+- Groups in the list (e.g. Domain Admins) are listed, not expanded into their members.
+- On a domain controller this is the domain's built-in Administrators group.
+- Rollcall remembers the list. Anyone added after it first looked is shown with the date they appeared and highlighted for 30 days, and additions and removals are listed under **Changes**. A change shows on the agent's next report. Members added through a security group change also raise the usual 4732 security-event alert.
 
 ### Setting it up
 
@@ -458,6 +464,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+ standard library only, so n
 - **Immich updates:** when a newer Immich release is out, the Immich check turns amber ("update available: v2.2.3 (running v2.1.0)") and you get one notification per new release, with a link to its release notes. The newest release comes from Immich's own version check if the API key can read it (the `systemMetadata.read` permission, and **Version check** on in Immich's Administration → Settings), otherwise from GitHub, at most every 6 hours (the server needs internet access for that). To stop flagging Immich updates, use **Ignore** next to the version in Details (`update:immich`).
 - **Immich:** found from its container (port 2283 unless mapped elsewhere). It always checks the API answers and reports the version. With an API key it also shows each job queue (active, waiting, failed, paused), the photo and video counts and storage use.
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors and any critical journal entry; users created or deleted (4720/4726) and users added to groups such as `sudo` or `docker` (4732). SSH logins are listed in Details but not alerted.
+- **Administrators** (Security tab, admins only, agent 1.0.11 or later): who can act as root. That's members of the `sudo`, `wheel` and `admin` groups (including users whose main group it is), other accounts with uid 0, and users and `%groups` given rules in sudoers (marked "some commands" if a rule doesn't allow everything). Additions and removals are tracked as on Windows.
 - **Storage:** software RAID (mdadm) arrays from `/proc/mdstat` and ZFS pools. A degraded array or a failed member is red; an array that's already rebuilding is amber.
 - **Updates:** last apt run (from apt's history), packages waiting and how many are security updates (re-checked every 6 hours, after a restart, or straight after apt installs anything), and whether a reboot is required.
 

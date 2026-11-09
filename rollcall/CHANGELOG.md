@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.34.0 - 2026-11-09
+
+### Added
+- **Administrators group** in each computer's Details → Security tab (admins only). It lists every member of the built-in Administrators group: users and groups, with whether each is local, domain, Azure AD or built-in. The built-in Administrator, disabled accounts and SIDs Windows can't name (deleted accounts) are marked. Groups such as Domain Admins aren't expanded.
+  - Rollcall remembers the list. Members added later show the date they appeared and are highlighted for 30 days; additions and removals are listed under **Changes**.
+  - Linux agents list who can act as root: members of the sudo, wheel and admin groups, other accounts with uid 0, and sudoers rules.
+  - Needs Windows agent 1.0.17 or Linux agent 1.0.11. Agents set to update automatically pick it up by themselves.
+
 ## 1.33.2 - 2026-11-08
 
 ### Fixed

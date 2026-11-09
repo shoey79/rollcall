@@ -204,6 +204,11 @@ def _as_dict(v) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+def admin_key(a: dict) -> str:
+    """What identifies a member of the Administrators group across reports: its SID if known."""
+    return (a.get("sid") or f'{a.get("type")}:{a.get("account")}').lower()
+
+
 def normalize_report(r) -> dict:
     """Make an agent report safe to evaluate whatever PowerShell did to its lists."""
     r = _as_dict(r)
@@ -218,6 +223,11 @@ def normalize_report(r) -> dict:
     ev["recent"] = [x for x in _as_list(ev.get("recent")) if isinstance(x, dict)]
     sec = r["security"] = _as_dict(r.get("security"))
     sec["items"] = [x for x in _as_list(sec.get("items")) if isinstance(x, dict)]
+    if "admins" in sec:  # absent from older agents, so the UI can say an update is needed
+        sec["admins"] = [{k: (x.get(k) if k in ("disabled", "builtin") else str(x.get(k) or "")[:200])
+                          for k in ("account", "name", "domain", "type", "source", "sid", "disabled", "builtin")}
+                         | {"via": [str(v)[:60] for v in _as_list(x.get("via"))][:6]}
+                         for x in _as_list(sec.get("admins")) if isinstance(x, dict) and (x.get("account") or x.get("sid"))][:200]
     fl = sec["failed_logons"] = _as_dict(sec.get("failed_logons"))
     fl["top"] = [x for x in _as_list(fl.get("top")) if isinstance(x, dict)]
     try:

@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.10"
+AGENT_VERSION = "1.0.11"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -538,6 +538,55 @@ GROUP_ADD = re.compile(r"(?:add|added) '?([^' ]+)'? to (?:shadow )?group '?([^' 
 GROUP_ADD2 = re.compile(r"user (\S+) added by \S+ to group (\S+)")
 
 
+def local_admins():
+    """Who can act as root: members of the sudo, wheel and admin groups (including users whose
+    main group it is), other accounts with uid 0, and users or %groups given rules in sudoers."""
+    import grp
+    import pwd
+    found = {}
+
+    def add(name, kind, via):
+        a = found.setdefault((kind, name), {"account": name, "name": name, "domain": "", "type": kind,
+                                            "source": "Local", "via": []})
+        if via not in a["via"]:
+            a["via"].append(via)
+
+    users = pwd.getpwall()
+    for g in ("sudo", "wheel", "admin"):
+        try:
+            gr = grp.getgrnam(g)
+        except KeyError:
+            continue
+        for u in gr.gr_mem:
+            add(u, "user", "group " + g)
+        for u in users:
+            if u.pw_gid == gr.gr_gid:
+                add(u.pw_name, "user", "group " + g)
+    for u in users:
+        if u.pw_uid == 0 and u.pw_name != "root":
+            add(u.pw_name, "user", "uid 0")
+    files = ["/etc/sudoers"] + sorted(f for f in glob.glob("/etc/sudoers.d/*")
+                                      if not os.path.basename(f).startswith(".") and not f.endswith("~"))
+    skip = ("Defaults", "User_Alias", "Runas_Alias", "Host_Alias", "Cmnd_Alias", "@include", "#include")
+    for f in files:
+        for line in read(f).splitlines():
+            line = line.strip()
+            if not line or line.startswith(skip) or line.startswith("#") or "=" not in line:
+                continue
+            who, rule = (line.split(None, 1) + [""])[:2]
+            limited = not re.search(r"(^|[:)\s])ALL\s*$", rule.strip())
+            via = "sudoers" + (" (some commands)" if limited else "")
+            for w in who.split(","):
+                w = w.strip()
+                if not w or w == "root":
+                    continue
+                if w.startswith("%"):
+                    add(w[1:], "group", via)
+                else:
+                    add(w, "user", via)
+    return sorted(found.values(), key=lambda a: (a["type"], a["name"]))[:200]
+
+
 def security_report(state):
     report = {"failed_logons": {"count": 0, "top": []}, "items": []}
     entries = journal(state, "auth", ["SYSLOG_FACILITY=4", "SYSLOG_FACILITY=10"], 3000)
@@ -746,6 +795,8 @@ def build_report(state, conf):
     r["security"] = {"failed_logons": {"count": 0, "top": []}, "items": []}
     with step("auth log"):
         r["security"] = security_report(state)
+    with step("administrators"):
+        r["security"]["admins"] = local_admins()
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()
