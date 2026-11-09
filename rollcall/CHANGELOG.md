@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.44.0 - 2026-11-09
+
+### Added
+- **Name and alert on readings from syslog.** **Name / alert** on a reading in the Logs tab lets you give it a name (e.g. `temp0` → "CPU") and set amber and red limits. Temperatures alert above their limits; fan speed and free memory alert below.
+  - A reading over its limit shows on the device's Syslog check, its Overview tile and Needs attention. Red notifies.
+
+### Fixed
+- The Logs tab offered "Acknowledge" for problems that aren't log messages (a SIP registration, or a reading over its limit), which acknowledging can't clear. It now counts log messages only.
+
 ## 1.43.0 - 2026-11-09
 
 ### Added

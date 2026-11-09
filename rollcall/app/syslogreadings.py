@@ -82,7 +82,25 @@ def _reading(label: str, unit: str, points: list[tuple[float, float]], **extra) 
             "count": len(vals), "series": _series(points), **extra}
 
 
-def readings(logs, key: str, now: float) -> dict:
+def apply_settings(out: dict, cfg: dict | None, now: float) -> None:
+    """Names and alert limits set for this device's readings (by reading key, e.g. "temp0").
+    Temperatures alert above their limits; fan speed and free memory below them.
+    A reading that hasn't been reported for an hour isn't judged."""
+    for r in out["sensors"]:
+        c = (cfg or {}).get(r["key"]) or {}
+        if c.get("name"):
+            r["label"] = c["name"]
+            r["named"] = True
+        r["warn"], r["crit"] = c.get("warn"), c.get("crit")
+        r["level"] = ""
+        if now - r["at"] > 3600:
+            continue
+        v, below = r["value"], r["dir"] == "below"
+        hit = lambda lim: lim is not None and (v < lim if below else v > lim)  # noqa: E731
+        r["level"] = "crit" if hit(r["crit"]) else "warn" if hit(r["warn"]) else ""
+
+
+def readings(logs, key: str, now: float, cfg: dict | None = None) -> dict:
     out: dict = {"sensors": [], "status": []}
     rows = logs.query(key, since=now - DAY, q="fanctld", limit=1500)
     if rows:
@@ -96,16 +114,16 @@ def readings(logs, key: str, now: float) -> dict:
                 fans.setdefault(n, []).append((r["ts"], int(rpm)))
                 modes[n] = mode
         for n in sorted(temps, key=int):
-            out["sensors"].append(_reading(f"Temperature (temp{n})", "°C", temps[n]))
+            out["sensors"].append(_reading(f"Temperature (temp{n})", "°C", temps[n], key=f"temp{n}", dir="above"))
         for n in sorted(fans, key=int):
-            out["sensors"].append(_reading(f"Fan {int(n) + 1}", "RPM", fans[n], mode=modes.get(n, "")))
+            out["sensors"].append(_reading(f"Fan {int(n) + 1}", "RPM", fans[n], mode=modes.get(n, ""), key=f"fan{n}", dir="below"))
     # Small Linux devices (e.g. Cisco SPA ATAs) that log /proc/meminfo lines every few minutes
     mem = logs.query(key, since=now - DAY, q="MemFree", limit=600)
     pts = sorted(((r["ts"], int(m.group(1))) for r in mem if (m := _MEMFREE.search(r["msg"]))), key=lambda p: p[0])
     if pts:
         total = next((int(m.group(1)) for r in logs.query(key, since=now - 7 * DAY, q="MemTotal", limit=5)
                       if (m := _MEMTOTAL.search(r["msg"]))), None)
-        out["sensors"].append(_reading("Memory free", "MB", [(t, round(v / 1024, 1)) for t, v in pts],
+        out["sensors"].append(_reading("Memory free", "MB", [(t, round(v / 1024, 1)) for t, v in pts], key="memfree", dir="below",
                                        **({"of": round(total / 1024, 1)} if total else {})))
     # A kernel boot banner in the log means the device started up
     boot = max((r for r in logs.query(key, since=now - 30 * DAY, q="Linux version", limit=20) if _BOOT.search(r["msg"])),
@@ -125,4 +143,5 @@ def readings(logs, key: str, now: float) -> dict:
     fw = logs.query(key, since=now - 7 * DAY, q="version_is_latest", limit=20)
     if fw:
         out["status"].append({"label": "Firmware check", "value": "up to date", "ok": True, "at": max(r["ts"] for r in fw)})
+    apply_settings(out, cfg, now)
     return out

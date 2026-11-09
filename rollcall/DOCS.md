@@ -373,7 +373,7 @@ Each device can send up to 100 messages a second (with bursts up to 200); more t
 - Any device that logs its kernel boot banner (`Linux version …`, or `System started:` on Cisco SPA ATAs): when it last started.
 - Cisco SPA ATAs with voice debug on: each line's SIP registration (see **VoIP**).
 
-These come from the messages already stored, so nothing extra is kept. They only show while the device keeps sending them. They don't alert: the NAS logs its own overheating and fan errors as errors, and those alert as usual.
+These come from the messages already stored, so nothing extra is kept. Admins and editors can use **Name / alert** on a reading to give it a name and set alert limits. For example, call `temp0` "CPU" and make it amber over 85 and red over 95. Temperatures alert above their limits; fan speed and free memory alert below theirs. A reading over its limit shows on the device's **Syslog** check, and red notifies. It clears by itself once the reading is back within the limit, so it doesn't need acknowledging. A reading that hasn't been reported for an hour isn't judged. They only show while the device keeps sending them. Without limits they don't alert. The NAS also logs its own overheating and fan errors as errors, and those alert as usual.
 
 ### How services affect status
 

@@ -303,6 +303,37 @@ def ha_label(entity: str) -> str:
     return " ".join(e.split("_")[-2:]).capitalize()
 
 
+def clean_reading_setting(v) -> dict:
+    """One reading's name and alert limits, checked."""
+    v = v if isinstance(v, dict) else {}
+    out = {}
+    name = str(v.get("name") or "").strip()
+    if name:
+        if len(name) > 40 or not name.isprintable():
+            raise ValueError("Reading names are up to 40 ordinary characters")
+        out["name"] = name
+    for k in ("warn", "crit"):
+        if v.get(k) not in (None, ""):
+            try:
+                out[k] = float(v[k]) if not float(v[k]).is_integer() else int(float(v[k]))
+            except (TypeError, ValueError):
+                raise ValueError("Alert limits must be numbers") from None
+    return out
+
+
+def clean_readings_cfg(raw) -> dict:
+    out = {}
+    for k, v in (raw.items() if isinstance(raw, dict) else []):
+        if re.fullmatch(r"[a-z0-9_]{1,24}", str(k)):
+            try:
+                c = clean_reading_setting(v)
+            except ValueError:
+                continue
+            if c:
+                out[str(k)] = c
+    return out
+
+
 def parse_check(entry: str, label: str | None = None) -> list[dict]:
     """Turn one `checks:` entry into one or more service definitions.
 
@@ -1264,6 +1295,7 @@ class Host:
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
     snmp_restart_ack: float = 0        # start time of an acknowledged restart (not flagged)
+    readings_cfg: dict = field(default_factory=dict)  # syslog readings: {"temp0": {"name": "CPU", "warn": 80, "crit": 90}}
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
@@ -1420,6 +1452,7 @@ class Monitor:
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
                             **({"snmp_restart_ack": h.snmp_restart_ack} if h.snmp_restart_ack else {}),
+                            **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
                             **({"syslog_ignore": h.syslog_ignore} if h.syslog_ignore else {}),
@@ -1439,6 +1472,7 @@ class Monitor:
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
+        h.readings_cfg = clean_readings_cfg(entry.get("readings_cfg"))
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
         except (TypeError, ValueError):
@@ -1558,8 +1592,20 @@ class Monitor:
         # SIP lines whose registration the device logs (e.g. Cisco SPA ATAs): failed or lapsed goes red
         regs = syslogreadings.registrations(self.logs, h.key, now)
         bad = [r for r in regs if r["state"] in ("failed", "lapsed")]
+        over = []
+        if h.readings_cfg:  # readings with alert limits set
+            over = [r for r in syslogreadings.readings(self.logs, h.key, now, h.readings_cfg)["sensors"] if r.get("level")]
+        if over and not bad:
+            worst = "crit" if any(r["level"] == "crit" for r in over) else "warn"
+            detail = "; ".join(f"{r['label']} {r['value']:g} {r['unit']} ({'below' if r['dir'] == 'below' else 'over'} "
+                               f"{r['crit'] if r['level'] == 'crit' else r['warn']:g})" for r in over)
+            if hits:
+                detail += f" (and {len(hits)} log alert{'s' if len(hits) != 1 else ''})"
+            return False, None, detail[:240], ("now" if worst == "crit" else "warn")
         if bad:
             detail = "; ".join(f"Line {r['line']}: {r['detail']}" for r in bad)
+            if over:
+                detail += "; " + "; ".join(f"{r['label']} {r['value']:g} {r['unit']}" for r in over)
             if hits:
                 detail += f" (and {len(hits)} log alert{'s' if len(hits) != 1 else ''})"
             return False, None, detail[:240], "now"
@@ -3524,7 +3570,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         pending = sum(1 for r in monitor.logs.query(h.key, since=since, max_sev=7, limit=5000)
                       if sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore))
         try:
-            found = syslogreadings.readings(monitor.logs, h.key, now)
+            found = syslogreadings.readings(monitor.logs, h.key, now, h.readings_cfg)
         except Exception:  # noqa: BLE001 - readings are extra; never break the Logs tab
             log.exception("%s: couldn't work out readings from syslog", h.name)
             found = {"sensors": [], "status": []}
@@ -3533,6 +3579,29 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                                   "alert": h.syslog_alert, "keywords": h.syslog_keywords, "ignore": h.syslog_ignore,
                                   "ack": h.syslog_ack, "status": svc.status if svc else None,
                                   "detail": svc.detail if svc else None, "port": monitor.syslog_port, "now": now})
+
+    async def host_reading_set(req):
+        """Name a log reading and set its alert limits (blank clears them)."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        k = str(body.get("key") or "")
+        if not re.fullmatch(r"[a-z0-9_]{1,24}", k):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Unknown reading"}), content_type="application/json")
+        try:
+            c = clean_reading_setting(body)
+        except ValueError as err:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}), content_type="application/json")
+        if c:
+            h.readings_cfg[k] = c
+        else:
+            h.readings_cfg.pop(k, None)
+        monitor._save_hosts()
+        svc = next((s for s in h.services if s.kind == "syslog"), None)
+        if svc and svc.status != UNKNOWN:
+            h.next_due = 0
+        return web.json_response({"ok": True, "setting": c})
 
     async def host_syslog_ack(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -3643,6 +3712,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
+    app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
     app.router.add_get("/api/status", status)
