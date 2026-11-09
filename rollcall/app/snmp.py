@@ -1,5 +1,5 @@
-"""A small SNMP client (v2c, and v3 with authentication and privacy; GET and GETBULK walks over UDP),
-plus the readers Rollcall uses for switches, PoE and Buffalo TeraStation NAS units."""
+"""A small SNMP client (v1, v2c, and v3 with authentication and privacy; GET, and GETBULK or GETNEXT
+walks over UDP), plus the readers Rollcall uses for switches, PoE, Buffalo TeraStation NAS units and UPSs."""
 from __future__ import annotations
 
 import asyncio
@@ -40,10 +40,10 @@ def _oid(oid: str) -> bytes:
     return _tlv(0x06, bytes(body))
 
 
-def _request(community: str, pdu_tag: int, req_id: int, oids: list[str], a: int = 0, b: int = 0) -> bytes:
+def _request(community: str, pdu_tag: int, req_id: int, oids: list[str], a: int = 0, b: int = 0, version: int = 2) -> bytes:
     binds = b"".join(_tlv(0x30, _oid(o) + b"\x05\x00") for o in oids)
     pdu = _tlv(pdu_tag, _int(req_id) + _int(a) + _int(b) + _tlv(0x30, binds))
-    return _tlv(0x30, _int(1) + _tlv(0x04, community.encode()) + pdu)
+    return _tlv(0x30, _int(0 if version == 1 else 1) + _tlv(0x04, community.encode()) + pdu)
 
 
 def _read(buf: bytes, i: int) -> tuple[int, bytes, int]:
@@ -174,9 +174,10 @@ _ERRSTAT = {6: "the device refused access (noAccess)",
 
 
 class SnmpError(Exception):
-    def __init__(self, msg: str, status: int | None = None):
+    def __init__(self, msg: str, status: int | None = None, index: int = 0):
         super().__init__(msg)
         self.status = status  # SNMP error-status from the device; None for no reply; -1 for a security problem
+        self.index = index    # which OID in the request it's about (1-based; 0 = the whole request)
 
 
 class _Proto(asyncio.DatagramProtocol):
@@ -198,6 +199,14 @@ class _Proto(asyncio.DatagramProtocol):
             if not fut.done():
                 fut.set_exception(exc)
         self.waiting.clear()
+
+
+def _err_index(pdu: bytes) -> int:
+    j = 0
+    _, _rid, j = _read(pdu, j)
+    _, _err, j = _read(pdu, j)
+    _, idx, _ = _read(pdu, j)
+    return int.from_bytes(idx, "big") if idx else 0
 
 
 def _binds(pdu: bytes) -> tuple[int, int, list[tuple[str, object]]]:
@@ -245,8 +254,9 @@ class Session:
     """One device. Use as `async with Session(ip, community) as s:`, or pass v3=V3(...) for SNMP v3."""
 
     def __init__(self, host: str, community: str = "", timeout: float = 2.0, retries: int = 1, port: int = 161,
-                 per: int = 25, v3: V3 | None = None):
+                 per: int = 25, v3: V3 | None = None, version: int = 2):
         self.host, self.community, self.timeout, self.retries, self.port = host, community, timeout, retries, port
+        self.version = 3 if v3 else (1 if version == 1 else 2)  # v1: old kit (e.g. APC AP9617 cards) ignores v2c
         self.requests = 0
         self.timeouts = 0
         self.per = per  # rows asked for at a time; lowered if the device can't keep up
@@ -292,7 +302,7 @@ class Session:
             return await self._ask_v3(tag, oids, a, b, timeout)
         for _attempt in range(self.retries + 1):
             rid = secrets.randbelow(2 ** 31 - 1) + 1
-            data = await self._send(rid, _request(self.community, tag, rid, oids, a, b), timeout or self.timeout)
+            data = await self._send(rid, _request(self.community, tag, rid, oids, a, b, self.version), timeout or self.timeout)
             if data is None:
                 continue
             _, msg, _ = _read(data, 0)
@@ -302,9 +312,10 @@ class Session:
             _, pdu, _ = _read(msg, i)
             _, err, binds = _binds(pdu)
             if err:
-                raise SnmpError(_ERRSTAT.get(err, f"device returned SNMP error {err}"), err)
+                raise SnmpError(_ERRSTAT.get(err, f"device returned SNMP error {err}"), err, _err_index(pdu))
             return binds
-        raise SnmpError("no SNMP reply (check SNMP is on and the community name is right)")
+        raise SnmpError("no SNMP reply (check SNMP is on, the community name is right, the device allows this address"
+                        + (", and that it speaks SNMP v2c: older kit may only answer v1)" if self.version == 2 else ")"))
 
     # ---- v3 ----
     def _v3_packet(self, msg_id: int, flags: int, scoped: bytes, user: bytes) -> bytes:
@@ -424,7 +435,21 @@ class Session:
         raise SnmpError("no SNMP v3 reply (check the privacy password and protocol: devices ignore requests they can't decrypt)")
 
     async def get(self, oids: list[str], timeout: float | None = None) -> dict[str, object]:
-        return {o: v for o, v in await self._ask(0xA0, oids, timeout=timeout) if v is not END}
+        if self.version != 1:
+            return {o: v for o, v in await self._ask(0xA0, oids, timeout=timeout) if v is not END}
+        # SNMP v1 has no "no such object" value: the device rejects the whole request and says which
+        # OID it didn't have (noSuchName), so drop that one and ask again.
+        oids = list(oids)
+        while oids:
+            try:
+                return {o: v for o, v in await self._ask(0xA0, oids, timeout=timeout) if v is not END}
+            except SnmpError as err:
+                if err.status != 2:
+                    raise
+                if not 1 <= err.index <= len(oids):
+                    return {}
+                oids.pop(err.index - 1)
+        return {}
 
     async def walk(self, root: str, limit: int = 3000, timeout: float | None = None, per: int | None = None) -> dict[str, object]:
         """Every value under root, keyed by the OID suffix after root (e.g. '3.1.2').
@@ -432,6 +457,19 @@ class Session:
         if that happens, ask for fewer rows at a time and carry on."""
         root = root.strip(".")
         out, cur = {}, root
+        if self.version == 1:  # no GETBULK in v1: one GETNEXT per value; noSuchName marks the end
+            while len(out) < limit:
+                try:
+                    binds = await self._ask(0xA1, [cur], timeout=timeout)
+                except SnmpError as err:
+                    if err.status == 2:
+                        break
+                    raise
+                if not binds or binds[0][1] is END or binds[0][0] == cur or not binds[0][0].startswith(root + "."):
+                    break
+                cur = binds[0][0]
+                out[cur[len(root) + 1:]] = binds[0][1]
+            return out
         while len(out) < limit:
             n = min(per or self.per, self.per)
             try:
@@ -481,6 +519,121 @@ NAS_RAID = {-1: "not supported", 1: "off", 2: "RAID 0", 3: "RAID 1", 4: "RAID 5"
             7: "RAID 50", 8: "RAID 51", 9: "RAID 60", 10: "RAID 61"}
 
 
+# UPSs: APC's PowerNet-MIB (Network Management Cards), or the standard UPS-MIB (RFC 1628) that
+# Eaton, CyberPower, Riello and most others' network cards also answer.
+APC = "1.3.6.1.4.1.318.1.1.1"
+APC_OUTPUT = {1: "unknown", 2: "on mains", 3: "on battery", 4: "on mains, boosting low voltage", 5: "sleeping (timed)",
+              6: "bypassed (by software)", 7: "off", 8: "rebooting", 9: "bypassed (by switch)", 10: "bypassed: hardware failure",
+              11: "sleeping until power returns", 12: "on mains, trimming high voltage", 13: "eco mode", 14: "hot standby",
+              15: "on battery (test)", 16: "emergency static bypass", 17: "static bypass standby", 18: "power-saving mode",
+              19: "spot mode", 20: "eConversion", 21: "charger spot mode", 22: "inverter spot mode", 23: "active load",
+              24: "battery discharge spot mode", 25: "inverter standby", 26: "charger only", 27: "distributed energy reserve",
+              28: "self-test"}
+APC_ON_BATTERY, APC_BYPASS, APC_OFF = {3}, {6, 9, 16}, {5, 7, 10, 11}
+APC_BATTERY = {1: "unknown", 2: "normal", 3: "low", 4: "fault", 5: "no battery"}
+APC_TRANSFER = {1: "none", 2: "high input voltage", 3: "brownout", 4: "blackout (power cut)", 5: "small momentary sag",
+                6: "deep momentary sag", 7: "small momentary spike", 8: "large momentary spike", 9: "self-test",
+                10: "rapid change of input voltage"}
+APC_DIAG = {1: "passed", 2: "failed", 3: "invalid test", 4: "in progress"}
+APC_CAL = {1: "OK", 2: "invalid", 3: "in progress"}
+APC_SCHEDULE = {1: "unknown", 2: "every 2 weeks", 3: "weekly", 4: "at turn on", 5: "never", 6: "every 4 weeks",
+                7: "every 12 weeks", 8: "2 weeks after the last test", 9: "a week after the last test", 10: "every 8 weeks",
+                11: "every 26 weeks", 12: "every 52 weeks"}
+UPSMIB = "1.3.6.1.2.1.33.1"
+UPS_SOURCE = {1: "other", 2: "none (output off)", 3: "on mains", 4: "bypassed", 5: "on battery", 6: "on mains, boosting low voltage",
+              7: "on mains, trimming high voltage"}
+UPS_BATTERY = {1: "unknown", 2: "normal", 3: "low", 4: "depleted"}
+UPS_TEST = {1: "passed", 2: "passed with warnings", 3: "failed", 4: "aborted", 5: "in progress", 6: "never run"}
+UPS_ALARMS = {1: "battery bad", 2: "on battery", 3: "low battery", 4: "battery depleted", 5: "temperature out of range",
+              6: "input out of range", 7: "output out of range", 8: "output overloaded", 9: "on bypass", 10: "bypass out of range",
+              11: "output off (as requested)", 12: "UPS off (as requested)", 13: "charger failed", 14: "output off",
+              15: "UPS system off", 16: "fan failure", 17: "fuse failure", 18: "general fault", 19: "self-test failed",
+              20: "lost contact with the UPS", 21: "awaiting power", 22: "shutdown pending", 23: "shutdown imminent",
+              24: "test in progress"}
+# Makers whose network cards answer UPS-MIB: Eaton/Powerware, MGE, CyberPower, Riello, Socomec, Vertiv/Liebert,
+# Tripp Lite, Legrand, Salicru, Delta, Huawei. Others are asked if "UPS" appears in their description or name.
+UPS_ENTERPRISES = {"534", "705", "3808", "5491", "4555", "476", "850", "13891", "19536", "2254", "2011", "935"}
+
+
+def _apc_date(v) -> str:
+    """APC cards give dates as mm/dd/yy or mm/dd/yyyy; returns yyyy-mm-dd ('' if unreadable)."""
+    import re
+    m = re.match(r"\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$", str(v or ""))
+    if not m:
+        return ""
+    mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    y += 2000 if y < 70 else 1900 if y < 100 else 0
+    return f"{y:04d}-{mo:02d}-{d:02d}" if 1 <= mo <= 12 and 1 <= d <= 31 else ""
+
+
+def _num(v):
+    return v if isinstance(v, int) else None
+
+
+async def read_apc(s: "Session") -> dict | None:
+    A = APC
+    g = await get_many(s, [f"{A}.{x}.0" for x in (
+        "1.1.1", "1.1.2", "1.2.1", "1.2.2", "1.2.3", "2.1.1", "2.1.2", "2.1.3", "2.2.1", "2.2.2", "2.2.3", "2.2.4", "2.2.5",
+        "2.2.6", "3.2.1", "3.2.4", "3.2.5", "4.1.1", "4.2.1", "4.2.2", "4.2.3", "4.2.4", "7.2.1", "7.2.3", "7.2.4", "7.2.6",
+        "7.2.7")])
+    if f"{A}.4.1.1.0" not in g and f"{A}.2.1.1.0" not in g:
+        return None  # an APC card that isn't on a UPS (a PDU or environment monitor)
+    v = lambda x: g.get(f"{A}.{x}.0")  # noqa: E731
+    out_st, bat = _num(v("4.1.1")), _num(v("2.1.1"))
+    runtime = _num(v("2.2.3"))
+    return {
+        "kind": "APC", "model": str(v("1.1.1") or "").strip(), "name": str(v("1.1.2") or "").strip(),
+        "firmware": str(v("1.2.1") or "").strip(), "made": _apc_date(v("1.2.2")), "serial": str(v("1.2.3") or "").strip(),
+        "output": APC_OUTPUT.get(out_st, str(out_st or "")) if out_st else "", "on_battery": out_st in APC_ON_BATTERY,
+        "bypass": out_st in APC_BYPASS, "off": out_st in APC_OFF,
+        "battery": APC_BATTERY.get(bat, str(bat or "")) if bat else "", "battery_low": bat == 3, "battery_fault": bat in (4, 5),
+        "charge_pct": _num(v("2.2.1")), "battery_temp_c": _num(v("2.2.2")),
+        "runtime_min": runtime // 6000 if runtime is not None else None,
+        "on_battery_s": _num(v("2.1.2")) // 100 if _num(v("2.1.2")) is not None else None,
+        "replace": v("2.2.4") == 2, "replaced": _apc_date(v("2.1.3")),
+        "bad_packs": _num(v("2.2.6")) or 0, "packs": _num(v("2.2.5")),
+        "input_v": _num(v("3.2.1")), "input_hz": _num(v("3.2.4")),
+        "last_transfer": APC_TRANSFER.get(_num(v("3.2.5")), "") if v("3.2.5") is not None else "",
+        "output_v": _num(v("4.2.1")), "output_hz": _num(v("4.2.2")), "load_pct": _num(v("4.2.3")), "output_a": _num(v("4.2.4")),
+        "test_schedule": APC_SCHEDULE.get(_num(v("7.2.1")), "") if v("7.2.1") is not None else "",
+        "self_test": APC_DIAG.get(_num(v("7.2.3")), "") if v("7.2.3") is not None else "",
+        "self_test_failed": v("7.2.3") == 2, "self_test_date": _apc_date(v("7.2.4")),
+        "calibration": APC_CAL.get(_num(v("7.2.6")), "") if v("7.2.6") is not None else "",
+        "calibration_date": _apc_date(v("7.2.7")), "alarms": []}
+
+
+async def read_upsmib(s: "Session") -> dict | None:
+    U = UPSMIB
+    g = await get_many(s, [f"{U}.{x}" for x in (
+        "1.1.0", "1.2.0", "1.3.0", "1.5.0", "2.1.0", "2.2.0", "2.3.0", "2.4.0", "2.7.0", "3.2.0", "3.3.1.2.1", "3.3.1.3.1",
+        "4.1.0", "4.2.0", "4.4.1.2.1", "4.4.1.3.1", "4.4.1.5.1", "6.1.0", "7.3.0")])
+    if f"{U}.2.1.0" not in g and f"{U}.4.1.0" not in g:
+        return None  # not a UPS after all
+    v = lambda x: g.get(f"{U}.{x}")  # noqa: E731
+    src, bat = _num(v("4.1.0")), _num(v("2.1.0"))
+    alarms = []
+    if _num(v("6.1.0")):
+        try:  # upsAlarmDescr: each present alarm's well-known OID
+            for oid in (await s.walk(f"{U}.6.2.1.2", limit=40)).values():
+                n = str(oid).rsplit(".", 1)[-1]
+                alarms.append(UPS_ALARMS.get(int(n), f"alarm {n}") if str(oid).startswith(f"{U}.6.3.") and n.isdigit() else str(oid))
+        except SnmpError:
+            alarms.append(f"{v('6.1.0')} alarm(s)")
+    tenth = lambda x: round(v(x) / 10, 1) if _num(v(x)) is not None else None  # noqa: E731
+    test = _num(v("7.3.0"))
+    return {
+        "kind": "UPS-MIB", "model": " ".join(str(x).strip() for x in (v("1.1.0"), v("1.2.0")) if x).strip(),
+        "name": str(v("1.5.0") or "").strip(), "firmware": str(v("1.3.0") or "").strip(), "made": "", "serial": "",
+        "output": UPS_SOURCE.get(src, str(src or "")) if src else "", "on_battery": src == 5, "bypass": src == 4, "off": src == 2,
+        "battery": UPS_BATTERY.get(bat, str(bat or "")) if bat else "", "battery_low": bat == 3, "battery_fault": bat == 4,
+        "charge_pct": _num(v("2.4.0")), "battery_temp_c": _num(v("2.7.0")), "runtime_min": _num(v("2.3.0")),
+        "on_battery_s": _num(v("2.2.0")), "replace": "battery bad" in alarms, "replaced": "", "bad_packs": 0, "packs": None,
+        "input_v": _num(v("3.3.1.3.1")), "input_hz": tenth("3.3.1.2.1"), "last_transfer": "",
+        "output_v": _num(v("4.4.1.2.1")), "output_hz": tenth("4.2.0"), "load_pct": _num(v("4.4.1.5.1")), "output_a": tenth("4.4.1.3.1"),
+        "test_schedule": "", "self_test": UPS_TEST.get(test, "") if test else "", "self_test_failed": test == 3,
+        "self_test_date": "", "calibration": "", "calibration_date": "", "alarms": alarms}
+
+
 def _smart(v) -> str:
     """TeraStations report SMART as a number (1 = healthy) or, on some firmware, as text."""
     if v is None or v == "":
@@ -512,7 +665,7 @@ async def get_many(s: "Session", oids: list[str], batch: int = 10) -> dict[str, 
 
 
 async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161, per: int = 25, v3: V3 | None = None,
-               ask_hr: bool = True, discovery: dict | None = None) -> dict:
+               ask_hr: bool = True, discovery: dict | None = None, version: int = 2) -> dict:
     """Everything Rollcall shows for an SNMP device. Raises SnmpError if it doesn't answer."""
     t0 = time.monotonic()
     timing: dict[str, int] = {}
@@ -530,14 +683,14 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         finally:
             timing[name] = timing.get(name, 0) + int((time.monotonic() - t) * 1000)
 
-    async with Session(host, community, timeout, port=port, per=per, v3=v3) as s:
+    async with Session(host, community, timeout, port=port, per=per, v3=v3, version=version) as s:
         sysv = await s.get([f"{SYS}.1.0", f"{SYS}.2.0", f"{SYS}.3.0", f"{SYS}.5.0", f"{SYS}.6.0"])
         if not sysv:
             raise SnmpError("the device answered but returned no system information")
         out = {"descr": str(sysv.get(f"{SYS}.1.0") or ""), "object_id": str(sysv.get(f"{SYS}.2.0") or ""),
                "uptime_s": (sysv.get(f"{SYS}.3.0") or 0) // 100 if isinstance(sysv.get(f"{SYS}.3.0"), int) else None,
                "name": str(sysv.get(f"{SYS}.5.0") or ""), "location": str(sysv.get(f"{SYS}.6.0") or ""),
-               "ports": [], "poe": None, "nas": None, "uptime_source": "snmp"}
+               "ports": [], "poe": None, "nas": None, "ups": None, "uptime_source": "snmp"}
         # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
         # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
         # Asked once per device: some switches (e.g. Netgear smart switches) stall their SNMP service
@@ -641,6 +794,20 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
             # Model and firmware are already in sysDescr, so the NAS's slow system-information table isn't read.
             s.retries = 1
             out["nas"] = nas
+
+        # UPS: APC cards by their sysObjectID; others only if they look like a UPS, since some
+        # switches stall when asked for things they don't have.
+        import re
+        oid, text = out["object_id"], f'{out["descr"]} {out["name"]}'
+        ent = oid.split(".")[6] if oid.startswith("1.3.6.1.4.1.") and oid.count(".") >= 6 else ""
+        reader = read_apc if ent == "318" else read_upsmib if (
+            oid.startswith("1.3.6.1.2.1.33") or ent in UPS_ENTERPRISES or re.search(r"\bups\b", text, re.I)) else None
+        if reader:
+            got = await timed("UPS", reader(s))
+            if got:
+                out["ups"] = got
+            elif got == {} and ent == "318":  # no answer for the UPS's values
+                out["ups"] = {"error": "the card didn't answer for the UPS's status"}
         out["requests"] = s.requests
         out["per"] = s.per
         out["timeouts"] = s.timeouts
@@ -650,8 +817,12 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
     return out
 
 
-def evaluate(d: dict, watch: set[int], prev: dict | None) -> tuple[str, list[dict]]:
+UPS_LIMITS = {"runtime_warn": 15, "runtime_crit": 5, "load_warn": 80, "load_crit": 95, "temp_warn": 40}
+
+
+def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = None) -> tuple[str, list[dict]]:
     """Problems in a poll. Returns (worst level, items) with level ok / warn / crit."""
+    lim = {**UPS_LIMITS, **(limits or {})}
     items: list[dict] = []
     add = lambda level, what, detail="": items.append({"level": level, "what": what, "detail": detail})  # noqa: E731
     up = d.get("uptime_s")
@@ -703,5 +874,51 @@ def evaluate(d: dict, watch: set[int], prev: dict | None) -> tuple[str, list[dic
                     add("warn", f"Array {a['index']}", f"{pct:.0f}% full")
         for e in nas.get("errors") or []:
             add("warn", "NAS reports", e)
+    ups = d.get("ups")
+    if ups and ups.get("error"):
+        add("warn", "UPS", ups["error"])
+    elif ups:
+        if ups.get("on_battery"):
+            add("crit", "UPS", "on battery" + (f" for {ups['on_battery_s'] // 60} min" if ups.get("on_battery_s") else "")
+                + (f", {ups['runtime_min']} min left" if ups.get("runtime_min") is not None else ""))
+        elif ups.get("off"):
+            add("crit", "UPS", ups["output"] or "output off")
+        elif ups.get("bypass"):
+            add("warn", "UPS", f"{ups['output']}: not protecting the load")
+        if ups.get("battery_low"):
+            add("crit", "UPS battery", "low")
+        elif ups.get("battery_fault"):
+            add("crit", "UPS battery", ups["battery"])
+        if ups.get("replace") or ups.get("bad_packs"):
+            add("crit", "UPS battery", "needs replacing" + (f" ({ups['bad_packs']} bad pack(s))" if ups.get("bad_packs") else ""))
+        if ups.get("self_test_failed"):
+            when = ""
+            if ups.get("self_test_date"):
+                import datetime as _dt
+                try:
+                    when = " on " + _dt.date.fromisoformat(ups["self_test_date"]).strftime("%d %b %Y").lstrip("0")
+                except ValueError:
+                    pass
+            add("crit", "UPS self-test", "failed" + when)
+        rt = ups.get("runtime_min")
+        if rt is not None and not ups.get("on_battery") and not ups.get("off"):
+            if rt < lim["runtime_crit"]:
+                add("crit", "UPS runtime", f"only {rt} min on battery")
+            elif rt < lim["runtime_warn"]:
+                add("warn", "UPS runtime", f"only {rt} min on battery")
+        ld = ups.get("load_pct")
+        if ld is not None:
+            if ld >= lim["load_crit"]:
+                add("crit", "UPS load", f"{ld}%")
+            elif ld >= lim["load_warn"]:
+                add("warn", "UPS load", f"{ld}%")
+        t = ups.get("battery_temp_c")
+        if t is not None and t >= lim["temp_warn"]:
+            add("warn", "UPS battery", f"{t} °C")
+        shown = {"on battery", "low battery", "battery depleted", "battery bad", "self-test failed", "on bypass", "test in progress"}
+        for a in ups.get("alarms") or []:
+            if a not in shown:
+                add("crit" if a in ("output overloaded", "shutdown pending", "shutdown imminent", "charger failed",
+                                    "general fault", "fan failure", "fuse failure", "output off", "UPS system off") else "warn", "UPS", a)
     worst = "crit" if any(i["level"] == "crit" for i in items) else "warn" if items else "ok"
     return worst, items

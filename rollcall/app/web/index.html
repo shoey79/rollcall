@@ -514,7 +514,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         </div>
         <div id="snmpBox" hidden class="snmpbox">
           <div class="fields">
-            <label class="field">SNMP version<select id="fSnmpVer"><option value="2c">v2c (community)</option><option value="3">v3 (user and passwords)</option></select></label>
+            <label class="field">SNMP version<select id="fSnmpVer"><option value="2c">v2c (community)</option><option value="1">v1 (community; older kit)</option><option value="3">v3 (user and passwords)</option></select></label>
             <label class="field" id="snmpV2"><span>Community (read-only)</span><input id="fSnmpComm" maxlength="64" autocomplete="off" spellcheck="false" placeholder="public"></label>
           </div>
           <div class="fields" id="snmpV3" hidden>
@@ -1851,7 +1851,7 @@ document.getElementById("detTabs").addEventListener("click", e => {
   if (k === "agent") openDetails(detKey); else if (k === "snmp") openSnmp(detKey); else openLogs(detKey);
 });
 
-// ---- SNMP devices (switches, NAS) ----
+// ---- SNMP devices (switches, NAS, UPS) ----
 const fmtUp = s => s == null ? "—" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min" : Math.floor(s / 86400) + " days";
 let snmpInfo = null;
 async function openSnmp(key) {
@@ -1888,6 +1888,36 @@ function renderSnmp(x) {
     ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small></span></div>`).join("")}</div>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
   if (!d) { body.innerHTML = html; return; }
+  const u = d.ups;
+  if (u && u.error) html += sect("UPS", `<p class="empty-note">${esc(u.error)}</p>`);
+  else if (u) {
+    const lim = x.ups_limits || {};
+    const kv = (k, v) => v === "" || v == null ? "" : `<div><span>${k}</span>${v}</div>`;
+    const age = iso => { if (!iso) return ""; const y = (Date.now() - Date.parse(iso)) / (365.25 * 864e5); return y >= 1 ? ` <small class="muted">(${y.toFixed(1)} years ago)</small>` : ` <small class="muted">(${Math.max(0, Math.round(y * 12))} months ago)</small>`; };
+    const day = iso => iso ? new Date(iso + "T12:00:00").toLocaleDateString(undefined, {day: "numeric", month: "short", year: "numeric"}) : "";
+    const status = u.on_battery ? `<b class="failtxt">${esc(u.output)}</b>` : u.off ? `<b class="failtxt">${esc(u.output)}</b>` : u.bypass ? `<b class="old">${esc(u.output)}</b>` : esc(u.output || "—");
+    const bar = (pct, cls) => `<div class="bar" style="display:inline-block;width:120px;vertical-align:middle;margin-right:6px"><i class="${cls}" style="width:${Math.max(1, Math.min(100, pct))}%"></i></div>`;
+    html += sect("UPS", `<div class="kv">
+      ${kv("Model", esc([u.model, u.name && u.name !== u.model ? `(${u.name})` : ""].filter(Boolean).join(" ")))}
+      ${kv("Output", status + (u.on_battery && u.on_battery_s ? ` for ${fmtUp(u.on_battery_s)}` : ""))}
+      ${kv("Battery", (u.charge_pct != null ? bar(u.charge_pct, u.charge_pct < 50 ? "amber" : "") + `${u.charge_pct}% charged` : "") + (u.battery && u.battery !== "normal" ? ` · <b class="failtxt">${esc(u.battery)}</b>` : "")
+        + (u.replace ? ` · <b class="failtxt">needs replacing</b>` : ""))}
+      ${kv("Runtime", u.runtime_min != null ? `${u.runtime_min} min at the current load` : "")}
+      ${kv("Load", u.load_pct != null ? bar(u.load_pct, u.load_pct >= (lim.load_warn || 80) ? "amber" : "") + `${u.load_pct}%` + (u.output_a != null ? ` <small class="muted">(${u.output_a} A)</small>` : "") : "")}
+      ${kv("Input", [u.input_v != null ? u.input_v + " V" : "", u.input_hz != null ? u.input_hz + " Hz" : ""].filter(Boolean).join(", "))}
+      ${kv("Output power", [u.output_v != null ? u.output_v + " V" : "", u.output_hz != null ? u.output_hz + " Hz" : ""].filter(Boolean).join(", "))}
+      ${kv("Battery temperature", u.battery_temp_c != null ? u.battery_temp_c + " °C" : "")}
+      ${kv("Battery replaced", u.replaced ? day(u.replaced) + age(u.replaced) : "")}
+      ${kv("Battery packs", u.packs ? `${u.packs} external${u.bad_packs ? `, <b class="failtxt">${u.bad_packs} bad</b>` : ""}` : "")}
+      ${kv("Last transfer to battery", u.last_transfer && u.last_transfer !== "none" ? esc(u.last_transfer) : u.last_transfer === "none" ? "none recorded" : "")}
+      ${kv("Self-test", u.self_test ? (u.self_test_failed ? `<b class="failtxt">${esc(u.self_test)}</b>` : esc(u.self_test)) + (u.self_test_date ? ` on ${day(u.self_test_date)}` : "") + (u.test_schedule ? ` <small class="muted">· scheduled: ${esc(u.test_schedule)}</small>` : "") : "")}
+      ${kv("Runtime calibration", u.calibration ? esc(u.calibration) + (u.calibration_date ? ` on ${day(u.calibration_date)}` : "") : "")}
+      ${kv("Serial", esc(u.serial || ""))}
+      ${kv("Firmware", esc(u.firmware || ""))}
+      ${kv("Made", u.made ? day(u.made) : "")}
+      ${(u.alarms || []).length ? kv("Alarms", `<b class="old">${esc(u.alarms.join(", "))}</b>`) : ""}</div>`
+      + `<p class="hint">Goes red on battery, with a low or faulty battery, one that needs replacing, a failed self-test, or under ${lim.runtime_crit ?? 5} min of runtime; amber under ${lim.runtime_warn ?? 15} min of runtime, on bypass, or over ${lim.load_warn ?? 80}% load. The limits are in the add-on's Configuration.</p>`);
+  }
   const nas = d.nas;
   if (nas) {
     html += sect("Disks", tbl(["Disk", "Model", "Status", "SMART", "Size"], (nas.disks || []).map(k =>
@@ -2312,7 +2342,9 @@ function snmpShow() {
   document.getElementById("v3PrivPw").hidden = !priv.value;
   document.getElementById("snmpHint").innerHTML = v3
     ? "Create a read-only SNMP v3 user on the device and enter the same details here. SHA with AES-128 is the most widely supported pair; passwords are 8 characters or more. Passwords are only sent to the device as keys, and aren't shown on the dashboard."
-    : "Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). The community travels unencrypted: use v3 if the device supports it.";
+    : document.getElementById("fSnmpVer").value === "1"
+    ? "For older kit that only speaks SNMP v1, such as first-generation APC Network Management Cards (AP9606, AP9617/18/19). It's slower than v2c and the community travels unencrypted, so use v2c or v3 if the device supports them. Make sure the device allows Home Assistant's IP address."
+    : "Turn on SNMP v2c on the device with a read-only community, and enter the same name here (it's case-sensitive). The community travels unencrypted: use v3 if the device supports it. If it doesn't answer, older kit may only speak v1.";
 }
 for (const id of ["fSnmpVer", "fV3Auth", "fV3Priv"]) document.getElementById(id).addEventListener("change", snmpShow);
 function updatePicked() {
@@ -2480,7 +2512,7 @@ async function openDialog(h) {
   const comm = document.getElementById("fSnmpComm");
   comm.value = ""; comm.placeholder = h && h.snmp_community_set ? "Unchanged (type a new one to replace it)" : "public";
   const v3 = h && h.snmp_v3;
-  document.getElementById("fSnmpVer").value = h && h.snmp_version === "3" ? "3" : "2c";
+  document.getElementById("fSnmpVer").value = h && ["1", "3"].includes(h.snmp_version) ? h.snmp_version : "2c";
   document.getElementById("fV3User").value = v3 ? v3.user : "";
   document.getElementById("fV3Auth").value = v3 ? (v3.auth || "") : "SHA";
   document.getElementById("fV3Priv").value = v3 ? (v3.priv || "") : "AES-128";

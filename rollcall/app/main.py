@@ -114,6 +114,9 @@ DEFAULTS = {
     "editors": [],
     "cert_warn_days": 30,
     "cert_crit_days": 7,
+    "ups_runtime_warn_minutes": 15,
+    "ups_runtime_crit_minutes": 5,
+    "ups_load_warn": 80,
     "agent_stale_minutes": 15,
     "agent_slow_seconds": 120,
     "agent_disk_warn": 15,
@@ -534,8 +537,8 @@ def validate_entry(raw: dict) -> dict:
             entry[k] = [str(w) for w in words]
     if "snmp_version" in raw:
         ver = str(raw.get("snmp_version") or "2c")
-        if ver not in ("2c", "3"):
-            raise ValueError("SNMP version must be 2c or 3")
+        if ver not in ("1", "2c", "3"):
+            raise ValueError("SNMP version must be 1, 2c or 3")
         entry["snmp_version"] = ver
         if ver == "3":
             v = raw.get("snmp_v3") or {}
@@ -1322,7 +1325,8 @@ class Monitor:
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
-                            **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else {}),
+                            **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
+                               {"snmp_version": "1"} if h.snmp_version == "1" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1338,7 +1342,7 @@ class Monitor:
         h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
-        h.snmp_version = "3" if entry.get("snmp_version") == "3" else "2c"
+        h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
         self._apply_syslog(h, entry)
@@ -1807,6 +1811,11 @@ class Monitor:
             per *= 2
         return max(1, min(per, int(prev.get("per_cap") or 25), 25))
 
+    def ups_limits(self) -> dict:
+        o = self.opts
+        return {"runtime_warn": int(o.get("ups_runtime_warn_minutes", 15)), "runtime_crit": int(o.get("ups_runtime_crit_minutes", 5)),
+                "load_warn": int(o.get("ups_load_warn", 80))}
+
     async def snmp_check(self, h: Host, now: float) -> tuple:
         """Poll the device over SNMP. Warnings (e.g. PoE near its budget) stay amber;
         problems (a watched port down, a failed disk) go red if they're still there next time."""
@@ -1817,7 +1826,7 @@ class Monitor:
                 c = h.snmp_v3
                 v3 = snmplib.V3(c.get("user", ""), c.get("auth"), c.get("auth_pass", ""), c.get("priv"), c.get("priv_pass", ""))
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
-                                  v3=v3,
+                                  v3=v3, version=1 if h.snmp_version == "1" else 2,
                                   per=self._snmp_per(prev), discovery=(prev or {}).get("discovery"),
                                   ask_hr=(prev or {}).get("hr") is not False,  # stop asking a device that didn't answer
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
@@ -1830,7 +1839,7 @@ class Monitor:
         elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         h.snmp_data, h.snmp_polled = d, now
-        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev)
+        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits())
         h.snmp_items = items
         if worst == "ok":
             bits = []
@@ -1840,6 +1849,13 @@ class Monitor:
                 bits.append(f"PoE {d['poe']['used_w']}/{d['poe']['power_w']} W")
             if d.get("nas"):
                 bits.append(f"{len(d['nas'].get('disks') or [])} disks OK")
+            u = d.get("ups")
+            if u and not u.get("error"):
+                bits.append(", ".join(x for x in (
+                    f"UPS {u['output']}" if u.get("output") else "UPS",
+                    f"battery {u['charge_pct']}%" if u.get("charge_pct") is not None else "",
+                    f"{u['runtime_min']} min runtime" if u.get("runtime_min") is not None else "",
+                    f"load {u['load_pct']}%" if u.get("load_pct") is not None else "") if x))
             return True, d.get("took_ms"), "; ".join(bits) or "answering"
         detail = "; ".join(f"{i['what']} {i['detail']}".strip() for i in items if i["level"] == worst)
         return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
@@ -3252,7 +3268,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             raise web.HTTPNotFound()
         svc = next((s for s in h.services if s.kind == "snmp"), None)
         return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "polled": h.snmp_polled,
-                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch,
+                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch, "ups_limits": monitor.ups_limits(),
                                   "status": svc.status if svc else None, "detail": svc.detail if svc else None})
 
     async def host_snmp_watch(req):
@@ -3271,7 +3287,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         log.info("%s: port %s %s", h.name, idx, "watched" if body.get("watch") else "no longer watched")
         if h.snmp_data:  # re-evaluate straight away
             svc = next((s for s in h.services if s.kind == "snmp"), None)
-            worst, items = snmplib.evaluate(h.snmp_data, watch, None)
+            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits())
             h.snmp_items = items
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0

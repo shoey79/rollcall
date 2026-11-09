@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.35.0 - 2026-11-09
+
+### Added
+- **UPS monitoring over SNMP.** APC Network Management Cards are detected automatically. Other makes' network cards work through the standard UPS-MIB (Eaton, CyberPower, Riello, Socomec, Vertiv, Tripp Lite and others).
+  - **Details → SNMP** shows: output status, charge, runtime, load, input and output voltage, battery temperature, battery replaced date (with its age), last self-test and calibration, serial and firmware.
+  - **Red alerts:** on battery (with the runtime left), output off, a low or faulty battery, a battery that needs replacing, a failed self-test, or under 5 minutes of runtime.
+  - **Amber:** under 15 minutes of runtime, load at 80% or more, or the UPS on bypass.
+  - The new options `ups_runtime_warn_minutes`, `ups_runtime_crit_minutes` and `ups_load_warn` set those limits.
+- **SNMP v1**, for older kit that ignores v2c requests, such as first-generation APC cards (AP9617 and similar). Choose **v1** as the SNMP version when editing the device. When a v2c device doesn't answer, the error now suggests trying v1.
+
 ## 1.34.0 - 2026-11-09
 
 ### Added
