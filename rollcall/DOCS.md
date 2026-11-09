@@ -289,6 +289,19 @@ Each check sends a SIP OPTIONS request, the standard "are you there?" ping, and 
 
 SNMP on SPA112/122 adapters gives only the basics: uptime, restarts and the network port. Line status isn't available over SNMP.
 
+**Line registration (Cisco SPA ATAs, from syslog).** Send the adapter's logs to Rollcall and turn on its voice debug:
+1. Set **Voice → System → Debug Server** to Home Assistant's IP (port 514) and **Debug Level** to 3.
+2. Set **Voice → Line N → SIP Debug Option** to `1-line`.
+3. Tick **Syslog** for the device in Rollcall.
+
+The adapter then logs each registration (`[0]RegOK. NextReg in 594`) and each failure (`RegFail`). Rollcall tracks every line from these and shows it in the Logs tab and Overview, e.g. "Line 1 registration (sip.provider.example): registered".
+
+The **Syslog** check goes red, and notifies, when:
+- **A registration fails** and the adapter hasn't recovered within a minute.
+- **A registration lapses:** a line hasn't registered again well after it was due, while the adapter is still logging. If the adapter goes silent altogether, ping and the SIP check catch that instead.
+
+It turns green again when the line registers. Tip: add `getOptRdata` to the adapter's **Never alert on** words. Its mDNS service logs that harmless error constantly.
+
 ### Certificate expiry
 
 Tick **Certificate expiry on HTTPS (443)** under Network, or add custom checks:
@@ -353,7 +366,8 @@ Each device can send up to 100 messages a second (with bursts up to 200); more t
 - Buffalo TeraStation and LinkStation: whether the last time sync (NTP) worked, and the last firmware check that found it up to date.
 
 - Small Linux devices that log `MemFree:` / `MemTotal:` lines (e.g. Cisco SPA ATAs): memory free, against the total.
-- Any device that logs its kernel boot banner (`Linux version …`): when it last started.
+- Any device that logs its kernel boot banner (`Linux version …`, or `System started:` on Cisco SPA ATAs): when it last started.
+- Cisco SPA ATAs with voice debug on: each line's SIP registration (see **VoIP**).
 
 These come from the messages already stored, so nothing extra is kept. They only show while the device keeps sending them. They don't alert: the NAS logs its own overheating and fan errors as errors, and those alert as usual.
 

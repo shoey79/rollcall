@@ -17,7 +17,53 @@ _TEMP = re.compile(r"\btemp(\d+)=(-?\d+(?:\.\d+)?)\b")
 _FAN = re.compile(r"\bfan(\d+)=([A-Za-z]+)->(\d+)\b")
 _MEMFREE = re.compile(r"\bMemFree:\s*(\d+)\s*kB", re.I)
 _MEMTOTAL = re.compile(r"\bMemTotal:\s*(\d+)\s*kB", re.I)
-_BOOT = re.compile(r"\bLinux version \d")
+_BOOT = re.compile(r"\bLinux version \d|\bSystem started: ip@")
+# Cisco / Linksys / Sipura SPA ATAs and phones, with Debug Level 3 and the line's SIP debug on
+_REG_OK = re.compile(r"\[(\d+)\]RegOK\.?\s*NextReg in (\d+)")
+_REG_FAIL = re.compile(r"\[(\d+)\]RegFail\.?\s*(.*)|REGISTER_FAIL\S*,\s*lid:\s*(\d+)")
+_REG_TO = re.compile(r"\bREGISTER sip:([^\s;>]+)")
+
+
+def registrations(logs, key: str, now: float) -> list[dict]:
+    """Each SIP line's registration as the device logs it: registered (and when it's due again),
+    failed, or lapsed (no re-registration well after it was due, while the device is still logging)."""
+    ok = logs.query(key, since=now - 2 * DAY, q="RegOK", limit=40)
+    fail = logs.query(key, since=now - 2 * DAY, q="RegFail", limit=40) + logs.query(key, since=now - 2 * DAY, q="REGISTER_FAIL", limit=40)
+    if not ok and not fail:
+        return []
+    lines: dict[int, dict] = {}
+    for r in ok:
+        if m := _REG_OK.search(r["msg"]):
+            n = int(m.group(1)) + 1
+            ln = lines.setdefault(n, {"line": n})
+            if r["ts"] > ln.get("ok", 0):
+                ln["ok"], ln["next_in"] = r["ts"], int(m.group(2))
+    for r in fail:
+        if m := _REG_FAIL.search(r["msg"]):
+            n = int(m.group(1) or m.group(3)) + 1
+            ln = lines.setdefault(n, {"line": n})
+            if r["ts"] > ln.get("fail", 0):
+                ln["fail"], ln["fail_msg"] = r["ts"], (m.group(2) or "").strip()[:120]
+    to = next((m.group(1) for r in logs.query(key, since=now - 2 * DAY, q="REGISTER sip:", limit=5) if (m := _REG_TO.search(r["msg"]))), "")
+    _n, last_msg = logs.stats(key, now - DAY)
+    out = []
+    for n in sorted(lines):
+        ln = lines[n]
+        ok_t, fail_t = ln.get("ok"), ln.get("fail")
+        state, detail = "registered", ""
+        if fail_t and (not ok_t or fail_t > ok_t) and now - fail_t > 60:  # give the device a retry first
+            state = "failed"
+            detail = "registration failed" + (f" ({ln['fail_msg']})" if ln.get("fail_msg") else "")
+        elif ok_t:
+            due = ok_t + ln["next_in"]
+            grace = max(300, ln["next_in"])
+            if now > due + grace and last_msg and last_msg > due + grace:  # still logging, but no re-registration
+                state, detail = "lapsed", "no re-registration since it was due"
+        elif not ok_t:
+            state = "unknown"
+        out.append({"line": n, "state": state, "detail": detail, "ok": ok_t, "next_in": ln.get("next_in"),
+                    "fail": fail_t, "to": to})
+    return out
 _NTP_OK = re.compile(r"\[success\].*ntp", re.I)
 _NTP_FAIL = re.compile(r"\[fail\].*ntp", re.I)
 
@@ -66,6 +112,11 @@ def readings(logs, key: str, now: float) -> dict:
                key=lambda r: r["ts"], default=None)
     if boot:
         out["status"].append({"label": "Last started", "value": "restarted", "ok": True, "at": boot["ts"]})
+    for reg in registrations(logs, key, now):
+        good = reg["state"] == "registered"
+        out["status"].append({"label": f"Line {reg['line']} registration" + (f" ({reg['to']})" if reg["to"] else ""),
+                              "value": "registered" if good else reg["detail"] or reg["state"], "ok": good,
+                              "at": reg["ok"] if good else (reg["fail"] or reg["ok"] or now), "reg": reg})
     ntp = max((r for r in logs.query(key, since=now - 7 * DAY, q="ntp server", limit=50)
                if _NTP_OK.search(r["msg"]) or _NTP_FAIL.search(r["msg"])), key=lambda r: r["ts"], default=None)
     if ntp:

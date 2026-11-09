@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.41.0 - 2026-11-09
+
+### Added
+- **SIP line registration from syslog** (Cisco / Linksys SPA ATAs, with voice debug on). Each line shows as registered, failed or lapsed, with its provider, in the Logs tab and Overview.
+  - The **Syslog** check goes red, with a notification, when a registration fails for more than a minute.
+  - It also goes red when a line stops re-registering while the adapter is still logging.
+  - It recovers when the line registers again.
+- The SPA's `System started:` line counts as a restart in the readings.
+
 ## 1.40.4 - 2026-11-09
 
 ### Added

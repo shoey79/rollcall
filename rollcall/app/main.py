@@ -1536,9 +1536,18 @@ class Monitor:
         hits = [(sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore), r) for r in rows]
         hits = [(lvl, r) for lvl, r in hits if lvl]
         n, last = self.logs.stats(h.key, now - DAY)
+        # SIP lines whose registration the device logs (e.g. Cisco SPA ATAs): failed or lapsed goes red
+        regs = syslogreadings.registrations(self.logs, h.key, now)
+        bad = [r for r in regs if r["state"] in ("failed", "lapsed")]
+        if bad:
+            detail = "; ".join(f"Line {r['line']}: {r['detail']}" for r in bad)
+            if hits:
+                detail += f" (and {len(hits)} log alert{'s' if len(hits) != 1 else ''})"
+            return False, None, detail[:240], "now"
         if not hits:
+            reg = (" · " + ", ".join(f"line {r['line']} registered" for r in regs if r["state"] == "registered")) if regs else ""
             return True, None, (f"{n} message{'s' if n != 1 else ''} in 24 h, last {fmt_ago(now - last)}" if n
-                                else "No messages in the last 24 h")
+                                else "No messages in the last 24 h") + reg
         worst = "red" if any(lvl == "red" for lvl, _ in hits) else "amber"
         top = next(r for lvl, r in hits if lvl == worst)
         more = f" (+{len(hits) - 1} more)" if len(hits) > 1 else ""
