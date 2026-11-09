@@ -117,4 +117,6 @@ async def check(ip: str, port: int, timeout: float = 3.0) -> tuple:
         return False, None, f"no SIP reply on UDP {port} ({err.strerror or err})"
     if code >= 500:
         return False, None, f"SIP {code} {reason}".strip() + (f" · {agent}" if agent else ""), "warn"
-    return True, round(ms, 1), f"SIP {code} {reason}".strip() + (f" · {agent}" if agent else "")
+    # 401/403/404/405/481 etc. are normal answers to a request that isn't for a real number or account
+    what = "SIP answering" if 200 <= code < 300 else f"SIP answering ({code} {reason}, normal for this probe)".replace(" ,", ",")
+    return True, round(ms, 1), what + (f" · {agent}" if agent else "")

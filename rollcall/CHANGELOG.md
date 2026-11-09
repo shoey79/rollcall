@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.40.3 - 2026-11-09
+
+### Changed
+- **SIP check wording:** a reply such as 404 Not Found or 401 Unauthorized now reads "SIP answering (404 Not Found, normal for this probe)". These replies still mean the device's SIP service is up; the probe isn't addressed to a real number.
+
 ## 1.40.2 - 2026-11-09
 
 ### Changed

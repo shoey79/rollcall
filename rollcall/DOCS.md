@@ -279,13 +279,13 @@ The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. Pow
 
 Tick **VoIP phone, ATA or PBX** to check a device's SIP service on UDP 5060. For two-line adapters such as the Cisco SPA112/122, tick **Two-line ATA**: Line 1 is UDP 5060 and Line 2 UDP 5061.
 
-Each check sends a SIP OPTIONS request, the standard "are you there?" ping, and any SIP reply counts as up. The chip shows the reply and the device's software, e.g. `SIP 200 OK · Cisco/SPA112-1.4.1(SR5)`. No reply goes red (after two checks, like other services); a 5xx error from the device is amber.
+Each check sends a SIP OPTIONS request, the standard "are you there?" ping, and any SIP reply counts as up. Replies such as 404 Not Found or 401 Unauthorized are normal: the request isn't addressed to the line's number, and the reply still shows the SIP service is answering. The chip shows the reply and the device's software, e.g. `SIP 200 OK · Cisco/SPA112-1.4.1(SR5)`. No reply goes red (after two checks, like other services); a 5xx error from the device is amber.
 
 - Custom forms: `sip` (port 5060), `sip:5062`, or `sip:HOST:PORT` for another address, with a label if you like (`Line 3=sip:5062`).
 - This shows the device's SIP service is running, not that the line is registered with your provider. For that, send the device's syslog to Rollcall (see **Syslog**) and alert on its registration messages.
 - If the device only accepts SIP from its provider ("Restrict Source IPs" on Cisco ATAs), it won't answer Rollcall. Turn that off, or use ping and syslog only.
 - A line with no account set up may not listen at all, so only tick the lines you use.
-- **"Nothing listening on UDP 5060 (refused)":** the device answered, but SIP isn't on that port. Rollcall then tries the other common SIP ports (5061–5065, 5070, 5080, 5160, 5161) and says where SIP answers, e.g. "change this check to sip:5062". The line's port is on the device under the line's SIP settings (on Cisco ATAs, **Voice → Line 1 → SIP Port**).
+- **"Nothing listening on UDP 5060 (refused)":** the device answered, but SIP isn't on that port. Rollcall then tries the other common SIP ports (5061–5065, 5070, 5080, 5160, 5161) and says where SIP answers, e.g. "change this check to sip:5062". Ports outside that list (some providers use high, non-standard ports) need setting by hand. The line's port is on the device under the line's SIP settings (on Cisco ATAs, **Voice → Line 1 → SIP Port**).
 
 SNMP on SPA112/122 adapters gives only the basics: uptime, restarts and the network port. Line status isn't available over SNMP.
 
