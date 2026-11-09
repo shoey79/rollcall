@@ -1747,7 +1747,8 @@ function renderDetails(d) {
   if (d.security_visible) {
     const fl = (hist.failed_logons || []).slice().reverse();
     html += sect("Failed logons (last 24 h)", tbl(["Reported", "Count", "Top accounts"], fl.map(x =>
-      `<tr class="${x.alert ? "hl" : ""}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}</td><td>${(x.top || []).map(t => `${esc(t.account)} from ${esc(t.source)} (${t.count})`).join("<br>")}</td></tr>`)) ||
+      `<tr class="${x.alert ? "hl" : ""}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}</td><td>${(x.top || []).map(t => `${esc(t.account)} from ${esc(t.source)}${t.machine ? ` (${esc(t.machine)})` : ""} (${t.count})`
+        + (t.reason || t.type || t.via ? `<br><small class="muted">${esc([t.reason, t.type && t.type + " logon", t.via].filter(Boolean).join(" · "))}</small>` : "")).join("<br>")}</td></tr>`)) ||
       `<p class="empty-note">None.</p>`);
     const sec = (hist.security || []).slice().reverse();
     html += ackBar("security", "notable security event(s)");

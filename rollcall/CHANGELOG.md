@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.44.2 - 2026-11-09
+
+### Added
+- **Failed logons say why (Windows agent 1.0.20).** Each group now shows:
+  - Windows' reason, e.g. "user name doesn't exist", "wrong password", "account locked out", "clocks out of sync with the domain controller";
+  - the logon type (network, remote desktop, service…);
+  - the method (NTLM, Kerberos) and process;
+  - the computer name the client gave.
+  - The same account and source are grouped separately for each reason.
+
+### Changed
+- A user name that already includes a domain (e.g. `contoso\svc_backup` sent together with domain `CONTOSO`) now reads `contoso\svc_backup (with domain CONTOSO)` instead of `CONTOSO\contoso\svc_backup`. This makes it clear the client sent it that way.
+
 ## 1.44.1 - 2026-11-09
 
 ### Fixed

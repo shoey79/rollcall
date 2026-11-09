@@ -229,7 +229,8 @@ def normalize_report(r) -> dict:
                          | {"via": [str(v)[:60] for v in _as_list(x.get("via"))][:6]}
                          for x in _as_list(sec.get("admins")) if isinstance(x, dict) and (x.get("account") or x.get("sid"))][:200]
     fl = sec["failed_logons"] = _as_dict(sec.get("failed_logons"))
-    fl["top"] = [x for x in _as_list(fl.get("top")) if isinstance(x, dict)]
+    fl["top"] = [{k: (str(x.get(k) or "")[:160] if k != "count" else x.get("count")) for k in
+                  ("account", "source", "count", "reason", "type", "via", "machine")} for x in _as_list(fl.get("top")) if isinstance(x, dict)][:10]
     try:
         fl["count"] = int(fl.get("count") or 0)
     except (TypeError, ValueError):

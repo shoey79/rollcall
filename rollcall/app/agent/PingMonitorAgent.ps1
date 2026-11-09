@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.19'
+$AgentVersion = '1.0.20'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -616,16 +616,36 @@ function Get-SecurityReport($State, [DateTime]$Since) {
         $report.failed_logons.count = $failed.Count
         $failed = @($failed | Select-Object -First 2000)
         if (@($failed).Count -gt 0) {
+            # Why Windows refused the logon (SubStatus, or Status when that's 0)
+            $reasons = @{ '0xc0000064' = "user name doesn't exist"; '0xc000006a' = 'wrong password'; '0xc0000234' = 'account locked out'
+                '0xc0000072' = 'account disabled'; '0xc000006f' = 'outside allowed logon hours'; '0xc0000070' = 'not allowed from this workstation'
+                '0xc0000071' = 'password expired'; '0xc0000193' = 'account expired'; '0xc0000224' = 'must change password at next logon'
+                '0xc000015b' = 'logon type not granted on this computer'; '0xc0000133' = "clocks out of sync with the domain controller"
+                '0xc000018c' = 'trust with the domain failed'; '0xc0000413' = 'blocked by authentication firewall'; '0xc000005e' = 'no logon server available'
+                '0xc000006d' = 'bad user name or authentication information'; '0xc000006e' = 'account restriction'; '0xc0000192' = 'NetLogon service not started' }
+            $types = @{ '2' = 'interactive'; '3' = 'network'; '4' = 'batch'; '5' = 'service'; '7' = 'unlock'; '8' = 'network (clear text)'
+                '9' = 'new credentials'; '10' = 'remote desktop'; '11' = 'cached' }
             $rows = foreach ($e in $failed) {
                 $f = Get-EventFields $e
+                $user = [string]$f['TargetUserName']; $dom = [string]$f['TargetDomainName']
+                # A user name that already includes a domain was sent like that by the client: show it as received
+                $account = if ($user -match '\\|@' -and $dom -and $dom -ne '-') { "$user (with domain $dom)" }
+                           else { ((@($dom, $user) | Where-Object { $_ -and $_ -ne '-' }) -join '\') }
+                $code = ([string]$(if ($f['SubStatus'] -and $f['SubStatus'] -notmatch '^0x0+$') { $f['SubStatus'] } else { $f['Status'] })).ToLower()
                 [pscustomobject]@{
-                    account = ((@($f['TargetDomainName'], $f['TargetUserName']) | Where-Object { $_ -and $_ -ne '-' }) -join '\')
+                    account = $account
                     source  = if ($f['IpAddress'] -and $f['IpAddress'] -ne '-') { $f['IpAddress'] } else { [string]$f['WorkstationName'] }
+                    reason  = if ($reasons[$code]) { $reasons[$code] } elseif ($code) { $code } else { '' }
+                    type    = if ($types[[string]$f['LogonType']]) { $types[[string]$f['LogonType']] } else { [string]$f['LogonType'] }
+                    via     = (@([string]$f['AuthenticationPackageName'], ([string]$f['ProcessName'] -split '\\')[-1]) | Where-Object { $_ -and $_ -ne '-' }) -join ', '
+                    machine = [string]$f['WorkstationName']
                 }
             }
-            $report.failed_logons.top = @($rows | Group-Object account, source | Sort-Object Count -Descending |
+            $report.failed_logons.top = @($rows | Group-Object account, source, reason | Sort-Object Count -Descending |
                 Select-Object -First 5 | ForEach-Object {
-                    [ordered]@{ account = $_.Group[0].account; source = $_.Group[0].source; count = $_.Count }
+                    $g = $_.Group[0]
+                    [ordered]@{ account = $g.account; source = $g.source; count = $_.Count; reason = $g.reason; type = $g.type; via = $g.via
+                                machine = if ($g.machine -and $g.machine -ne '-' -and $g.machine -ne $g.source) { $g.machine } else { '' } }
                 })
         }
     } catch { Add-CollectorError 'failed-logons' $_ }
