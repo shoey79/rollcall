@@ -2203,11 +2203,11 @@ function logReadings(rd, now) {
   if (!rd || (!(rd.sensors || []).length && !(rd.status || []).length)) return "";
   const t = s => esc(new Date(s * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}));
   const rows = (rd.sensors || []).map(r => `<tr><td><b>${esc(r.label)}</b></td>
-      <td>${esc(String(r.value))} ${esc(r.unit)}${r.mode ? ` <small class="muted">(${esc(r.mode)})</small>` : ""}</td>
+      <td>${esc(String(r.value))} ${esc(r.unit)}${r.mode ? ` <small class="muted">(${esc(r.mode)})</small>` : ""}${r.of ? ` <small class="muted">of ${esc(String(r.of))} ${esc(r.unit)}</small>` : ""}</td>
       <td>${r.min === r.max ? "steady" : `${esc(String(r.min))}–${esc(String(r.max))} ${esc(r.unit)}`}</td>
       <td>${spark(r.series)}</td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`)
     .concat((rd.status || []).map(r => `<tr><td><b>${esc(r.label)}</b></td><td>${r.ok ? `<span class="okc">${esc(r.value)}</span>` : `<b class="old">${esc(r.value)}</b>`}</td>
-      <td colspan="2"><small class="muted">last reported ${t(r.at)}</small></td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`));
+      <td colspan="2"><small class="muted">${r.label === "Last started" ? "" : "last reported "}${t(r.at)}</small></td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`));
   return sect("Readings from its logs", `<table class="small"><thead><tr><th>Reading</th><th>Latest</th><th>Last 24 h</th><th></th><th>Reported</th></tr></thead><tbody>${rows.join("")}</tbody></table>`);
 }
 function renderLogs(x) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.40.4 - 2026-11-09
+
+### Added
+- **More readings from syslog:**
+  - Free memory, shown against the total, from devices that log `MemFree:` / `MemTotal:` lines (e.g. Cisco SPA ATAs).
+  - When a device last started, from its kernel boot banner.
+
 ## 1.40.3 - 2026-11-09
 
 ### Changed

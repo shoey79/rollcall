@@ -15,6 +15,9 @@ import re
 DAY = 86400
 _TEMP = re.compile(r"\btemp(\d+)=(-?\d+(?:\.\d+)?)\b")
 _FAN = re.compile(r"\bfan(\d+)=([A-Za-z]+)->(\d+)\b")
+_MEMFREE = re.compile(r"\bMemFree:\s*(\d+)\s*kB", re.I)
+_MEMTOTAL = re.compile(r"\bMemTotal:\s*(\d+)\s*kB", re.I)
+_BOOT = re.compile(r"\bLinux version \d")
 _NTP_OK = re.compile(r"\[success\].*ntp", re.I)
 _NTP_FAIL = re.compile(r"\[fail\].*ntp", re.I)
 
@@ -50,6 +53,19 @@ def readings(logs, key: str, now: float) -> dict:
             out["sensors"].append(_reading(f"Temperature (temp{n})", "°C", temps[n]))
         for n in sorted(fans, key=int):
             out["sensors"].append(_reading(f"Fan {int(n) + 1}", "RPM", fans[n], mode=modes.get(n, "")))
+    # Small Linux devices (e.g. Cisco SPA ATAs) that log /proc/meminfo lines every few minutes
+    mem = logs.query(key, since=now - DAY, q="MemFree", limit=600)
+    pts = sorted(((r["ts"], int(m.group(1))) for r in mem if (m := _MEMFREE.search(r["msg"]))), key=lambda p: p[0])
+    if pts:
+        total = next((int(m.group(1)) for r in logs.query(key, since=now - 7 * DAY, q="MemTotal", limit=5)
+                      if (m := _MEMTOTAL.search(r["msg"]))), None)
+        out["sensors"].append(_reading("Memory free", "MB", [(t, round(v / 1024, 1)) for t, v in pts],
+                                       **({"of": round(total / 1024, 1)} if total else {})))
+    # A kernel boot banner in the log means the device started up
+    boot = max((r for r in logs.query(key, since=now - 30 * DAY, q="Linux version", limit=20) if _BOOT.search(r["msg"])),
+               key=lambda r: r["ts"], default=None)
+    if boot:
+        out["status"].append({"label": "Last started", "value": "restarted", "ok": True, "at": boot["ts"]})
     ntp = max((r for r in logs.query(key, since=now - 7 * DAY, q="ntp server", limit=50)
                if _NTP_OK.search(r["msg"]) or _NTP_FAIL.search(r["msg"])), key=lambda r: r["ts"], default=None)
     if ntp:

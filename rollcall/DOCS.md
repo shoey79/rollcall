@@ -352,6 +352,9 @@ Each device can send up to 100 messages a second (with bursts up to 200); more t
 - Buffalo TeraStation and LinkStation: temperatures (`temp0`, `temp1`…, as the NAS names them) and fan speed and mode, from `fanctld.sh`.
 - Buffalo TeraStation and LinkStation: whether the last time sync (NTP) worked, and the last firmware check that found it up to date.
 
+- Small Linux devices that log `MemFree:` / `MemTotal:` lines (e.g. Cisco SPA ATAs): memory free, against the total.
+- Any device that logs its kernel boot banner (`Linux version …`): when it last started.
+
 These come from the messages already stored, so nothing extra is kept. They only show while the device keeps sending them. They don't alert: the NAS logs its own overheating and fan errors as errors, and those alert as usual.
 
 ### How services affect status
