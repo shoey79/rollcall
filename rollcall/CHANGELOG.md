@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.35.1 - 2026-11-09
+
+### Added
+- **Edit** button in the Details dialog (admins and editors). The edit form opens on top of Details; after you save or cancel, Details refreshes to show the changes, and closes if you deleted the device.
+
+### Changed
+- The SNMP service's description now mentions UPSs (e.g. APC).
+
 ## 1.35.0 - 2026-11-09
 
 ### Added

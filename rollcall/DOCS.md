@@ -55,7 +55,7 @@ The dashboard has tabs to split a long list. Each tab is a saved filter, so it u
 Computers are managed on the dashboard:
 
 - **+ Add computer** opens a form with the name, the IP or hostname, a checkbox for each service preset (showing the ports it checks), and fields for any custom checks.
-- **Edit** on a row opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
+- **Edit** on a row, or at the bottom of a computer's **Details**, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too. Editing from Details takes you back to Details, updated, when you save or cancel.
 - Changes apply straight away; there's no add-on restart.
 
 The list is saved in the add-on's data folder (`hosts.json`) and is included in HA backups of the add-on.

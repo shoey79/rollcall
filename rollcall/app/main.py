@@ -209,7 +209,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("npm", "Nginx Proxy Manager", _NET, [("NPM", "http:81/")]),
     ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
     ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
-    ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID (e.g. Netgear, Buffalo)", _NET, [("SNMP", "snmp:device")]),
+    ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID, UPS battery and power (e.g. Netgear, Buffalo, APC)", _NET, [("SNMP", "snmp:device")]),
     ("cert", "Certificate expiry on HTTPS (443)", _NET, [("Cert 443", "cert:443")]),
     ("syslog", "Syslog: keep this device's log messages and alert on errors", _NET, [("Syslog", "syslog:device")]),
     ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),

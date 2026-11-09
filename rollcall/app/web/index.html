@@ -1492,17 +1492,32 @@ function renderDetActions() {
   el.innerHTML = `<button type="button" data-dcheck ${h.checking ? "disabled" : ""}>${h.checking ? "Checking…" : "Check now"}</button>` +
     (h.maint_until
       ? `<button type="button" class="edit-only" data-dresume title="Resume monitoring and alerts now">Resume</button><small class="muted">Paused until ${esc(new Date(h.maint_until * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}))}</small>`
-      : `<button type="button" class="edit-only" data-dpause title="Pause alerts, e.g. for a reboot">Pause</button>`);
+      : `<button type="button" class="edit-only" data-dpause title="Pause alerts, e.g. for a reboot">Pause</button>`) +
+    `<button type="button" class="edit-only" data-dedit title="Change this device's checks and settings">Edit</button>`;
 }
 document.getElementById("detActions").addEventListener("click", async e => {
   const h = detKey && data.hosts.find(x => x.key === detKey);
   if (!h) return;
   const b = e.target.closest("button");
   if (!b) return;
+  if (b.hasAttribute("data-dedit")) { editFromDetails = true; return openDialog(h); }
   if (b.hasAttribute("data-dpause")) await pauseHost(h.key, h.name);
   else if (b.hasAttribute("data-dresume")) { b.disabled = true; await resumeHost(h.key); }
   else if (b.hasAttribute("data-dcheck")) { b.disabled = true; b.textContent = "Queued"; await checkHost(h.key); }
   renderDetActions();
+});
+// Edit opened from Details sits on top of it; when it closes, Details shows the saved changes
+// (or closes too if the device was deleted).
+let editFromDetails = false;
+document.getElementById("dlg").addEventListener("close", async () => {
+  if (!editFromDetails) return;
+  editFromDetails = false;
+  if (!detDlg.open || !detKey) return;
+  await load();
+  if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
+  renderDetActions();
+  const refresh = () => detDlg.open && (detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
 const detDlg = document.getElementById("detDlg");
