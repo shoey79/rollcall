@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.18'
+$AgentVersion = '1.0.19'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -571,6 +571,27 @@ function Get-SecurityReport($State, [DateTime]$Since) {
     try {
         $events = @($all | Where-Object { $_.Id -ne 4625 } | Select-Object -First 300)
         $items = @()
+        $names = @{}
+        # Group-membership events name the member only by its SID for local accounts (MemberName is "-"),
+        # and by its directory DN for domain ones: show it as DOMAIN-backslash-name for both.
+        $member = {
+            param($f)
+            $sid = [string]$f['MemberSid']
+            if ($sid -and $sid -ne '-' -and $sid -match '^S-1-') {
+                if (-not $names.ContainsKey($sid)) {
+                    $nm = ''
+                    try { $nm = (New-Object Security.Principal.SecurityIdentifier $sid).Translate([Security.Principal.NTAccount]).Value } catch { }
+                    $names[$sid] = $nm
+                }
+                if ($names[$sid]) { return $names[$sid] }
+            }
+            $n = [string]$f['MemberName']
+            if ($n -match '^CN=((?:[^,\\]|\\.)+)') { return ($matches[1] -replace '\\(.)', '$1') }
+            if ($n -and $n -ne '-') { return $n }
+            if ($sid -and $sid -ne '-') { return $sid }
+            return ''
+        }
+        $self = "$($env:COMPUTERNAME)`$"
         foreach ($e in ($events | Sort-Object TimeCreated -Descending | Select-Object -First 50)) {
             $f = Get-EventFields $e
             $who = @($f['TargetDomainName'], $f['TargetUserName']) | Where-Object { $_ -and $_ -ne '-' }
@@ -578,11 +599,13 @@ function Get-SecurityReport($State, [DateTime]$Since) {
                 time    = ConvertTo-UtcString $e.TimeCreated
                 id      = [int]$e.Id
                 what    = $SecurityIds[[int]$e.Id]
-                account = if ($e.Id -in 4728, 4732, 4756, 4729, 4733, 4757) { [string]$f['MemberName'] } else { ($who -join '\') }
+                account = if ($e.Id -in 4728, 4732, 4756, 4729, 4733, 4757) { & $member $f } else { ($who -join '\') }
                 group   = if ($e.Id -in 4728, 4732, 4756, 4729, 4733, 4757) { (@($f['TargetDomainName'], $f['TargetUserName']) | Where-Object { $_ }) -join '\' } else { $null }
                 by      = (@($f['SubjectDomainName'], $f['SubjectUserName']) | Where-Object { $_ -and $_ -ne '-' }) -join '\'
                 source  = if ($e.Id -eq 4740) { [string]$f['TargetDomainName'] } else { $null }
             }
+            # Done by the computer's own account: Windows itself (SYSTEM), e.g. LAPS or Group Policy
+            if ([string]$f['SubjectUserName'] -eq $self) { $items[-1].by = "SYSTEM ($($items[-1].by))" }
         }
         # 4740's TargetDomainName is the caller computer, not a domain
         foreach ($i in $items) { if ($i.id -eq 4740) { $i.account = ($i.account -split '\\')[-1] } }

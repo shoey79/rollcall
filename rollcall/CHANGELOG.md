@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.44.1 - 2026-11-09
+
+### Fixed
+- **Security events (Windows agent 1.0.19).** "Added to/removed from group" events (4728, 4732, 4756 and their removals) showed "-" for the member when it was a local account. Windows leaves that name blank for local accounts and records only the SID.
+  - The agent now looks up the SID, so the member shows as e.g. `PC01\LAPSAdmin`.
+  - Domain members show their name rather than their full directory path.
+  - Changes made by the computer's own account (LAPS, Group Policy, other Windows services) are labelled `SYSTEM (CONTOSO\PC01$)`.
+
 ## 1.44.0 - 2026-11-09
 
 ### Added
