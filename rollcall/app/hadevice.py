@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import re
 
-KNOWN = {"pi_hole": "Pi-hole"}
+KNOWN = {"pi_hole": "Pi-hole", "pi_hole_v6": "Pi-hole (V6, from HACS)"}
+PIHOLE = ("pi_hole", "pi_hole_v6")
 UNAVAILABLE = ("unavailable", "unknown", "", None)
 
 
@@ -63,8 +64,8 @@ def read(dev: dict, ents: list[dict], states: dict) -> dict:
         if dom == "update" and e["state"] == "on":
             items.append({"level": "info", "what": "Update available", "detail": f"{e['title'] or e['name']} {e['latest']}".strip()
                           + (f" (running {e['installed']})" if e["installed"] else "")})
-    if "pi_hole" in platforms:
-        _pihole(d, [e for e in out_ents if e["platform"] == "pi_hole"])
+    if any(p in platforms for p in PIHOLE):
+        _pihole(d, [e for e in out_ents if e["platform"] in PIHOLE])
     elif not d["summary"]:
         d["summary"] = f"{len(live)} of {len(out_ents)} entities available" if out_ents else "no entities"
     return d
@@ -78,25 +79,32 @@ def _pihole(d: dict, ents: list[dict]) -> None:
         return None
 
     tiles, items = d["tiles"], d["items"]
-    blocking = next((e for e in ents if e["entity_id"].startswith("switch.")), None)
-    status = find("binary_sensor", r"\bstatus\b")
+    # The blocking switch: the integration's only switch, or (Pi-hole V6, which adds one per group) the "global" one
+    switches = [e for e in ents if e["entity_id"].startswith("switch.")]
+    blocking = next((e for e in switches if re.search(r"\bglobal\b", e["key"])), None) or \
+        next((e for e in switches if not re.search(r"\bgroup\b", e["key"])), None)
+    status = find("binary_sensor", r"\bstatus\b")  # on while blocking is enabled
     queries = find("sensor", r"dns_queries_today|\bdns_queries\b(?!_cached|_forwarded)")
     blocked = find("sensor", r"ads_blocked")
     pct = find("sensor", r"ads_percentage")
     clients = find("sensor", r"unique_clients")
     domains = find("sensor", r"domains_being_blocked|domains_blocked")
-    on = blocking["state"] if blocking else None
-    if blocking:
+    cpu = find("sensor", r"cpu_use")
+    mem = find("sensor", r"memory_use")
+    msgs = find("sensor", r"ftl_info_message_count")
+    src = blocking or status
+    on = src["state"] if src else None
+    if src:
         tiles.append({"label": "Ad blocking", "value": "On" if on == "on" else "Off" if on == "off" else str(on).title(),
                       "level": "warn" if on == "off" else "", "sub": "Pi-hole"})
         if on == "off":
             items.append({"level": "warn", "what": "Pi-hole", "detail": "ad blocking is turned off"})
-    if status and status["state"] == "off":
-        items.append({"level": "crit", "what": "Pi-hole", "detail": "reports that it isn't running"})
     for e, label in ((queries, "DNS queries today"), (blocked, "Blocked today"), (pct, "Blocked"), (clients, "Clients"),
-                     (domains, "Domains on blocklists")):
+                     (domains, "Domains on blocklists"), (cpu, "CPU"), (mem, "Memory")):
         if e and _num(e["state"]) is not None:
             tiles.append({"label": label, "value": _num(e["state"]), "unit": e["unit"] if e["unit"] == "%" else "", "level": ""})
+    if msgs and (_num(msgs["state"]) or 0) > 0:
+        items.append({"level": "info", "what": "Pi-hole", "detail": f"{_num(msgs['state'])} diagnostic message(s) in Pi-hole (Tools → Pi-hole diagnosis)"})
     bits = []
     if on in ("on", "off"):
         bits.append(f"blocking {on}")

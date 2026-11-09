@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.40.1 - 2026-11-09
+
+### Fixed
+- **Pi-hole V6 from HACS** (`pi_hole_v6`) is now recognised as Pi-hole.
+  - Pi-hole tiles show for it, with CPU and memory added.
+  - Its blocking switch is told apart from its per-group switches.
+  - Its "Status" sensor is read as blocking on or off.
+  - Pi-hole's diagnostic message count is noted.
+- A linked Home Assistant device's readings only showed on the device Overview, which computers with an agent don't have. Every linked device now gets a **Home Assistant** tab in Details.
+
 ## 1.40.0 - 2026-11-09
 
 ### Added

@@ -244,13 +244,14 @@ For `http:PORT/...` and `https:PORT/...` checks (including presets), if the port
 
 If Home Assistant already has an integration for the device, link its HA device: Rollcall then reads all of the integration's entities, with no extra passwords. Under **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. This adds a **Home Assistant** check, and the device's Overview in Details shows a **Home Assistant** section with the entities and their states (diagnostic ones folded away).
 
-- **Pi-hole** (the Pi-hole integration):
+- **Pi-hole** (Home Assistant's built-in Pi-hole integration, or the **Pi-hole V6** integration from HACS):
   - Tiles for ad blocking on or off, DNS queries today, blocked today and the percentage blocked, clients, and domains on blocklists.
   - Ad blocking turned off is amber.
   - Updates for Pi-hole Core, FTL or Web are noted.
   - The check's chip reads e.g. "Pi-hole: blocking on, 85,710 queries today, 21.4% blocked".
 - **Any other device:** its entities are listed. It goes red if every entity is unavailable (Home Assistant has lost touch with the device), and amber for a "problem" binary sensor that's on.
 - Keep the **Pi-hole** preset ticked too. It checks DNS (TCP 53) and the admin page directly, so you still hear about a dead Pi-hole even if Home Assistant is down.
+- **The Home Assistant tab:** every linked device gets one in Details, including computers with an agent. It shows the tiles, any problems and all the entities. On devices without an agent, the Overview shows them too.
 - To unlink, choose **Unlink** under Edit.
 
 ### Home Assistant sensors

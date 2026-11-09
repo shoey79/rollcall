@@ -1525,7 +1525,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -1563,7 +1563,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -1865,6 +1865,7 @@ function deviceSources(h) {
   if (h && h.agent) out.push(["agent", "Agent details"]);
   if (h && h.snmp) out.push(["snmp", "SNMP"]);
   if (h && h.syslog) out.push(["logs", "Logs"]);
+  if (h && h.ha_device) out.push(["ha", "Home Assistant"]);
   return out;
 }
 function srcBadge(h, kind) {
@@ -1875,7 +1876,7 @@ function srcBadge(h, kind) {
 function showSourceTabs(key, active) {
   const h = data && data.hosts.find(x => x.key === key), src = deviceSources(h), nav = document.getElementById("detTabs");
   if (src.length < 2) { nav.hidden = true; return; }
-  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : ""}</button>`).join("");
+  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : ""}</button>`).join("");
   nav.hidden = false;
 }
 // In agent view: SNMP and Logs added after the agent's tabs.
@@ -1884,13 +1885,14 @@ function appendSourceTabs(key) {
   const extra = deviceSources(h).filter(([k]) => k !== "agent");
   if (!extra.length) return;
   nav.insertAdjacentHTML("beforeend", `<span class="tabsep"></span>` + extra.map(([k, n]) =>
-    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : srcBadge(h, "syslog")}</button>`).join(""));
+    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : srcBadge(h, "syslog")}</button>`).join(""));
 }
 document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dsrc]");
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
-  if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey); else openLogs(detKey);
+  if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey);
+  else if (k === "ha") openHa(detKey); else openLogs(detKey);
 });
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
@@ -1912,6 +1914,44 @@ async function openOverview(key) {
     h.ha_device ? get(base + "/ha") : null]);
   if (detMode !== "overview" || detKey !== key) return;  // moved on while loading
   renderOverview(data.hosts.find(x => x.key === key) || h, sn, lg, ha);
+}
+// A linked Home Assistant device's entities (diagnostic ones folded away) and its update notes.
+function haEntities(hd, ha, now) {
+  const info = (hd.items || []).filter(i => i.level === "info");
+  const ents = hd.entities || [], main = ents.filter(e => !e.category), diag = ents.filter(e => e.category);
+  const row = e => `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${e.state === "unavailable" || e.state === "unknown" ? `<span class="muted">${esc(e.state)}</span>`
+    : esc(isNaN(+e.state) || e.state === "" ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
+  return sect(`Home Assistant · ${esc(hd.device.name || (ha && ha.device_name) || "")}`,
+    `<p class="hint" style="margin:0 0 6px">${esc([hd.device.integration, [hd.device.manufacturer, hd.device.model].filter(Boolean).join(" "), hd.device.sw_version && "version " + hd.device.sw_version].filter(Boolean).join(" · "))}${hd.read ? ` · read ${ago(hd.read, now)}` : ""}</p>`
+    + info.map(i => `<p class="hint" style="margin:0 0 6px">ℹ <b>${esc(i.what)}:</b> ${esc(i.detail)}</p>`).join("")
+    + (tbl(["Entity", "State"], main.map(row)) || `<p class="empty-note">No entities.</p>`)
+    + (diag.length ? `<details style="margin-top:6px"><summary class="hint">${diag.length} diagnostic and configuration entities</summary>${tbl(["Entity", "State"], diag.map(row))}</details>` : ""));
+}
+// The Home Assistant tab: for every device with a linked HA device, including those with an agent.
+async function openHa(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  if (detMode !== "ha" || key !== detKey) {
+    document.getElementById("detTitle").textContent = h.name;
+    document.getElementById("detSub").textContent = "Loading…";
+    showSourceTabs(key, "ha");
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  }
+  detMode = "ha"; detKey = key; renderDetActions();
+  if (!detDlg.open) detDlg.showModal();
+  let ha = null;
+  try { const r = await fetch("api/hosts/" + encodeURIComponent(key) + "/ha", {cache: "no-store"}); if (r.ok) ha = await r.json(); } catch (e) { }
+  if (detMode !== "ha" || detKey !== key) return;
+  const now = data.now || Date.now() / 1000, hd = ha && ha.data, svc = h.services.find(s => s.kind === "hadev");
+  showSourceTabs(key, "ha");
+  document.getElementById("detSub").textContent = hd ? [hd.device.integration, hd.device.name].filter(Boolean).join(" · ") : "Home Assistant";
+  if (!hd) { document.getElementById("detBody").innerHTML = `<p class="empty-note">${esc((svc && svc.detail) || "Not read yet: it's read at each check. Try Check now.")}</p>`; return; }
+  const tiles = (hd.tiles || []).map(t => `<div class="tile ${t.level === "warn" ? "warm" : t.level === "crit" ? "hot" : ""}"><span class="lbl">${esc(t.label)}</span><b${typeof t.value === "number" ? "" : ' style="font-size:19px;padding:4px 0 3px"'}>${typeof t.value === "number" ? t.value.toLocaleString() + esc(t.unit || "") : esc(String(t.value))}</b>${t.sub ? `<small>${esc(t.sub)}</small>` : ""}</div>`).join("");
+  const probs = (hd.items || []).filter(i => i.level !== "info");
+  document.getElementById("detBody").innerHTML = (tiles ? `<div class="tiles" style="margin-bottom:14px">${tiles}</div>` : "")
+    + sect("Checks", probs.length ? `<div class="checklist">${probs.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small></span></div>`).join("")}</div>`
+      : `<p class="empty-note">✓ ${esc(hd.summary || "Nothing needs attention.")}</p>`)
+    + haEntities(hd, ha, now);
 }
 function renderOverview(h, sn, lg, ha) {
   const now = data.now || Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
@@ -1987,15 +2027,7 @@ function renderOverview(h, sn, lg, ha) {
      <td class="num">${s.uptime_24h == null ? "—" : s.uptime_24h.toFixed(s.uptime_24h === 100 ? 0 : 1) + "%"}</td><td>${s.last_change ? ago(s.last_change, now) : "—"}</td></tr>`)));
   if (rd && ((rd.status || []).length || (rd.sensors || []).length > 4)) html += logReadings(rd, now);
   if (hd) {
-    const info = (hd.items || []).filter(i => i.level === "info");
-    const ents = hd.entities || [], main = ents.filter(e => !e.category), diag = ents.filter(e => e.category);
-    const row = e => `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${e.state === "unavailable" || e.state === "unknown" ? `<span class="muted">${esc(e.state)}</span>`
-      : esc(isNaN(+e.state) || e.state === "" ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
-    html += `<div id="ovHa">` + sect(`Home Assistant · ${esc(hd.device.name || ha.device_name || "")}`,
-      `<p class="hint" style="margin:0 0 6px">${esc([hd.device.integration, [hd.device.manufacturer, hd.device.model].filter(Boolean).join(" "), hd.device.sw_version && "version " + hd.device.sw_version].filter(Boolean).join(" · "))}${hd.read ? ` · read ${ago(hd.read, now)}` : ""}</p>`
-      + info.map(i => `<p class="hint" style="margin:0 0 6px">⬆ <b>${esc(i.what)}:</b> ${esc(i.detail)}</p>`).join("")
-      + (tbl(["Entity", "State"], main.map(row)) || `<p class="empty-note">No entities.</p>`)
-      + (diag.length ? `<details style="margin-top:6px"><summary class="hint">${diag.length} diagnostic and configuration entities</summary>${tbl(["Entity", "State"], diag.map(row))}</details>` : "")) + `</div>`;
+    html += `<div id="ovHa">` + haEntities(hd, ha, now) + `</div>`;
   } else if (h.ha_device) {
     html += sect("Home Assistant", `<p class="empty-note">${esc((haSvc && haSvc.detail) || "Not read yet: it's read at each check.")}</p>`);
   }
