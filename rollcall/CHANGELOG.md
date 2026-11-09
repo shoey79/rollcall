@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.44.3 - 2026-11-09
+
+### Changed
+- Documentation and changelog examples now use generic names and addresses only.
+
 ## 1.44.2 - 2026-11-09
 
 ### Added
