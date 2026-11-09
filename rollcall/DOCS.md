@@ -252,6 +252,10 @@ If Home Assistant already has an integration for the device, link its HA device:
 - **Any other device:** its entities are listed. It goes red if every entity is unavailable (Home Assistant has lost touch with the device), and amber for a "problem" binary sensor that's on.
 - Keep the **Pi-hole** preset ticked too. It checks DNS (TCP 53) and the admin page directly, so you still hear about a dead Pi-hole even if Home Assistant is down.
 - **The Home Assistant tab:** every linked device gets one in Details, including computers with an agent. It shows the tiles, any problems and all the entities. On devices without an agent, the Overview shows them too.
+- **Controls:** the device's buttons and switches are listed separately from its readings, e.g. Pi-hole's *Run gravity*, *Restart pihole-FTL*, *Flush the DNS logs*, the blocking switch and the group switches.
+  - Admins and editors can use **Press**, **Turn on** or **Turn off** there. Each one asks you to confirm first and is logged with who did it.
+  - Only the linked device's own buttons and switches can be used this way.
+  - A button shows when it was last pressed. Until it's pressed, Home Assistant reports its state as "unknown".
 - To unlink, choose **Unlink** under Edit.
 
 ### Home Assistant sensors

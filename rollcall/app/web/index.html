@@ -1918,15 +1918,42 @@ async function openOverview(key) {
 // A linked Home Assistant device's entities (diagnostic ones folded away) and its update notes.
 function haEntities(hd, ha, now) {
   const info = (hd.items || []).filter(i => i.level === "info");
-  const ents = hd.entities || [], main = ents.filter(e => !e.category), diag = ents.filter(e => e.category);
+  const isCtl = e => /^(button|switch)\./.test(e.entity_id);
+  const ctl = (hd.entities || []).filter(isCtl), ents = (hd.entities || []).filter(e => !isCtl(e));
+  const main = ents.filter(e => !e.category), diag = ents.filter(e => e.category);
+  const canEdit = data && data.can_edit === true;
+  const ctlRow = e => {
+    const btn = e.entity_id.startsWith("button."), st = e.state;
+    const shown = btn ? (st && !isNaN(Date.parse(st)) ? "last pressed " + ago(Date.parse(st) / 1000, now) : "not pressed since Home Assistant started")
+      : st === "on" ? `<span class="okc">On</span>` : st === "off" ? `<b class="old">Off</b>` : esc(st || "");
+    const act = btn ? ["press", "Press"] : st === "on" ? ["turn_off", "Turn off"] : ["turn_on", "Turn on"];
+    return `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${shown}</td>
+      <td>${canEdit && st !== "unavailable" ? `<button type="button" class="mini${act[0] === "turn_off" ? " danger" : ""}" data-haact="${esc(act[0])}" data-haent="${esc(e.entity_id)}" data-haname="${esc(e.name)}">${act[1]}</button>` : ""}</td></tr>`;
+  };
   const row = e => `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${e.state === "unavailable" || e.state === "unknown" ? `<span class="muted">${esc(e.state)}</span>`
     : esc(isNaN(+e.state) || e.state === "" ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
   return sect(`Home Assistant · ${esc(hd.device.name || (ha && ha.device_name) || "")}`,
     `<p class="hint" style="margin:0 0 6px">${esc([hd.device.integration, [hd.device.manufacturer, hd.device.model].filter(Boolean).join(" "), hd.device.sw_version && "version " + hd.device.sw_version].filter(Boolean).join(" · "))}${hd.read ? ` · read ${ago(hd.read, now)}` : ""}</p>`
     + info.map(i => `<p class="hint" style="margin:0 0 6px">ℹ <b>${esc(i.what)}:</b> ${esc(i.detail)}</p>`).join("")
+    + (ctl.length ? `<h4 class="subh">Controls</h4>` + tbl(["Control", "State", ""], ctl.map(ctlRow))
+        + (canEdit ? "" : `<p class="hint">Only Home Assistant admins and editors can use these.</p>`) + `<h4 class="subh">Readings</h4>` : "")
     + (tbl(["Entity", "State"], main.map(row)) || `<p class="empty-note">No entities.</p>`)
     + (diag.length ? `<details style="margin-top:6px"><summary class="hint">${diag.length} diagnostic and configuration entities</summary>${tbl(["Entity", "State"], diag.map(row))}</details>` : ""));
 }
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-haact]");
+  if (!b || !detKey) return;
+  const what = {press: "Press", turn_on: "Turn on", turn_off: "Turn off"}[b.dataset.haact];
+  if (!confirm(`${what} "${b.dataset.haname}"?`)) return;
+  b.disabled = true; const was = b.textContent; b.textContent = "…";
+  try {
+    const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/ha/action", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({entity_id: b.dataset.haent, action: b.dataset.haact})});
+    if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || `That didn't work (${r.status})`); b.disabled = false; b.textContent = was; return; }
+    b.textContent = "Done";
+    setTimeout(() => detMode === "ha" ? openHa(detKey) : detMode === "overview" ? openOverview(detKey) : null, 4000);
+  } catch (err) { alert("Couldn't reach the add-on."); b.disabled = false; b.textContent = was; }
+});
 // The Home Assistant tab: for every device with a linked HA device, including those with an agent.
 async function openHa(key) {
   const h = data && data.hosts.find(x => x.key === key);

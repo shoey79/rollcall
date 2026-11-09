@@ -1006,6 +1006,19 @@ class HomeAssistant:
     async def service(self, domain: str, service: str, data: dict) -> None:
         await self.call("POST", f"/services/{domain}/{service}", data)
 
+    async def run_service(self, domain: str, service: str, data: dict) -> str | None:
+        """Call a service and wait for it; None if it worked, else why not."""
+        if not self.enabled:
+            return "Home Assistant isn't available"
+        try:
+            async with self.session.post(f"{HA_API}/services/{domain}/{service}", json=data, timeout=ClientTimeout(total=30),
+                                         headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status >= 400:
+                    return f"Home Assistant said {resp.status}: {(await resp.text())[:150]}"
+                return None
+        except Exception as err:  # noqa: BLE001
+            return f"couldn't reach Home Assistant ({err})"
+
     async def fire(self, event: str, data: dict) -> None:
         await self.call("POST", f"/events/{event}", data)
 
@@ -3091,6 +3104,27 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             raise web.HTTPNotFound()
         return web.json_response({"name": h.name, "device_id": h.ha_device, "device_name": h.ha_device_name, "data": h.ha_data})
 
+    async def host_ha_action(req):
+        """Press a button or turn a switch on or off on the device linked to this computer. Only its
+        own buttons and switches, as Rollcall last read them, can be used."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        eid, action = str(body.get("entity_id") or ""), str(body.get("action") or "")
+        ent = next((e for e in ((h.ha_data or {}).get("entities") or []) if e.get("entity_id") == eid), None)
+        allowed = {"button": ("press",), "switch": ("turn_on", "turn_off")}
+        domain = eid.split(".", 1)[0]
+        if not ent or action not in allowed.get(domain, ()):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "That control isn't on this device"}), content_type="application/json")
+        user = await access.who(req)
+        err = await monitor.ha.run_service(domain, action, {"entity_id": eid})
+        log.info("%s: %s %s %s%s", h.name, user["display"] or "someone", action.replace("_", " "), eid, f" failed: {err}" if err else "")
+        if err:
+            return web.json_response({"error": err}, status=502)
+        h.next_due = 0  # read it again soon so the new state shows
+        return web.json_response({"ok": True})
+
     async def views_get(_req):
         return web.json_response({"views": load_views()})
 
@@ -3594,6 +3628,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/ha/entities", editor_only(ha_entities))
     app.router.add_get("/api/ha/devices", editor_only(ha_devices))
     app.router.add_get("/api/hosts/{key}/ha", host_ha)
+    app.router.add_post("/api/hosts/{key}/ha/action", editor_only(host_ha_action))
     app.router.add_put("/api/views", editor_only(views_put))
     app.router.add_post("/api/check/{key}", check_now)  # harmless, so open to all viewers
     app.router.add_post("/api/reset", editor_only(reset))

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.42.0 - 2026-11-09
+
+### Added
+- **Controls for a linked Home Assistant device:** its buttons and switches now have their own list, e.g. Pi-hole's Run gravity, Restart pihole-FTL, Flush logs, and the blocking and group switches.
+  - Admins and editors can press a button or turn a switch on or off from Rollcall, after confirming. Each use is logged.
+  - Only that device's own controls can be used.
+  - Buttons show when they were last pressed, instead of "unknown".
+
 ## 1.41.0 - 2026-11-09
 
 ### Added
