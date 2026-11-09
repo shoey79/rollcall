@@ -45,6 +45,7 @@ import agents as agentlib
 import snmp as snmplib
 import syslogrx as sysloglib
 import certcheck
+import sipcheck
 import msi as msilib
 from agents import AgentStore, clean_enrol_info, evaluate
 
@@ -213,6 +214,8 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("cert", "Certificate expiry on HTTPS (443)", _NET, [("Cert 443", "cert:443")]),
     ("syslog", "Syslog: keep this device's log messages and alert on errors", _NET, [("Syslog", "syslog:device")]),
     ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
+    ("voip", "VoIP phone, ATA or PBX (SIP on UDP 5060)", _NET, [("SIP", "sip:5060")]),
+    ("ata2", "Two-line ATA, e.g. Cisco SPA112/122 (SIP lines 1 and 2)", _NET, [("Line 1", "sip:5060"), ("Line 2", "sip:5061")]),
     # Home & automation
     ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
     ("nodered", "Node-RED", _HOME, [("Node-RED", "http:1880/")]),
@@ -259,6 +262,8 @@ ALIASES = {
     "nvr": "camera", "rtsp": "camera", "ha": "homeassistant", "node-red": "nodered",
     "mosquitto": "mqtt", "bitwarden": "vaultwarden", "kuma": "uptimekuma",
     "jellyseerr": "overseerr", "forgejo": "gitea", "pi-hole": "pihole",
+    "sip": "voip", "ata": "voip", "pbx": "voip", "phone": "voip", "asterisk": "voip", "freepbx": "voip", "3cx": "voip",
+    "spa112": "ata2", "spa122": "ata2",
 }
 
 
@@ -277,6 +282,7 @@ _TCP = re.compile(r"^tcp:(\d{1,5})$", re.I)
 _ADDR = r"(?:[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])"
 _PING = re.compile(rf"^ping:({_ADDR})$", re.I)             # another address of the same device
 _CERT = re.compile(rf"^cert(?::({_ADDR}))?(?::(\d{{1,5}}))?$", re.I)  # certificate expiry: cert, cert:8443, cert:host:443
+_SIP = re.compile(rf"^sip(?::({_ADDR}))?(?::(\d{{1,5}}))?$", re.I)  # SIP OPTIONS over UDP: sip, sip:5061, sip:host:5060
 _TCP_AT = re.compile(rf"^tcp:({_ADDR}):(\d{{1,5}})$", re.I)  # a port on another address
 _REL_HTTP = re.compile(r"^(https?):(\d{1,5})(/.*)?$", re.I)
 # A Home Assistant entity, optionally with a condition: ha:sensor.office_ap_cpu_utilization>90
@@ -320,6 +326,16 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         addr = addr.strip("[]") if addr else None
         return [{"label": label or (f"Cert {port}" + (f" {addr}" if addr else "")), "kind": "cert", "port": port, "url": None,
                  "desc": f"certificate on {addr}:{port}" if addr else f"certificate on port {port}", "target": addr}]
+    if (m := _SIP.match(entry)) and not (m.group(1) and m.group(1).isdigit() and m.group(2)):
+        addr, port = m.group(1), m.group(2)
+        if addr and addr.isdigit() and not port:  # "sip:5061"
+            addr, port = None, addr
+        port = int(port or 5060)
+        if not 1 <= port <= 65535:
+            raise ValueError(f"port out of range in '{entry}'")
+        addr = addr.strip("[]") if addr else None
+        return [{"label": label or (f"SIP {port}" + (f" {addr}" if addr else "")), "kind": "sip", "port": port, "url": None,
+                 "desc": f"SIP on {addr}:{port} (UDP)" if addr else f"SIP on UDP {port}", "target": addr}]
     if m := _PING.match(entry):
         addr = m.group(1).strip("[]")
         return [{"label": label or addr, "kind": "ping", "port": None, "url": None, "desc": f"ping {addr}", "target": addr}]
@@ -1649,7 +1665,7 @@ class Monitor:
                         h.ip = ip
                         ok, latency = await ping(
                             ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
-                            [s.port for s in h.services if s.port and not s.target and s.kind != "cert"],
+                            [s.port for s in h.services if s.port and not s.target and s.kind not in ("cert", "sip")],
                         )
                     else:
                         ok, latency = False, None
@@ -1762,6 +1778,12 @@ class Monitor:
                     s.resolved = ip if s.target else None
                     return await certcheck.check(ip, s.port, s.target or h.host, int(self.opts["cert_warn_days"]),
                                                  int(self.opts["cert_crit_days"]), self.svc_timeout)
+                if s.kind == "sip":
+                    ip = await resolve(s.target) if s.target else h.ip
+                    if not ip:
+                        return False, None, f"can't resolve {s.target}"
+                    s.resolved = ip if s.target else None
+                    return await sipcheck.check(ip, s.port, self.svc_timeout)
                 if s.target:
                     ip = await resolve(s.target)
                     if not ip:

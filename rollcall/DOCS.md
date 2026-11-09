@@ -254,6 +254,19 @@ Agents (Windows 1.0.13, Linux 1.0.7 and later) report the machine's manufacturer
 
 The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. PowerEdge R720xd · ABC1234*) unless you've typed a make and model. To split the list, make a tab with **Physical or virtual** is *Physical*, *Virtual (any)*, *Hyper-V VM*, *VMware VM*, *KVM / QEMU / Proxmox VM*, *Container* or *Not known*. The **+ New tab** templates include Physical machines, Virtual machines and Hyper-V VMs.
 
+### VoIP phones, ATAs and PBXs (SIP)
+
+Tick **VoIP phone, ATA or PBX** to check a device's SIP service on UDP 5060. For two-line adapters such as the Cisco SPA112/122, tick **Two-line ATA**: Line 1 is UDP 5060 and Line 2 UDP 5061.
+
+Each check sends a SIP OPTIONS request, the standard "are you there?" ping, and any SIP reply counts as up. The chip shows the reply and the device's software, e.g. `SIP 200 OK · Cisco/SPA112-1.4.1(SR5)`. No reply goes red (after two checks, like other services); a 5xx error from the device is amber.
+
+- Custom forms: `sip` (port 5060), `sip:5062`, or `sip:HOST:PORT` for another address, with a label if you like (`Line 3=sip:5062`).
+- This shows the device's SIP service is running, not that the line is registered with your provider. For that, send the device's syslog to Rollcall (see **Syslog**) and alert on its registration messages.
+- If the device only accepts SIP from its provider ("Restrict Source IPs" on Cisco ATAs), it won't answer Rollcall. Turn that off, or use ping and syslog only.
+- A line with no account set up may not listen at all, so only tick the lines you use.
+
+SNMP on SPA112/122 adapters gives only the basics: uptime, restarts and the network port. Line status isn't available over SNMP.
+
 ### Certificate expiry
 
 Tick **Certificate expiry on HTTPS (443)** under Network, or add custom checks:

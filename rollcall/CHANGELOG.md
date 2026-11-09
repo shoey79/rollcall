@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.36.0 - 2026-11-09
+
+### Added
+- **VoIP: SIP checks.** New presets **VoIP phone, ATA or PBX** (SIP on UDP 5060) and **Two-line ATA, e.g. Cisco SPA112/122** (Line 1 on 5060, Line 2 on 5061).
+  - Rollcall sends a SIP OPTIONS request; any SIP reply means the device's SIP service is running.
+  - The chip shows the reply and the device's software (e.g. `SIP 200 OK · Cisco/SPA112-1.4.1(SR5)`).
+  - Custom forms: `sip`, `sip:PORT` and `sip:HOST:PORT`.
+- A **VoIP phone / ATA** device icon. It's picked automatically for SPA, Yealink, Snom, Polycom, Grandstream and similar names, and for devices with SIP checks.
+
 ## 1.35.1 - 2026-11-09
 
 ### Added
