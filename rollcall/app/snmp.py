@@ -814,21 +814,35 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out["timing"] = timing
         out["missing"] = sorted(set(missing))
     out["took_ms"] = int((time.monotonic() - t0) * 1000)
+    out["polled"] = time.time()
     return out
 
 
 UPS_LIMITS = {"runtime_warn": 15, "runtime_crit": 5, "load_warn": 80, "load_crit": 95, "temp_warn": 40}
 
 
-def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = None) -> tuple[str, list[dict]]:
-    """Problems in a poll. Returns (worst level, items) with level ok / warn / crit."""
+def boot_time(d: dict, now: float | None = None) -> float | None:
+    """When the device (or its SNMP service) last started, from the uptime in a poll."""
+    up = d.get("uptime_s")
+    if not isinstance(up, int):
+        return None
+    return (d.get("polled") or now or time.time()) - up
+
+
+def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = None,
+             restart_ack: float | None = None) -> tuple[str, list[dict]]:
+    """Problems in a poll. Returns (worst level, items) with level ok / warn / crit.
+    restart_ack: the start time of a restart someone acknowledged; it's no longer flagged."""
     lim = {**UPS_LIMITS, **(limits or {})}
     items: list[dict] = []
     add = lambda level, what, detail="": items.append({"level": level, "what": what, "detail": detail})  # noqa: E731
     up = d.get("uptime_s")
-    if isinstance(up, int) and up < 3600:
+    booted = boot_time(d)
+    acked = bool(restart_ack and booted and abs(booted - restart_ack) < 300)
+    if isinstance(up, int) and up < 3600 and not acked:
         add("warn", "Restarted", f"{max(1, up // 60)} min ago" + ("" if d.get("uptime_source") == "system"
                                                                else " (or its SNMP service did)"))
+        items[-1]["ack"] = "restart"
     for p in d.get("ports") or []:
         if p["index"] not in watch:
             continue

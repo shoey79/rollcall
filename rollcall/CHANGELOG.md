@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.43.0 - 2026-11-09
+
+### Added
+- **Acknowledge an SNMP device's restart.** The amber "Restarted N min ago" now has an **Acknowledge** button in the SNMP tab and the Overview. It clears the warning for that restart only, so a later restart is still flagged.
+
 ## 1.42.0 - 2026-11-09
 
 ### Added

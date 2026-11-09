@@ -1263,6 +1263,7 @@ class Host:
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
+    snmp_restart_ack: float = 0        # start time of an acknowledged restart (not flagged)
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
@@ -1418,6 +1419,7 @@ class Monitor:
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
+                            **({"snmp_restart_ack": h.snmp_restart_ack} if h.snmp_restart_ack else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
                             **({"syslog_ignore": h.syslog_ignore} if h.syslog_ignore else {}),
@@ -1437,6 +1439,10 @@ class Monitor:
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
+        try:
+            h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
+        except (TypeError, ValueError):
+            h.snmp_restart_ack = 0
         self._apply_syslog(h, entry)
         try:
             h.syslog_ack = float(entry.get("syslog_ack") or 0)
@@ -1974,7 +1980,7 @@ class Monitor:
         elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         h.snmp_data, h.snmp_polled = d, now
-        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits())
+        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(), h.snmp_restart_ack)
         h.snmp_items = items
         if worst == "ok":
             bits = []
@@ -3473,11 +3479,29 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         log.info("%s: port %s %s", h.name, idx, "watched" if body.get("watch") else "no longer watched")
         if h.snmp_data:  # re-evaluate straight away
             svc = next((s for s in h.services if s.kind == "snmp"), None)
-            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits())
+            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits(), h.snmp_restart_ack)
             h.snmp_items = items
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0
         return web.json_response({"watch": h.snmp_watch})
+
+    async def host_snmp_ack(req):
+        """Acknowledge a restart (e.g. a planned one): it stops showing amber. A later restart still shows."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        booted = snmplib.boot_time(h.snmp_data, h.snmp_polled) if h.snmp_data else None
+        if not booted:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "No restart to acknowledge"}), content_type="application/json")
+        h.snmp_restart_ack = booted
+        monitor._save_hosts()
+        user = await access.who(req)
+        log.info("%s: restart acknowledged by %s", h.name, user["display"] or "someone")
+        h.snmp_items = [i for i in h.snmp_items if i.get("ack") != "restart"]
+        svc = next((s for s in h.services if s.kind == "snmp"), None)
+        if svc and svc.status != UNKNOWN:
+            h.next_due = 0  # re-check so the chip updates
+        return web.json_response({"ok": True})
 
     async def host_syslog(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -3618,6 +3642,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts/{key}/syslog/ack", editor_only(host_syslog_ack))
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
+    app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
     app.router.add_get("/api/status", status)

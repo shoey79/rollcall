@@ -1954,6 +1954,16 @@ document.getElementById("detBody").addEventListener("click", async e => {
     setTimeout(() => detMode === "ha" ? openHa(detKey) : detMode === "overview" ? openOverview(detKey) : null, 4000);
   } catch (err) { alert("Couldn't reach the add-on."); b.disabled = false; b.textContent = was; }
 });
+// Acknowledge an SNMP device's restart (SNMP tab or Overview)
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-snmpack]");
+  if (!b || !detKey) return;
+  e.stopPropagation(); b.disabled = true; b.textContent = "…";
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/ack-restart", {method: "POST"});
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || `That didn't work (${r.status})`); b.disabled = false; b.textContent = "Acknowledge"; return; }
+  setTimeout(load, 2500);
+  setTimeout(() => detMode === "snmp" ? openSnmp(detKey) : detMode === "overview" ? openOverview(detKey) : null, 2500);
+}, true);
 // The Home Assistant tab: for every device with a linked HA device, including those with an agent.
 async function openHa(key) {
   const h = data && data.hosts.find(x => x.key === key);
@@ -2034,7 +2044,7 @@ function renderOverview(h, sn, lg, ha) {
     if (s.status === "green" || s.status === "unknown" || s.kind === "snmp" || s.kind === "syslog") continue;
     att.push({lvl: s.status === "red" ? "red" : "amber", what: s.label, detail: s.detail || "", jump: ""});
   }
-  for (const i of (sn && sn.items) || []) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp"});
+  for (const i of (sn && sn.items) || []) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp", ack: i.ack});
   const snmpSvc = h.services.find(s => s.kind === "snmp");
   if (snmpSvc && !d && snmpSvc.status !== "green" && snmpSvc.status !== "unknown") att.push({lvl: "red", what: "SNMP", detail: snmpSvc.detail || "no reply", jump: "snmp"});
   for (const i of ((hd && hd.items) || []).filter(i => i.level !== "info")) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "ha"});
@@ -2045,7 +2055,7 @@ function renderOverview(h, sn, lg, ha) {
   att.sort((a, b) => order[a.lvl] - order[b.lvl]);
   let html = `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
   html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
-    ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small></span></div>`).join("")}</div>`
+    ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small>${a.ack === "restart" && data && data.can_edit === true ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
     : `<p class="empty-note">✓ Nothing needs attention.</p>`);
   const svcs = h.services.filter(s => !s.agent);
   if (svcs.length) html += sect("Checks", tbl(["Check", "Status", "Uptime (24 h)", "Last change"], svcs.map(s =>
@@ -2115,7 +2125,7 @@ function renderSnmp(x) {
   const items = x.items || [];
   if (d && (d.missing || []).length) html += `<p class="hint" style="margin:0 0 10px">⚠ The device didn't send its ${esc(d.missing.join(", "))} in time on the last poll. Rollcall tries again at each check.</p>`;
   html += sect("Checks", items.length
-    ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small></span></div>`).join("")}</div>`
+    ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small>${i.ack === "restart" && canEdit ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
   if (!d) { body.innerHTML = html; return; }
   const u = d.ups;

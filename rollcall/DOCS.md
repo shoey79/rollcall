@@ -350,7 +350,7 @@ Whichever version you use, the device must allow Home Assistant's IP address (AP
   - Amber: under `ups_runtime_warn_minutes` (15) of runtime, load at or over `ups_load_warn` (80%), on bypass (the load isn't protected), or a battery over 40 °C. Load at 95% or more is red.
   - Other makes' alarms (fan or fuse failure, charger failed, overload…) are shown, and the serious ones go red.
   - A power cut goes red at the next check after it's confirmed, with a notification, and recovery notifies when the power comes back if `notify_recovery` is on. Check how often Rollcall checks the UPS (the `interval` option) if you need to know about power cuts quickly.
-- **Restarts**: amber for an hour after the device restarts.
+- **Restarts**: amber for an hour after the device restarts. If the restart was planned or expected, use **Acknowledge** next to it (SNMP tab or Overview; admins and editors). That clears the warning for that restart only, so a later restart still shows. Devices that don't report their own uptime (many switches, APC cards) count a restart of their SNMP service or management card too.
 
 Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up as long as it answers ping. The community and v3 passwords aren't shown on the dashboard. Leaving them blank when editing keeps the ones already saved. They are included in exports, so keep export files safe.
 
