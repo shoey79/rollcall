@@ -285,6 +285,7 @@ Each check sends a SIP OPTIONS request, the standard "are you there?" ping, and 
 - This shows the device's SIP service is running, not that the line is registered with your provider. For that, send the device's syslog to Rollcall (see **Syslog**) and alert on its registration messages.
 - If the device only accepts SIP from its provider ("Restrict Source IPs" on Cisco ATAs), it won't answer Rollcall. Turn that off, or use ping and syslog only.
 - A line with no account set up may not listen at all, so only tick the lines you use.
+- **"Nothing listening on UDP 5060 (refused)":** the device answered, but SIP isn't on that port. Rollcall then tries the other common SIP ports (5061–5065, 5070, 5080, 5160, 5161) and says where SIP answers, e.g. "change this check to sip:5062". The line's port is on the device under the line's SIP settings (on Cisco ATAs, **Voice → Line 1 → SIP Port**).
 
 SNMP on SPA112/122 adapters gives only the basics: uptime, restarts and the network port. Line status isn't available over SNMP.
 

@@ -85,13 +85,35 @@ async def options(ip: str, port: int = 5060, timeout: float = 3.0) -> tuple[int,
         transport.close()
 
 
+ALT_PORTS = (5060, 5061, 5062, 5063, 5064, 5065, 5070, 5080, 5160, 5161)
+
+
+async def find_port(ip: str, skip: int) -> tuple[int, str] | None:
+    """When a port is refused, which common SIP port does the device answer on? (port, agent)"""
+    async def one(p):
+        try:
+            _c, _r, agent, _ms = await options(ip, p, 1.2)
+            return p, agent
+        except (asyncio.TimeoutError, OSError):
+            return None
+    found = [r for r in await asyncio.gather(*(one(p) for p in ALT_PORTS if p != skip)) if r]
+    return found[0] if found else None
+
+
 async def check(ip: str, port: int, timeout: float = 3.0) -> tuple:
     """(ok, ms, detail) in the form Rollcall's service checks return."""
     try:
         code, reason, agent, ms = await options(ip, port, timeout)
     except asyncio.TimeoutError:
-        return False, None, f"no SIP reply on UDP {port}"
+        return False, None, f"no SIP reply on UDP {port} (the device may only accept SIP from its provider, or use TCP/TLS)"
     except OSError as err:
+        if isinstance(err, ConnectionRefusedError) or getattr(err, "errno", None) == 111:
+            alt = await find_port(ip, port)
+            if alt:
+                return False, None, (f"nothing listening on UDP {port}, but SIP answers on UDP {alt[0]}"
+                                     + (f" ({alt[1]})" if alt[1] else "") + f": change this check to sip:{alt[0]}")
+            return False, None, (f"nothing listening on UDP {port} (refused): the line may use another port, "
+                                 "TCP/TLS, or have no account set up")
         return False, None, f"no SIP reply on UDP {port} ({err.strerror or err})"
     if code >= 500:
         return False, None, f"SIP {code} {reason}".strip() + (f" · {agent}" if agent else ""), "warn"

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.40.2 - 2026-11-09
+
+### Changed
+- **SIP check, port refused:** when a device refuses the SIP port, Rollcall now tries the other common SIP ports. It then says where SIP actually answers (e.g. "change this check to sip:5062"), or that the line may use TCP/TLS or have no account. A port with no reply at all now mentions that the device may only accept SIP from its provider.
+
 ## 1.40.1 - 2026-11-09
 
 ### Fixed
