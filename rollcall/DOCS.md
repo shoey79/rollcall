@@ -57,6 +57,12 @@ Computers are managed on the dashboard:
 - **+ Add computer** opens a form with the name, the IP or hostname, a checkbox for each service preset (showing the ports it checks), and fields for any custom checks.
 - **Edit** on a row, or at the bottom of a computer's **Details**, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too. Editing from Details takes you back to Details, updated, when you save or cancel.
 - Changes apply straight away; there's no add-on restart.
+- **Details** on any row opens the device's details. Devices with an agent open its agent tabs. Every other device opens an **Overview**, with **SNMP** and **Logs** tabs beside it if those are ticked. The Overview brings everything together on one page:
+  - tiles for status, 24-hour uptime with its history bar, and ping time;
+  - for a UPS, power, battery, runtime and load; for a NAS, disks and how full each array is; for a switch, ports up and PoE in use;
+  - readings from its logs (temperatures, fans) and how many log alerts are waiting;
+  - a **Needs attention** list covering failing checks, SNMP problems and log alerts. Click an item to open the SNMP or Logs tab where the detail is;
+  - every check with its uptime, the latest warnings and errors from its logs, and the device's model, serial, firmware and location.
 
 The list is saved in the add-on's data folder (`hosts.json`) and is included in HA backups of the add-on.
 

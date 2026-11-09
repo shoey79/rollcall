@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.38.0 - 2026-11-09
+
+### Added
+- **Device Overview** in Details, for every device without an agent. It's the first tab, with SNMP and Logs beside it. It shows:
+  - tiles for status, uptime with its history, and ping;
+  - UPS power, battery, runtime and load; NAS disks and arrays; switch ports and PoE;
+  - temperatures and fans from the device's logs, and log alerts waiting;
+  - a **Needs attention** list that links to the SNMP or Logs tab with the detail;
+  - every check with its uptime, recent warnings and errors, and the device's model, serial and firmware.
+- **Details** is now on every row, so a device with only ping and port checks also gets an Overview.
+
 ## 1.37.0 - 2026-11-09
 
 ### Added

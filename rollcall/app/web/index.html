@@ -772,7 +772,7 @@ function render() {
       <td data-label="Since">${ago(h.last_change, now)}</td>
       <td data-label=""><div class="actions">
         <button data-key="${esc(h.key)}" ${h.checking ? "disabled" : ""}>Check now</button>
-        ${h.agent || h.snmp || h.syslog ? `<button data-device="${esc(h.key)}" title="${esc([h.agent && "agent details", h.snmp && "SNMP", h.syslog && "logs"].filter(Boolean).join(", ").replace(/^./, c => c.toUpperCase()))}">Details</button>` : ""}
+        <button data-device="${esc(h.key)}" title="${esc(["overview", h.agent && "agent details", h.snmp && "SNMP", h.syslog && "logs"].filter(Boolean).join(", ").replace(/^./, c => c.toUpperCase()))}">Details</button>
         ${h.maint_until
           ? `<button class="edit-only" data-resume="${esc(h.key)}" title="Resume monitoring and alerts now">Resume</button>`
           : `<button class="edit-only" data-pause="${esc(h.key)}" data-name="${esc(h.name)}" title="Pause alerts, e.g. for a reboot">Pause</button>`}
@@ -1054,7 +1054,7 @@ document.getElementById("home").addEventListener("click", async e => {
   const g = e.target.closest("[data-glance]");
   if (g) {
     const h = data.hosts.find(x => x.key === g.dataset.glance);
-    return h && (h.agent || h.snmp || h.syslog) ? openDevice(h.key) : showInList(g.dataset.glance);
+    return h ? openDevice(h.key) : showInList(g.dataset.glance);
   }
 });
 
@@ -1519,7 +1519,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -1557,7 +1557,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -1833,11 +1833,11 @@ function adminsSection(r, st, linux) {
 function openDevice(key) {
   const h = data && data.hosts.find(x => x.key === key);
   if (h && h.agent) return openDetails(key);
-  if (h && h.snmp) return openSnmp(key);
-  return openLogs(key);
+  return openOverview(key);
 }
 function deviceSources(h) {
   const out = [];
+  if (h && !h.agent) out.push(["overview", "Overview"]);
   if (h && h.agent) out.push(["agent", "Agent details"]);
   if (h && h.snmp) out.push(["snmp", "SNMP"]);
   if (h && h.syslog) out.push(["logs", "Logs"]);
@@ -1866,9 +1866,116 @@ document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dsrc]");
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
-  if (k === "agent") openDetails(detKey); else if (k === "snmp") openSnmp(detKey); else openLogs(detKey);
+  if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey); else openLogs(detKey);
 });
 
+// ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
+// service checks, SNMP and syslog, on one page. The SNMP and Logs tabs hold the full detail. ----
+async function openOverview(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  if (detMode !== "overview" || key !== detKey) {
+    document.getElementById("detTitle").textContent = h.name;
+    document.getElementById("detSub").textContent = "Loading…";
+    showSourceTabs(key, "overview");
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  }
+  detMode = "overview"; detKey = key; renderDetActions();
+  if (!detDlg.open) detDlg.showModal();
+  const get = async url => { try { const r = await fetch(url, {cache: "no-store"}); return r.ok ? await r.json() : null; } catch (e) { return null; } };
+  const base = "api/hosts/" + encodeURIComponent(key);
+  const [sn, lg] = await Promise.all([h.snmp ? get(base + "/snmp") : null, h.syslog ? get(base + "/syslog?sev=4&limit=6") : null]);
+  if (detMode !== "overview" || detKey !== key) return;  // moved on while loading
+  renderOverview(data.hosts.find(x => x.key === key) || h, sn, lg);
+}
+function renderOverview(h, sn, lg) {
+  const now = data.now || Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
+  const d = sn && sn.data, u = d && d.ups && !d.ups.error ? d.ups : null, nas = d && d.nas, rd = lg && lg.readings;
+  showSourceTabs(h.key, "overview");
+  document.getElementById("detTitle").textContent = h.name;
+  document.getElementById("detSub").textContent = [h.model || (u && u.model) || (d && d.descr && d.descr.slice(0, 60)), h.ip || h.host,
+    d && d.uptime_s != null ? "up " + fmtUp(d.uptime_s) : ""].filter(Boolean).join(" · ");
+  // Words get a smaller size than numbers, so "On battery" fits a tile.
+  const tile = (label, value, sub, cls = "", jump = "") =>
+    `<div class="tile ${cls}"${jump ? ` data-ovjump="${jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="lbl">${label}</span><b${/^[\d.,—–\s%]+(\s?(ms|min|W|°C|RPM|A))?%?$/.test(String(value).replace(/<[^>]+>/g, "")) ? "" : ' style="font-size:19px;padding:4px 0 3px"'}>${value}</b>${sub ? `<small style="display:block;width:100%">${sub}</small>` : ""}</div>`;
+  const lvl = st => st === "red" ? "hot" : st === "amber" || st === "orange" ? "warm" : "";
+  const tiles = [];
+  tiles.push(tile(`<span class="dot ${dotClass(h)}"></span>Status`, esc(statusLabel(h)), h.last_change ? "since " + ago(h.last_change, now) : "", lvl(h.status)));
+  const up = h.uptime_24h;
+  tiles.push(tile("Uptime (24 h)", up == null ? "—" : up.toFixed(up === 100 ? 0 : 1) + "%", `<span class="strip" style="width:100%">${(h.history || []).map(c => `<span class="${c}"></span>`).join("")}</span>`));
+  if (h.latency_ms != null) tiles.push(tile("Ping", h.latency_ms + " ms", h.last_check ? "checked " + ago(h.last_check, now) : ""));
+  if (u) {
+    const lim = sn.ups_limits || {};
+    tiles.push(tile("Power", u.on_battery ? "On battery" : u.off ? "Output off" : u.bypass ? "Bypass" : "On mains",
+      u.on_battery && u.on_battery_s ? "for " + fmtUp(u.on_battery_s) : esc(u.input_v != null ? `input ${u.input_v} V` : ""), u.on_battery || u.off ? "hot" : u.bypass ? "warm" : "", "snmp"));
+    if (u.charge_pct != null) tiles.push(tile("Battery", u.charge_pct + "%", u.replace ? "<b class='failtxt'>needs replacing</b>" : u.battery && u.battery !== "normal" ? esc(u.battery) : u.battery_temp_c != null ? u.battery_temp_c + " °C" : "",
+      u.battery_low || u.battery_fault || u.replace ? "hot" : u.charge_pct < 50 ? "warm" : "", "snmp"));
+    if (u.runtime_min != null) tiles.push(tile("Runtime", u.runtime_min + " min", "at the current load", u.runtime_min < (lim.runtime_crit ?? 5) ? "hot" : u.runtime_min < (lim.runtime_warn ?? 15) ? "warm" : "", "snmp"));
+    if (u.load_pct != null) tiles.push(tile("Load", u.load_pct + "%", u.output_a != null ? u.output_a + " A" : "", u.load_pct >= 95 ? "hot" : u.load_pct >= (lim.load_warn ?? 80) ? "warm" : "", "snmp"));
+  }
+  if (nas) {
+    const disks = nas.disks || [], bad = disks.filter(k => k.bad).length;
+    if (disks.length) tiles.push(tile("Disks", bad ? `${bad} of ${disks.length} failed` : `${disks.length} OK`, disks.some(k => k.smart && k.smart !== "OK") ? "SMART warnings" : "SMART OK", bad ? "hot" : "", "snmp"));
+    for (const a of (nas.arrays || []).filter(a => a.configured).slice(0, 2)) {
+      const pct = a.capacity_gib && a.used_gib != null ? Math.round(a.used_gib / a.capacity_gib * 100) : null;
+      tiles.push(tile(`Array ${a.index}`, pct != null ? pct + "% used" : esc(a.raid), `${esc(a.raid)}${a.capacity_gib ? " · " + (a.capacity_gib / 1024).toFixed(1) + " TiB" : ""}`,
+        pct >= 97 ? "hot" : pct >= 90 ? "warm" : "", "snmp"));
+    }
+  }
+  if (d && (d.ports || []).length && !u) {
+    const watch = new Set(sn.watch || []), down = d.ports.filter(p => watch.has(p.index) && p.admin_up && !p.up).length;
+    tiles.push(tile("Ports", `${d.ports.filter(p => p.up).length} of ${d.ports.length} up`, down ? `<b class="failtxt">${down} watched port${down === 1 ? "" : "s"} down</b>` : watch.size ? `${watch.size} watched` : "", down ? "hot" : "", "snmp"));
+  }
+  if (d && d.poe && d.poe.used_w != null) tiles.push(tile("PoE", `${d.poe.used_w} W`, d.poe.power_w ? `of ${d.poe.power_w} W budget` : "", "", "snmp"));
+  for (const r of ((rd && rd.sensors) || []).slice(0, 4))
+    tiles.push(tile(esc(r.label.replace(/^Temperature \((\w+)\)$/, "Temp $1")), `${esc(String(r.value))} ${esc(r.unit)}`, spark(r.series) || (r.min === r.max ? "steady" : `${r.min}–${r.max}`), "", "logs"));
+  if (lg) tiles.push(tile("Log alerts", String(lg.pending || 0), `${lg.count_24h} message${lg.count_24h === 1 ? "" : "s"} today${lg.last ? " · last " + ago(lg.last, now) : ""}`,
+    lg.pending ? (lg.status === "red" ? "hot" : "warm") : "", "logs"));
+
+  // Everything that needs attention, each linked to where its detail is.
+  const att = [];
+  for (const s of h.services) {
+    if (s.status === "green" || s.status === "unknown" || s.kind === "snmp" || s.kind === "syslog") continue;
+    att.push({lvl: s.status === "red" ? "red" : "amber", what: s.label, detail: s.detail || "", jump: ""});
+  }
+  for (const i of (sn && sn.items) || []) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp"});
+  const snmpSvc = h.services.find(s => s.kind === "snmp");
+  if (snmpSvc && !d && snmpSvc.status !== "green" && snmpSvc.status !== "unknown") att.push({lvl: "red", what: "SNMP", detail: snmpSvc.detail || "no reply", jump: "snmp"});
+  for (const r of ((lg && lg.rows) || []).filter(r => r.alert).slice(0, 5)) att.push({lvl: r.alert === "red" ? "red" : "amber", what: "Log", detail: (r.app ? r.app + ": " : "") + r.msg, jump: "logs", ts: r.ts});
+  const order = {red: 0, amber: 1};
+  att.sort((a, b) => order[a.lvl] - order[b.lvl]);
+  let html = `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
+  html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
+    ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : "Logs"} ›</a>` : ""}</small></span></div>`).join("")}</div>`
+    : `<p class="empty-note">✓ Nothing needs attention.</p>`);
+  const svcs = h.services.filter(s => !s.agent);
+  if (svcs.length) html += sect("Checks", tbl(["Check", "Status", "Uptime (24 h)", "Last change"], svcs.map(s =>
+    `<tr${s.kind === "snmp" || s.kind === "syslog" ? ` data-ovjump="${s.kind === "snmp" ? "snmp" : "logs"}" style="cursor:pointer"` : ""}><td><b>${esc(s.label)}</b><br><small class="muted">${esc(s.target || "")}</small></td>
+     <td><span class="dot ${s.status}"></span> ${esc(s.detail || LABEL[s.status] || s.status)}</td>
+     <td class="num">${s.uptime_24h == null ? "—" : s.uptime_24h.toFixed(s.uptime_24h === 100 ? 0 : 1) + "%"}</td><td>${s.last_change ? ago(s.last_change, now) : "—"}</td></tr>`)));
+  if (rd && ((rd.status || []).length || (rd.sensors || []).length > 4)) html += logReadings(rd, now);
+  const recent = ((lg && lg.rows) || []).slice(0, 6);
+  if (recent.length) html += sect("Recent warnings and errors", tbl(["Time", "Severity", "Message"], recent.map(r =>
+    `<tr class="${r.alert ? "hl" : ""}"><td>${esc(new Date(r.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}))}</td><td><span class="dot ${SEV_DOT(r.sev)}"></span> ${SEV[r.sev]}</td><td class="msg">${esc((r.app ? r.app + ": " : "") + r.msg)}</td></tr>`))
+    + `<p class="hint"><a data-ovjump="logs" style="cursor:pointer">All messages ›</a></p>`);
+  const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+  const info = [kv("Address", esc(h.host + (h.ip && h.ip !== h.host ? ` (${h.ip})` : ""))), kv("Make and model", esc(h.model || (u && u.model) || "")),
+    kv("Name on the device", esc(d && d.name || "")), kv("Location", esc(d && d.location || "")),
+    kv("Up for", d && d.uptime_s != null ? fmtUp(d.uptime_s) : ""), kv("Serial", esc(u && u.serial || "")), kv("Firmware", esc(u && u.firmware || "")),
+    kv("Description", esc(d && d.descr || "")), kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always")))].join("");
+  html += sect("Device", `<div class="kv">${info}</div>`);
+  if (!h.snmp && !h.syslog) html += `<p class="hint">Tick <b>SNMP</b> or <b>Syslog</b> under Edit to see more about this device here, such as its ports, disks, UPS battery or log messages.</p>`;
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+document.getElementById("detBody").addEventListener("click", e => {
+  const j = e.target.closest("[data-ovjump]");
+  if (!j || detMode !== "overview" || !detKey) return;
+  if (j.dataset.ovjump === "snmp") openSnmp(detKey); else if (j.dataset.ovjump === "logs") openLogs(detKey);
+});
+document.getElementById("detBody").addEventListener("keydown", e => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-ovjump]")) { e.preventDefault(); e.target.click(); }
+});
 // ---- SNMP devices (switches, NAS, UPS) ----
 const fmtUp = s => s == null ? "—" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min" : Math.floor(s / 86400) + " days";
 let snmpInfo = null;
