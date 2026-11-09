@@ -252,6 +252,8 @@ def normalize_report(r) -> dict:
         d["detections"] = [x for x in _as_list(d.get("detections")) if isinstance(x, dict)]
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
+    if "laps" in c:
+        c["laps"] = {k: (v if isinstance(v, (bool, int, float)) or v is None else str(v)[:300]) for k, v in _as_dict(c["laps"]).items()}
     if "backups" in c:
         b = c["backups"] = _as_dict(c["backups"])
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
@@ -342,7 +344,8 @@ def _days_since(iso: str | None, now: float) -> float | None:
         return None
 
 
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup")
+DAY = 86400
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps")
 
 
 def disk_key(name) -> str:
@@ -383,6 +386,53 @@ def _ts(iso) -> float | None:
         return datetime.strptime(str(iso)[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
     except (TypeError, ValueError):
         return None
+
+
+def _day(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%d %b %Y").lstrip("0")
+
+
+def laps_state(laps: dict, now: float, overdue_days: float = 3) -> tuple[str, str, dict]:
+    """(level, detail, info) for LAPS: is the managed password being rotated on the policy's schedule?
+
+    The due date comes from the password's expiry in AD when the agent could read it, otherwise from
+    the last rotation (the account's password-last-set time, or Windows LAPS' own events) plus the
+    policy's password age. Overdue by more than a day is amber; by more than overdue_days, red."""
+    info: dict = {}
+    if laps.get("problem"):
+        return WARN, laps["problem"], info
+    if not laps.get("enabled"):
+        return WARN, f"{laps.get('product') or 'LAPS'} policy is set, but backup is disabled, so the password isn't managed", info
+    if laps.get("dc") and not laps.get("legacy") and not laps.get("dsrm"):
+        return OK, "Domain controller: LAPS isn't set to manage the DSRM password (ADBackupDSRMPassword is off)", info
+    age = max(1, int(laps.get("age_days") or 30))
+    rotated = max((t for t in (_ts(laps.get("password_set")), _ts(laps.get("last_rotation")), _ts(laps.get("last_backup"))) if t), default=None)
+    exp = _ts(laps.get("expires")) if laps.get("expires") else None
+    due = exp or (rotated + age * DAY if rotated else None)
+    info = {"rotated": rotated, "due": due, "due_from": "Active Directory" if exp else "last rotation" if rotated else None}
+    problems: list[tuple[str, str]] = []
+    if laps.get("account_found") is False:
+        problems.append((WARN, f"managed account '{laps.get('account') or 'built-in Administrator'}' not found"))
+    if laps.get("expires") == "" and laps.get("backup") == "Active Directory":
+        problems.append((WARN, "no LAPS password in Active Directory yet (not backed up, or the computer can't write it)"))
+    if laps.get("last_error"):
+        problems.append((WARN, "last LAPS run failed: " + str(laps["last_error"]).split("\n")[0][:160]))
+    level, detail = OK, ""
+    if due is None:
+        if not problems:
+            problems.append((WARN, "no password rotation recorded yet"))
+    else:
+        late = now - due
+        if late > overdue_days * DAY:
+            level, detail = CRIT, f"Password not rotated: due {_day(due)}, {int(late // DAY)} days overdue"
+        elif late > DAY:
+            level, detail = WARN, f"Password rotation overdue since {_day(due)}"
+        else:
+            detail = (f"Rotated {_day(rotated)}; " if rotated else "") + f"next due {_day(due)} (every {age} day{'s' if age != 1 else ''})"
+    for lvl, why in problems:
+        level = max(level, lvl, key=[OK, WARN, CRIT].index)
+        detail = (detail + "; " if detail else "") + why
+    return level, detail[0].upper() + detail[1:], info
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
@@ -677,6 +727,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                                  "; ".join(f"{h.get('component')}: {h.get('severity')}" for h in bad), confirm=bool(crit_hw)))
         else:
             checks.append(_check("hardware", "Hardware", OK, f"All {len(hw)} components OK (OpenManage)"))
+
+    laps = rc.get("laps")
+    if laps and not ign.has("laps", "laps"):
+        level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
+        checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 

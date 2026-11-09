@@ -92,6 +92,7 @@ agent_stale_minutes: 15         # agents: alert if no report for this long
 agent_disk_warn: 15             # % free: amber below this
 agent_disk_crit: 5              # % free: red below this
 agent_failed_logons: 20         # failed logons in one report that count as an attack
+agent_laps_overdue_days: 3      # LAPS: red once the managed password is this many days past its rotation date
 agent_patch_days: 60            # amber if no update installed for this long
 agent_ignore: []                # see "Tuning" below
 editors: []                     # HA usernames of non-admins who can also make changes
@@ -365,6 +366,7 @@ One PowerShell script, the same on every server. Each run (every 5 minutes) it w
 | **Printers** (print servers) | A shared printer not ready (paper jam, offline…) | |
 | **Defender** | Definitions over 7 days old | Real-time protection off, or malware not removed |
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
+| **LAPS** (where a LAPS policy applies) | Password rotation more than a day overdue, the last LAPS run failed, the managed account is missing, or LAPS is set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
 
 Roles are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
@@ -386,6 +388,18 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 - **Microsoft Defender:** every detection, saying whether it was removed.
 
 **Shown in Details** (the **Details** button on a server's row): system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 h of System/Application errors, and (admins only) failed logons, security events and who is in the Administrators group.
+
+**LAPS** (Security tab, agent 1.0.18 or later). On computers where a LAPS policy applies, Rollcall checks that the managed local admin password is being rotated on the schedule the policy sets. It covers Windows LAPS (from Group Policy, Intune or local configuration, backing up to AD or Entra ID) and legacy Microsoft LAPS (AdmPwd), including Windows LAPS' legacy emulation mode.
+- **The policy:** the agent reads it the way Windows does (first Intune, then Group Policy, then local configuration, then legacy), including the password age and the managed account.
+- **The due date:** taken from the password's expiry on the computer's own AD object (`msLAPS-PasswordExpirationTime`, or `ms-Mcs-AdmPwdExpirationTime` for legacy LAPS). That's what LAPS itself works from. The computer can read the expiry; the password itself is never read. The AD lookup happens at most hourly. Without AD (Entra ID backup, or a laptop away from the office), the due date is the last rotation plus the policy's password age. The last rotation comes from the managed account's password-last-set time and Windows LAPS' own events (10018/10029 backed up, 10020 account updated).
+- **Alerts:** amber once rotation is more than a day overdue, red once it's more than `agent_laps_overdue_days` (3) overdue. Also amber when:
+  - the latest LAPS run failed (event 10005, with its error);
+  - the managed account doesn't exist;
+  - there's no password in AD yet;
+  - backup is disabled in the policy;
+  - a legacy policy is set but no LAPS client is installed.
+- **Domain controllers:** Windows LAPS manages the DSRM password there, if *Enable password backup for DSRM accounts* is on.
+- **Computers without LAPS:** they don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
 
 **Administrators group** (Security tab, admins only, agent 1.0.17 or later): every direct member of the computer's built-in Administrators group, with its type (user or group), where it's from (Local, Domain, Azure AD, Built-in) and its SID.
 - The built-in Administrator account and disabled local accounts are marked. A SID Windows can't name is shown as "Unknown (deleted?)", usually an account that has since been deleted; an Azure AD (Entra ID) SID is labelled as such.

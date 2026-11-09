@@ -1724,6 +1724,7 @@ function renderDetails(d) {
   if (c.rds) html += sect("Remote Desktop sessions", `<p class="empty-note">${c.rds.active} active, ${c.rds.disconnected} disconnected</p>`);
   flush("security");  // Defender is protection, not a server role: it sits with its detections
   if (c.defender) html += sect("Microsoft Defender", `<p class="empty-note">Mode: ${esc(c.defender.mode || "?")} · real-time protection ${c.defender.realtime ? "on" : "<b>off</b>"} · definitions ${c.defender.signature_age_days} day(s) old</p>`);
+  if (c.laps) html += lapsSection(c.laps, (d.checks || []).find(x => x.key === "laps"));
   flush("security");
   const dets = (hist.detections || []).slice().reverse();
   if (dets.length) html += sect("Defender detections (24 h)", tbl(["Time", "Threat", "File", "Result"], dets.map(x =>
@@ -1769,7 +1770,7 @@ function renderDetails(d) {
   }
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
-  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job"};
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job", laps: "LAPS check"};
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
@@ -1805,6 +1806,23 @@ function renderDetails(d) {
   appendSourceTabs(detKey);
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
+}
+// LAPS: which policy applies, and whether the managed password is rotating on schedule.
+function lapsSection(l, chk) {
+  const day = iso => iso ? esc(new Date(iso).toLocaleDateString(undefined, {day: "numeric", month: "short", year: "numeric"})) : "";
+  const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+  const st = chk ? `<p class="${chk.status === "red" ? "failtxt" : chk.status === "amber" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>` : "";
+  const acct = l.dc ? (l.dsrm ? "DSRM account (domain controller)" : "") : l.auto_account ? `${esc(l.account)} (created and managed by LAPS)` : esc(l.account || "built-in Administrator")
+    + (l.account_found === false ? ` <b class="failtxt">not found</b>` : l.account_enabled === false ? ` <small class="muted">(disabled)</small>` : "");
+  return sect("LAPS", st + `<div class="kv">
+    ${kv("Product", esc(l.product))}${kv("Policy from", esc(l.source))}${kv("Backs up to", esc(l.backup))}
+    ${kv("Rotates every", l.age_days ? `${l.age_days} days` : "")}${kv("Managed account", acct)}
+    ${kv("Password last set", day(l.password_set))}
+    ${kv("Expires (from AD)", l.expires ? day(l.expires) + (l.expires_checked ? ` <small class="muted">· read ${ago(Date.parse(l.expires_checked) / 1000, Date.now() / 1000)}</small>` : "") : l.expires === "" ? `<b class="old">none in AD</b>` : "")}
+    ${kv("Last backed up", l.last_backup ? day(l.last_backup) + (l.last_backup_to ? ` <small class="muted">to ${esc(l.last_backup_to)}</small>` : "") : "")}
+    ${kv("Last LAPS run", l.last_run ? esc(new Date(l.last_run).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})) + (l.last_error ? ` <b class="failtxt">failed</b>` : ` <small class="muted">OK</small>`) : "")}
+    </div>` + (l.last_error ? `<p class="hint failtxt">${esc(l.last_error)}</p>` : "") + (l.ad_error ? `<p class="hint">Couldn't read the expiry from AD: ${esc(l.ad_error)}</p>` : "")
+    + `<p class="hint">Amber once the password is more than a day past due; red once it's ${esc(String((data && data.laps_overdue_days) || 3))} days past due. Rollcall never reads the password itself.</p>`);
 }
 // Who is in the Administrators group (Windows), or can act as root (Linux).
 function adminsSection(r, st, linux) {
@@ -2182,7 +2200,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], events: ["events"], backups: ["backups"]};
+  security: ["security"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

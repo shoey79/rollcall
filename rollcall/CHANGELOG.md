@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.39.0 - 2026-11-09
+
+### Added
+- **LAPS check** (Windows agent 1.0.18). Confirms the managed local admin password is rotating on the schedule the LAPS policy sets. Works for Windows LAPS (Group Policy, Intune or local configuration; AD or Entra ID) and legacy Microsoft LAPS.
+  - **Due date:** taken from the password's expiry on the computer's AD object. Otherwise it's the last rotation (password-last-set time and Windows LAPS events) plus the policy's password age.
+  - **Amber** once rotation is more than a day overdue. Also amber when the last LAPS run failed, the managed account is missing, nothing has been backed up to AD yet, or LAPS is set but not working.
+  - **Red** once rotation is `agent_laps_overdue_days` (3) overdue.
+  - On domain controllers it checks the DSRM password.
+  - **Details → Security** shows the policy, the managed account, last set, expiry, last backup and last LAPS run. The password itself is never read.
+
 ## 1.38.0 - 2026-11-09
 
 ### Added

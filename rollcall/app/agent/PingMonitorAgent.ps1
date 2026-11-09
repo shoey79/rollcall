@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.17'
+$AgentVersion = '1.0.18'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -138,6 +138,7 @@ function Read-State {
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
+            if ($raw.laps_ad_at) { try { $state.laps_ad_at = [int64]$raw.laps_ad_at; $state.laps_ad_exp = [string]$raw.laps_ad_exp; $state.laps_ad_attr = [string]$raw.laps_ad_attr } catch { } }
             if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
@@ -665,6 +666,122 @@ function Get-LocalAdmins {
     return $list
 }
 
+function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
+    # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
+    # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
+    $roots = @(
+        @('HKLM:\Software\Microsoft\Policies\LAPS', 'Intune / MDM'),
+        @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\LAPS', 'Group Policy'),
+        @('HKLM:\Software\Microsoft\Windows\CurrentVersion\LAPS\Config', 'Local configuration'))
+    $policy = $null; $source = ''
+    foreach ($r in $roots) {
+        try {
+            $p = Get-ItemProperty -Path $r[0] -ErrorAction Stop
+            if (@($p.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }).Count) { $policy = $p; $source = $r[1]; break }
+        } catch { }
+    }
+    $legacy = $null
+    try { $legacy = Get-ItemProperty -Path 'HKLM:\Software\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop } catch { }
+    $winLaps = Test-Path "$env:SystemRoot\System32\laps.dll"
+    $legacyCse = Test-Path "$env:ProgramFiles\LAPS\CSE\AdmPwd.dll"
+    $out = [ordered]@{ product = ''; source = ''; enabled = $false; backup = ''; age_days = 30; account = ''; legacy = $false; dc = $IsDc }
+    if ($policy -and $winLaps) {
+        $bd = if ($null -ne $policy.BackupDirectory) { [int]$policy.BackupDirectory } else { 0 }
+        $out.product = 'Windows LAPS'; $out.source = $source
+        $out.enabled = $bd -in 1, 2
+        $out.backup = switch ($bd) { 1 { 'Microsoft Entra ID' } 2 { 'Active Directory' } default { 'none (backup disabled)' } }
+        if ($null -ne $policy.PasswordAgeDays) { $out.age_days = [int]$policy.PasswordAgeDays }
+        $out.account = [string]$policy.AdministratorAccountName
+        if ([int]$policy.AutomaticAccountManagementEnabled -eq 1) {
+            $out.account = if ($policy.AutomaticAccountManagementNameOrPrefix) { [string]$policy.AutomaticAccountManagementNameOrPrefix } else { 'WLapsAdmin' }
+            $out.auto_account = $true
+        }
+        if ($IsDc) { $out.dsrm = ([int]$policy.ADBackupDSRMPassword -eq 1) }
+    } elseif ($legacy -and [int]$legacy.AdmPwdEnabled -eq 1) {
+        $out.legacy = $true; $out.source = 'Group Policy (legacy LAPS)'; $out.backup = 'Active Directory'
+        $out.product = if ($legacyCse) { 'Microsoft LAPS (legacy)' } elseif ($winLaps) { 'Windows LAPS (legacy emulation)' } else { 'Microsoft LAPS (legacy)' }
+        $out.enabled = $legacyCse -or $winLaps
+        if (-not $out.enabled) { $out.problem = "The legacy LAPS policy is set, but neither the LAPS client (AdmPwd) nor Windows LAPS is installed" }
+        if ($null -ne $legacy.PasswordAgeDays) { $out.age_days = [int]$legacy.PasswordAgeDays }
+        $out.account = [string]$legacy.AdminAccountName
+    } elseif ($policy) {
+        $out.product = 'Windows LAPS'; $out.source = $source; $out.backup = 'none'
+        $out.problem = "A LAPS policy is set, but this version of Windows doesn't include Windows LAPS (it needs the April 2023 update or later)"
+    } else {
+        return $null  # LAPS isn't configured here
+    }
+
+    # The managed account's password age (domain controllers manage the DSRM password instead)
+    if (-not $IsDc -and -not $out.auto_account) {
+        try {
+            $u = $null
+            if (Get-Command Get-LocalUser -ErrorAction SilentlyContinue) {
+                $u = if ($out.account) { Get-LocalUser -Name $out.account -ErrorAction Stop }
+                     else { Get-LocalUser -ErrorAction Stop | Where-Object { $_.SID.Value -match '^S-1-5-21-.+-500$' } | Select-Object -First 1 }
+                if ($u) {
+                    $out.account = [string]$u.Name; $out.account_enabled = [bool]$u.Enabled
+                    if ($u.PasswordLastSet) { $out.password_set = ConvertTo-UtcString $u.PasswordLastSet }
+                }
+            } else {
+                $name = $out.account
+                if (-not $name) { $name = [string](Get-CimInstance -ClassName Win32_UserAccount -Filter "LocalAccount = TRUE AND SID LIKE '%-500'" | Select-Object -First 1).Name }
+                $a = [ADSI]"WinNT://$env:COMPUTERNAME/$name,user"
+                $age = $a.PasswordAge.Value
+                if ($null -ne $age) {
+                    $u = $true; $out.account = $name
+                    $out.password_set = ConvertTo-UtcString ((Get-Date).AddSeconds(-[int]$age))
+                    $out.account_enabled = -not ([int]$a.UserFlags.Value -band 2)
+                }
+            }
+            $out.account_found = [bool]$u
+        } catch { $out.account_found = $false }
+    }
+
+    # Windows LAPS logs each policy run and each password it backs up
+    if ($out.product -like 'Windows LAPS*') {
+        $log = 'Microsoft-Windows-LAPS/Operational'
+        $newest = { param([int[]]$Ids) try { Get-WinEvent -FilterHashtable @{ LogName = $log; Id = $Ids } -MaxEvents 1 -ErrorAction Stop } catch { $null } }
+        $b = & $newest @(10018, 10029)
+        if ($b) { $out.last_backup = ConvertTo-UtcString $b.TimeCreated; $out.last_backup_to = if ($b.Id -eq 10029) { 'Microsoft Entra ID' } else { 'Active Directory' } }
+        $c = & $newest @(10020)
+        if ($c) { $out.last_rotation = ConvertTo-UtcString $c.TimeCreated }
+        $ok = & $newest @(10004)
+        $fail = & $newest @(10005)
+        if ($ok) { $out.last_run = ConvertTo-UtcString $ok.TimeCreated }
+        if ($fail -and (-not $ok -or $fail.TimeCreated -gt $ok.TimeCreated)) {
+            $out.last_error = Limit-Text (Get-EventMessage $fail) 300
+            $out.last_error_time = ConvertTo-UtcString $fail.TimeCreated
+            $out.last_run = $out.last_error_time
+        }
+    }
+
+    # When the password expires, from the computer's own AD object (the expiry is readable; the password isn't).
+    # Asked at most hourly; kept for a day so a laptop away from the office still shows it.
+    if ($out.enabled -and $out.backup -eq 'Active Directory' -and $Domain) {
+        $attr = if ($out.legacy) { 'ms-Mcs-AdmPwdExpirationTime' } else { 'msLAPS-PasswordExpirationTime' }
+        $nowTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        if (-not $State.laps_ad_at -or $nowTs - [int64]$State.laps_ad_at -gt 3600 -or $State.laps_ad_attr -ne $attr) {
+            try {
+                $ds = New-Object DirectoryServices.DirectorySearcher
+                $ds.Filter = "(&(objectCategory=computer)(sAMAccountName=$($env:COMPUTERNAME)`$))"
+                [void]$ds.PropertiesToLoad.Add($attr)
+                $ds.ClientTimeout = [TimeSpan]::FromSeconds(10)
+                $res = $ds.FindOne()
+                $exp = ''
+                if ($res -and $res.Properties[$attr.ToLower()].Count) { $exp = ConvertTo-UtcString ([DateTime]::FromFileTimeUtc([int64]$res.Properties[$attr.ToLower()][0]).ToLocalTime()) }
+                $State.laps_ad_at = $nowTs; $State.laps_ad_exp = $exp; $State.laps_ad_attr = $attr
+            } catch {
+                $out.ad_error = Limit-Text $_.Exception.Message 200
+            }
+        }
+        if ($State.laps_ad_at -and $nowTs - [int64]$State.laps_ad_at -lt 86400 -and $State.laps_ad_attr -eq $attr) {
+            $out.expires = $State.laps_ad_exp  # '' = no expiry in AD: the password has never been backed up
+            $out.expires_checked = ConvertTo-UtcString ([DateTimeOffset]::FromUnixTimeSeconds([int64]$State.laps_ad_at).LocalDateTime)
+        }
+    }
+    return $out
+}
+
 function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
     $checks = [ordered]@{}
     $null = Measure-Step 'iis' {
@@ -1182,6 +1299,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         if ($null -ne $vbo) { $bjobs += @($vbo) }
         if ($null -ne $vbr -or $null -ne $vbo) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
     } catch { Add-CollectorError 'veeam' $_ }
+    try {
+        $laps = Measure-Step 'laps' { Get-LapsStatus $State ($discovery.roles -contains 'Domain controller') $(if ($sys) { [bool]$sys.part_of_domain } else { $false }) }
+        if ($laps) { $report.checks.laps = $laps }
+    } catch { Add-CollectorError 'laps' $_ }
     try {
         $storage = Measure-Step 'storage health' { Get-StorageHealth $State }
         if ($storage) { $report.checks.storage = $storage }
