@@ -47,6 +47,7 @@ import syslogrx as sysloglib
 import certcheck
 import sipcheck
 import syslogreadings
+import hadevice
 import msi as msilib
 from agents import AgentStore, clean_enrol_info, evaluate
 
@@ -360,6 +361,9 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or f"{scheme.upper()} {port}", "kind": "http", "port": port,
                  "url": f"{scheme}://{{host}}:{port}{path}", "desc": f"{scheme}:{port}{path}",
                  "fallback": True}]
+    if low == "hadev:device":
+        return [{"label": label or "Home Assistant", "kind": "hadev", "port": None, "url": None,
+                 "desc": "the linked Home Assistant device"}]
     if low == "syslog:device":
         return [{"label": label or "Syslog", "kind": "syslog", "port": 514, "url": None, "desc": "syslog"}]
     if low == "snmp:device":
@@ -590,6 +594,12 @@ def validate_entry(raw: dict) -> dict:
         if icon and not ICON_REF.match(icon):
             raise ValueError("Unknown icon")
         entry["icon"] = icon
+    if "ha_device" in raw:
+        dev = str(raw.get("ha_device") or "").strip()
+        if dev and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", dev):
+            raise ValueError("Unknown Home Assistant device")
+        entry["ha_device"] = dev
+        entry["ha_device_name"] = str(raw.get("ha_device_name") or "").strip()[:100] if dev else ""
     if "model" in raw:
         model = str(raw.get("model") or "").strip()
         if len(model) > 64 or not model.isprintable():
@@ -1079,12 +1089,12 @@ class HomeAssistant:
             log.warning("HA API GET %s failed: %s", path, err)
             return None
 
-    async def list_users(self) -> list[dict] | None:
-        """Home Assistant's user list (id, name, username, admin flags), via the websocket API."""
+    async def ws_calls(self, types: list[str], what: str) -> list | None:
+        """Run websocket commands on one connection; each result, or None if anything failed."""
         if not self.enabled:
             return None
         try:
-            async with self.session.ws_connect(HA_WS, timeout=10, heartbeat=None) as ws:
+            async with self.session.ws_connect(HA_WS, timeout=10, heartbeat=None, max_msg_size=64 * 1024 * 1024) as ws:
                 msg = await ws.receive_json(timeout=10)
                 if msg.get("type") == "auth_required":
                     await ws.send_json({"type": "auth", "access_token": SUPERVISOR_TOKEN})
@@ -1092,18 +1102,63 @@ class HomeAssistant:
                 if msg.get("type") != "auth_ok":
                     log.warning("HA websocket auth failed: %s", msg.get("message") or msg.get("type"))
                     return None
-                await ws.send_json({"id": 1, "type": "config/auth/list"})
-                while True:
-                    msg = await ws.receive_json(timeout=10)
-                    if msg.get("id") == 1:
-                        break
-                if not msg.get("success"):
-                    log.warning("Couldn't read HA users: %s", (msg.get("error") or {}).get("message"))
-                    return None
-                return msg.get("result") or []
+                out = []
+                for n, t in enumerate(types, 1):
+                    await ws.send_json({"id": n, "type": t})
+                    while True:
+                        msg = await ws.receive_json(timeout=20)
+                        if msg.get("id") == n:
+                            break
+                    if not msg.get("success"):
+                        log.warning("Couldn't read HA %s: %s", what, (msg.get("error") or {}).get("message"))
+                        return None
+                    out.append(msg.get("result") or [])
+                return out
         except Exception as err:  # noqa: BLE001
-            log.warning("Couldn't read HA users: %s", err)
+            log.warning("Couldn't read HA %s: %s", what, err)
             return None
+
+    async def list_users(self) -> list[dict] | None:
+        """Home Assistant's user list (id, name, username, admin flags), via the websocket API."""
+        got = await self.ws_calls(["config/auth/list"], "users")
+        return got[0] if got else None
+
+    async def registry(self) -> dict | None:
+        """HA's devices and their entities (from the device and entity registries), cached 10 minutes."""
+        now = time.time()
+        cached = getattr(self, "_registry", None)
+        if cached and now - cached[0] < 600:
+            return cached[1]
+        got = await self.ws_calls(["config/device_registry/list", "config/entity_registry/list"], "devices")
+        if not got:
+            return cached[1] if cached else None  # keep using the last good copy
+        devices = {d["id"]: d for d in got[0] if isinstance(d, dict) and d.get("id")}
+        by_device: dict[str, list] = {}
+        for e in got[1]:
+            if isinstance(e, dict) and e.get("device_id") and not e.get("disabled_by"):
+                by_device.setdefault(e["device_id"], []).append(e)
+        reg = {"devices": devices, "entities": by_device}
+        self._registry = (now, reg)
+        return reg
+
+    async def states_map(self) -> dict | None:
+        """Every entity's state, keyed by entity id; shared by checks running together (5 seconds)."""
+        now = time.time()
+        cached = getattr(self, "_states", None)
+        if cached and now - cached[0] < 5:
+            return cached[1]
+        lock = getattr(self, "_states_lock", None) or asyncio.Lock()
+        self._states_lock = lock
+        async with lock:
+            cached = getattr(self, "_states", None)
+            if cached and time.time() - cached[0] < 5:
+                return cached[1]
+            st = await self.get_json("/states")
+            if not isinstance(st, list):
+                return None
+            m = {x.get("entity_id"): x for x in st if isinstance(x, dict)}
+            self._states = (time.time(), m)
+            return m
 
     async def addon_network(self) -> dict:
         """This add-on's port mappings, e.g. {"5140/udp": 514}."""
@@ -1195,6 +1250,9 @@ class Host:
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
+    ha_device: str = ""                # linked Home Assistant device id ("" = none)
+    ha_device_name: str = ""
+    ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
     syslog_alert: int = 3              # alert on this severity and worse (-1 = never)
     syslog_keywords: list[str] = field(default_factory=list)  # always alert (red)
     syslog_ignore: list[str] = field(default_factory=list)    # never alert
@@ -1342,6 +1400,7 @@ class Monitor:
                             **({"check_by": h.check_by} if h.check_by != "auto" else {}),
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
+                            **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
@@ -1360,6 +1419,8 @@ class Monitor:
         h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
+        h.ha_device = str(entry.get("ha_device") or "")[:64]
+        h.ha_device_name = str(entry.get("ha_device_name") or "")[:100]
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
@@ -1399,6 +1460,10 @@ class Monitor:
             h.icon = entry["icon"]
         if "model" in entry:
             h.model = entry["model"]
+        if "ha_device" in entry:
+            if entry["ha_device"] != h.ha_device:
+                h.ha_data = None
+            h.ha_device, h.ha_device_name = entry["ha_device"], entry.get("ha_device_name", "")
         if "snmp_version" in entry:
             h.snmp_version = entry["snmp_version"]
             if h.snmp_version == "3":
@@ -1772,6 +1837,8 @@ class Monitor:
                 return await self.snmp_check(h, now)
             if s.kind == "syslog":
                 return self.syslog_state(h, now)
+            if s.kind == "hadev":
+                return await self.hadev_check(h, now)
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -1834,6 +1901,28 @@ class Monitor:
         if not prev.get("timeouts"):
             per *= 2
         return max(1, min(per, int(prev.get("per_cap") or 25), 25))
+
+    async def hadev_check(self, h: Host, now: float) -> tuple:
+        """The linked Home Assistant device: its entities, with problems picked out (see hadevice.py)."""
+        if not h.ha_device:
+            return False, None, "no Home Assistant device linked (Edit to link one)", "warn"
+        reg = await self.ha.registry()
+        states = await self.ha.states_map()
+        if reg is None or states is None:
+            return False, None, "couldn't read Home Assistant", "warn"
+        dev = reg["devices"].get(h.ha_device)
+        if not dev:
+            h.ha_data = None
+            return False, None, f"the linked device ({h.ha_device_name or h.ha_device}) is no longer in Home Assistant", "warn"
+        d = hadevice.read(dev, reg["entities"].get(h.ha_device, []), states)
+        d["read"] = now
+        h.ha_data = d
+        h.ha_device_name = d["device"]["name"] or h.ha_device_name
+        worst = "crit" if any(i["level"] == "crit" for i in d["items"]) else "warn" if any(i["level"] == "warn" for i in d["items"]) else "ok"
+        if worst == "ok":
+            return True, None, d["summary"]
+        detail = "; ".join(f"{i['what']}: {i['detail']}" if i["detail"] else i["what"] for i in d["items"] if i["level"] == worst)
+        return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
 
     def ups_limits(self) -> dict:
         o = self.opts
@@ -2757,6 +2846,7 @@ class Monitor:
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
+                "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "check_by": h.check_by, "via_agent": h.via_agent,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
@@ -2962,6 +3052,35 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                         "unit": attrs.get("unit_of_measurement") or "", "score": score})
         out.sort(key=lambda e: (-e["score"], e["entity_id"]))
         return web.json_response({"entities": out[:60], "total": len(out)})
+
+    async def ha_devices(req):
+        """Home Assistant devices for the Edit dialog's "link a device" search."""
+        q = (req.query.get("q") or "").strip().lower()
+        reg = await monitor.ha.registry()
+        if reg is None:
+            return web.json_response({"error": "Couldn't read Home Assistant's devices", "devices": []})
+        words = [w for w in re.split(r"[\s_.\-]+", q) if w]
+        out = []
+        for dev_id, dev in reg["devices"].items():
+            ents = reg["entities"].get(dev_id, [])
+            if not ents or dev.get("disabled_by"):
+                continue
+            name = dev.get("name_by_user") or dev.get("name") or ""
+            platforms = sorted({e.get("platform") or "" for e in ents} - {""})
+            hay = " ".join([name, dev.get("manufacturer") or "", dev.get("model") or "", " ".join(platforms)]).lower().replace("_", " ")
+            if words and not all(w in hay for w in words):
+                continue
+            out.append({"id": dev_id, "name": name, "manufacturer": dev.get("manufacturer") or "", "model": dev.get("model") or "",
+                        "integration": hadevice.integration_name(platforms), "entities": len(ents),
+                        "known": any(p in hadevice.KNOWN for p in platforms)})
+        out.sort(key=lambda d: (not d["known"], d["name"].lower()))
+        return web.json_response({"devices": out[:50], "total": len(out)})
+
+    async def host_ha(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        return web.json_response({"name": h.name, "device_id": h.ha_device, "device_name": h.ha_device_name, "data": h.ha_data})
 
     async def views_get(_req):
         return web.json_response({"views": load_views()})
@@ -3464,6 +3583,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/import", editor_only(import_data))
     app.router.add_post("/api/import/chunk", editor_only(import_chunk))
     app.router.add_get("/api/ha/entities", editor_only(ha_entities))
+    app.router.add_get("/api/ha/devices", editor_only(ha_devices))
+    app.router.add_get("/api/hosts/{key}/ha", host_ha)
     app.router.add_put("/api/views", editor_only(views_put))
     app.router.add_post("/api/check/{key}", check_now)  # harmless, so open to all viewers
     app.router.add_post("/api/reset", editor_only(reset))

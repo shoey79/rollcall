@@ -240,6 +240,19 @@ For `http:PORT/...` and `https:PORT/...` checks (including presets), if the port
 
 **SQL named instances** usually listen on a dynamic port, so use `tcp:<port>` with the instance's actual port instead of the `sql` preset.
 
+### Home Assistant device (e.g. Pi-hole)
+
+If Home Assistant already has an integration for the device, link its HA device: Rollcall then reads all of the integration's entities, with no extra passwords. Under **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. This adds a **Home Assistant** check, and the device's Overview in Details shows a **Home Assistant** section with the entities and their states (diagnostic ones folded away).
+
+- **Pi-hole** (the Pi-hole integration):
+  - Tiles for ad blocking on or off, DNS queries today, blocked today and the percentage blocked, clients, and domains on blocklists.
+  - Ad blocking turned off is amber.
+  - Updates for Pi-hole Core, FTL or Web are noted.
+  - The check's chip reads e.g. "Pi-hole: blocking on, 85,710 queries today, 21.4% blocked".
+- **Any other device:** its entities are listed. It goes red if every entity is unavailable (Home Assistant has lost touch with the device), and amber for a "problem" binary sensor that's on.
+- Keep the **Pi-hole** preset ticked too. It checks DNS (TCP 53) and the admin page directly, so you still hear about a dead Pi-hole even if Home Assistant is down.
+- To unlink, choose **Unlink** under Edit.
+
 ### Home Assistant sensors
 
 Any sensor in Home Assistant can be a check on a computer, so devices Home Assistant already knows about, such as UniFi access points and switches through the UniFi Network integration, show their CPU, memory and so on alongside the ping. The current value is shown on the chip (e.g. **CPU 12%**).

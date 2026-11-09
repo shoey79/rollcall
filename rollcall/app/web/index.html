@@ -528,6 +528,12 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         </div>
       </fieldset>
       <fieldset>
+        <legend>Home Assistant device <small>— e.g. Pi-hole: its integration's readings shown with this computer</small></legend>
+        <div id="haDevLinked"></div>
+        <input type="search" id="haDevSearch" class="preset-filter" placeholder="Search Home Assistant devices, e.g. pi-hole" autocomplete="off" spellcheck="false">
+        <div id="haDevResults" class="haresults"></div>
+      </fieldset>
+      <fieldset>
         <legend>Home Assistant sensors <small>— e.g. CPU and memory from the UniFi integration</small></legend>
         <input type="search" id="haSearch" class="preset-filter" placeholder="Search Home Assistant sensors, e.g. office ap" autocomplete="off" spellcheck="false">
         <div id="haResults" class="haresults"></div>
@@ -1902,11 +1908,12 @@ async function openOverview(key) {
   if (!detDlg.open) detDlg.showModal();
   const get = async url => { try { const r = await fetch(url, {cache: "no-store"}); return r.ok ? await r.json() : null; } catch (e) { return null; } };
   const base = "api/hosts/" + encodeURIComponent(key);
-  const [sn, lg] = await Promise.all([h.snmp ? get(base + "/snmp") : null, h.syslog ? get(base + "/syslog?sev=4&limit=6") : null]);
+  const [sn, lg, ha] = await Promise.all([h.snmp ? get(base + "/snmp") : null, h.syslog ? get(base + "/syslog?sev=4&limit=6") : null,
+    h.ha_device ? get(base + "/ha") : null]);
   if (detMode !== "overview" || detKey !== key) return;  // moved on while loading
-  renderOverview(data.hosts.find(x => x.key === key) || h, sn, lg);
+  renderOverview(data.hosts.find(x => x.key === key) || h, sn, lg, ha);
 }
-function renderOverview(h, sn, lg) {
+function renderOverview(h, sn, lg, ha) {
   const now = data.now || Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
   const d = sn && sn.data, u = d && d.ups && !d.ups.error ? d.ups : null, nas = d && d.nas, rd = lg && lg.readings;
   showSourceTabs(h.key, "overview");
@@ -1947,6 +1954,10 @@ function renderOverview(h, sn, lg) {
   if (d && d.poe && d.poe.used_w != null) tiles.push(tile("PoE", `${d.poe.used_w} W`, d.poe.power_w ? `of ${d.poe.power_w} W budget` : "", "", "snmp"));
   for (const r of ((rd && rd.sensors) || []).slice(0, 4))
     tiles.push(tile(esc(r.label.replace(/^Temperature \((\w+)\)$/, "Temp $1")), `${esc(String(r.value))} ${esc(r.unit)}`, spark(r.series) || (r.min === r.max ? "steady" : `${r.min}–${r.max}`), "", "logs"));
+  const hd = ha && ha.data;
+  for (const t of (hd && hd.tiles) || [])
+    tiles.push(tile(esc(t.label), typeof t.value === "number" ? t.value.toLocaleString() + (t.unit ? esc(t.unit) : "") : esc(String(t.value)), esc(t.sub || ""),
+      t.level === "warn" ? "warm" : t.level === "crit" ? "hot" : "", "ha"));
   if (lg) tiles.push(tile("Log alerts", String(lg.pending || 0), `${lg.count_24h} message${lg.count_24h === 1 ? "" : "s"} today${lg.last ? " · last " + ago(lg.last, now) : ""}`,
     lg.pending ? (lg.status === "red" ? "hot" : "warm") : "", "logs"));
 
@@ -1959,12 +1970,15 @@ function renderOverview(h, sn, lg) {
   for (const i of (sn && sn.items) || []) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp"});
   const snmpSvc = h.services.find(s => s.kind === "snmp");
   if (snmpSvc && !d && snmpSvc.status !== "green" && snmpSvc.status !== "unknown") att.push({lvl: "red", what: "SNMP", detail: snmpSvc.detail || "no reply", jump: "snmp"});
+  for (const i of ((hd && hd.items) || []).filter(i => i.level !== "info")) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "ha"});
+  const haSvc = h.services.find(s => s.kind === "hadev");
+  if (haSvc && !hd && haSvc.status !== "green" && haSvc.status !== "unknown") att.push({lvl: haSvc.status === "red" ? "red" : "amber", what: "Home Assistant", detail: haSvc.detail || "", jump: ""});
   for (const r of ((lg && lg.rows) || []).filter(r => r.alert).slice(0, 5)) att.push({lvl: r.alert === "red" ? "red" : "amber", what: "Log", detail: (r.app ? r.app + ": " : "") + r.msg, jump: "logs", ts: r.ts});
   const order = {red: 0, amber: 1};
   att.sort((a, b) => order[a.lvl] - order[b.lvl]);
   let html = `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
   html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
-    ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : "Logs"} ›</a>` : ""}</small></span></div>`).join("")}</div>`
+    ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small></span></div>`).join("")}</div>`
     : `<p class="empty-note">✓ Nothing needs attention.</p>`);
   const svcs = h.services.filter(s => !s.agent);
   if (svcs.length) html += sect("Checks", tbl(["Check", "Status", "Uptime (24 h)", "Last change"], svcs.map(s =>
@@ -1972,6 +1986,19 @@ function renderOverview(h, sn, lg) {
      <td><span class="dot ${s.status}"></span> ${esc(s.detail || LABEL[s.status] || s.status)}</td>
      <td class="num">${s.uptime_24h == null ? "—" : s.uptime_24h.toFixed(s.uptime_24h === 100 ? 0 : 1) + "%"}</td><td>${s.last_change ? ago(s.last_change, now) : "—"}</td></tr>`)));
   if (rd && ((rd.status || []).length || (rd.sensors || []).length > 4)) html += logReadings(rd, now);
+  if (hd) {
+    const info = (hd.items || []).filter(i => i.level === "info");
+    const ents = hd.entities || [], main = ents.filter(e => !e.category), diag = ents.filter(e => e.category);
+    const row = e => `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${e.state === "unavailable" || e.state === "unknown" ? `<span class="muted">${esc(e.state)}</span>`
+      : esc(isNaN(+e.state) || e.state === "" ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
+    html += `<div id="ovHa">` + sect(`Home Assistant · ${esc(hd.device.name || ha.device_name || "")}`,
+      `<p class="hint" style="margin:0 0 6px">${esc([hd.device.integration, [hd.device.manufacturer, hd.device.model].filter(Boolean).join(" "), hd.device.sw_version && "version " + hd.device.sw_version].filter(Boolean).join(" · "))}${hd.read ? ` · read ${ago(hd.read, now)}` : ""}</p>`
+      + info.map(i => `<p class="hint" style="margin:0 0 6px">⬆ <b>${esc(i.what)}:</b> ${esc(i.detail)}</p>`).join("")
+      + (tbl(["Entity", "State"], main.map(row)) || `<p class="empty-note">No entities.</p>`)
+      + (diag.length ? `<details style="margin-top:6px"><summary class="hint">${diag.length} diagnostic and configuration entities</summary>${tbl(["Entity", "State"], diag.map(row))}</details>` : "")) + `</div>`;
+  } else if (h.ha_device) {
+    html += sect("Home Assistant", `<p class="empty-note">${esc((haSvc && haSvc.detail) || "Not read yet: it's read at each check.")}</p>`);
+  }
   const recent = ((lg && lg.rows) || []).slice(0, 6);
   if (recent.length) html += sect("Recent warnings and errors", tbl(["Time", "Severity", "Message"], recent.map(r =>
     `<tr class="${r.alert ? "hl" : ""}"><td>${esc(new Date(r.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}))}</td><td><span class="dot ${SEV_DOT(r.sev)}"></span> ${SEV[r.sev]}</td><td class="msg">${esc((r.app ? r.app + ": " : "") + r.msg)}</td></tr>`))
@@ -1980,9 +2007,9 @@ function renderOverview(h, sn, lg) {
   const info = [kv("Address", esc(h.host + (h.ip && h.ip !== h.host ? ` (${h.ip})` : ""))), kv("Make and model", esc(h.model || (u && u.model) || "")),
     kv("Name on the device", esc(d && d.name || "")), kv("Location", esc(d && d.location || "")),
     kv("Up for", d && d.uptime_s != null ? fmtUp(d.uptime_s) : ""), kv("Serial", esc(u && u.serial || "")), kv("Firmware", esc(u && u.firmware || "")),
-    kv("Description", esc(d && d.descr || "")), kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always")))].join("");
+    kv("Description", esc(d && d.descr || "")), kv("In Home Assistant", esc(hd ? [hd.device.name, hd.device.integration].filter(Boolean).join(" · ") : h.ha_device_name || "")), kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always")))].join("");
   html += sect("Device", `<div class="kv">${info}</div>`);
-  if (!h.snmp && !h.syslog) html += `<p class="hint">Tick <b>SNMP</b> or <b>Syslog</b> under Edit to see more about this device here, such as its ports, disks, UPS battery or log messages.</p>`;
+  if (!h.snmp && !h.syslog && !h.ha_device) html += `<p class="hint">Tick <b>SNMP</b> or <b>Syslog</b>, or link its <b>Home Assistant device</b>, under Edit to see more about this device here, such as its ports, disks, UPS battery, log messages or integration readings.</p>`;
   body.innerHTML = html;
   body.scrollTop = top;
 }
@@ -1990,6 +2017,7 @@ document.getElementById("detBody").addEventListener("click", e => {
   const j = e.target.closest("[data-ovjump]");
   if (!j || detMode !== "overview" || !detKey) return;
   if (j.dataset.ovjump === "snmp") openSnmp(detKey); else if (j.dataset.ovjump === "logs") openLogs(detKey);
+  else if (j.dataset.ovjump === "ha") { const el = document.getElementById("ovHa"); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); }
 });
 document.getElementById("detBody").addEventListener("keydown", e => {
   if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-ovjump]")) { e.preventDefault(); e.target.click(); }
@@ -2522,6 +2550,37 @@ function updatePicked() {
 
 // Home Assistant sensor search: one click adds it as a custom check with a sensible condition.
 let haTimer = null, haSeq = 0;
+// Linking a Home Assistant device: Rollcall reads all its entities (Pi-hole gets its own tiles and alerts).
+let linkedDev = null, haDevSeq = 0, haDevTimer = null;
+function drawLinkedDev() {
+  document.getElementById("haDevLinked").innerHTML = linkedDev
+    ? `<div class="harow"><span><b>${esc(linkedDev.name)}</b><small>linked: its readings show in Details, and problems alert as the <b>Home Assistant</b> check</small></span><span></span><button type="button" class="mini danger" id="haDevUnlink">Unlink</button></div>`
+    : `<p class="hint" style="margin:0 0 6px">Not linked. Search for the device, e.g. the Pi-hole integration's device, and choose <b>Link</b>.</p>`;
+}
+async function haDevSearch() {
+  const q = document.getElementById("haDevSearch").value.trim(), box = document.getElementById("haDevResults"), seq = ++haDevSeq;
+  if (!q) { box.innerHTML = ""; return; }
+  box.innerHTML = `<p class="hint">Searching…</p>`;
+  try {
+    const d = await (await fetch("api/ha/devices?q=" + encodeURIComponent(q), {cache: "no-store"})).json();
+    if (seq !== haDevSeq) return;
+    if (d.error) { box.innerHTML = `<p class="hint">${esc(d.error)}</p>`; return; }
+    box.innerHTML = d.devices.length ? d.devices.map(x => `<div class="harow"><span>${esc(x.name)}<small>${esc([x.integration, [x.manufacturer, x.model].filter(Boolean).join(" "), x.entities + " entities"].filter(Boolean).join(" · "))}</small></span>
+        <span class="val">${x.known ? "readings and alerts" : ""}</span>
+        ${linkedDev && linkedDev.id === x.id ? `<span class="ignored">Linked</span>` : `<button type="button" class="mini" data-hadev="${esc(x.id)}" data-hadevname="${esc(x.name)}">Link</button>`}</div>`).join("") +
+        (d.total > d.devices.length ? `<p class="hint">${d.total - d.devices.length} more: add another word to narrow it down.</p>` : "")
+      : `<p class="hint">No devices match "${esc(q)}".</p>`;
+  } catch (e) { if (seq === haDevSeq) box.innerHTML = `<p class="hint">Couldn't search Home Assistant.</p>`; }
+}
+document.getElementById("haDevSearch").addEventListener("input", () => { clearTimeout(haDevTimer); haDevTimer = setTimeout(haDevSearch, 300); });
+document.getElementById("haDevSearch").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(haDevTimer); haDevSearch(); } });
+document.getElementById("haDevResults").addEventListener("click", e => {
+  const b = e.target.closest("[data-hadev]"); if (!b) return;
+  linkedDev = {id: b.dataset.hadev, name: b.dataset.hadevname}; drawLinkedDev(); haDevSearch();
+});
+document.getElementById("haDevLinked").addEventListener("click", e => {
+  if (e.target.id === "haDevUnlink") { linkedDev = null; drawLinkedDev(); haDevSearch(); }
+});
 function haDefault(e) {
   const id = e.entity_id, num = e.state !== "" && !isNaN(+e.state);
   const label = /cpu/.test(id) ? "CPU" : /mem/.test(id) ? "Memory" : /temperature/.test(id) ? "Temp" : null;
@@ -2655,7 +2714,11 @@ async function openDialog(h) {
   const [addrRows, otherChecks] = splitAddrChecks(h ? h.checks : []);
   addrRows.forEach(addAddrRow); addrCount();
   document.getElementById("addrBox").open = addrRows.length > 0;
+  linkedDev = h && h.ha_device ? {id: h.ha_device, name: h.ha_device_name || h.ha_device} : null;
+  drawLinkedDev();
+  document.getElementById("haDevSearch").value = ""; document.getElementById("haDevResults").innerHTML = "";
   for (const c of otherChecks) {
+    if (c.toLowerCase() === "hadev:device") continue;  // goes with the linked device
     const k = ALIASES[c.toLowerCase()] || c.toLowerCase();
     const cb = presetNames.has(k) && form.querySelector(`.preset input[value="${CSS.escape(k)}"]`);
     if (cb) cb.checked = true; else addCustomRow(c);
@@ -2708,6 +2771,9 @@ form.addEventListener("submit", async e => {
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};
+  body.ha_device = linkedDev ? linkedDev.id : ""; body.ha_device_name = linkedDev ? linkedDev.name : "";
+  body.checks = body.checks.filter(c => c.toLowerCase() !== "hadev:device");
+  if (linkedDev) body.checks.push("hadev:device");
   const commIn = document.getElementById("fSnmpComm").value;
   if (!document.getElementById("snmpBox").hidden) {
     if (commIn) body.snmp_community = commIn;

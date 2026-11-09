@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.40.0 - 2026-11-09
+
+### Added
+- **Link a Home Assistant device** to a computer (Edit → Home Assistant device). Rollcall reads all of that integration's entities through Home Assistant, with no extra passwords. They show in the device's Overview, and problems alert as a **Home Assistant** check.
+- **Pi-hole**, through its Home Assistant integration:
+  - Tiles for ad blocking, DNS queries, blocked today and the percentage blocked, clients, and domains on blocklists.
+  - Amber when ad blocking is turned off.
+  - Pi-hole updates are noted.
+- **Any other linked device** goes red if all its entities are unavailable, and amber for a "problem" sensor that's on.
+
 ## 1.39.0 - 2026-11-09
 
 ### Added
