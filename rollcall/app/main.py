@@ -46,6 +46,7 @@ import snmp as snmplib
 import syslogrx as sysloglib
 import certcheck
 import sipcheck
+import syslogreadings
 import msi as msilib
 from agents import AgentStore, clean_enrol_info, evaluate
 
@@ -3335,7 +3336,13 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         svc = next((s for s in h.services if s.kind == "syslog"), None)
         pending = sum(1 for r in monitor.logs.query(h.key, since=since, max_sev=7, limit=5000)
                       if sysloglib.alert_level(r, h.syslog_alert, h.syslog_keywords, h.syslog_ignore))
+        try:
+            found = syslogreadings.readings(monitor.logs, h.key, now)
+        except Exception:  # noqa: BLE001 - readings are extra; never break the Logs tab
+            log.exception("%s: couldn't work out readings from syslog", h.name)
+            found = {"sensors": [], "status": []}
         return web.json_response({"name": h.name, "pending": pending, "ip": h.ip, "host": h.host, "rows": rows, "count_24h": n, "last": last,
+                                  "readings": found,
                                   "alert": h.syslog_alert, "keywords": h.syslog_keywords, "ignore": h.syslog_ignore,
                                   "ack": h.syslog_ack, "status": svc.status if svc else None,
                                   "detail": svc.detail if svc else None, "port": monitor.syslog_port, "now": now})

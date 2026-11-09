@@ -326,6 +326,12 @@ Rollcall receives syslog on **UDP port 514** of the Home Assistant machine. You 
 
 Each device can send up to 100 messages a second (with bursts up to 200); more than that are dropped, so a chatty device can't fill the database. Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof.
 
+**Readings from its logs.** Some devices report readings in their routine log messages. Rollcall picks these out and shows them at the top of the **Logs** tab: the latest value, the range and a small graph over the last 24 hours, and when each was last reported.
+- Buffalo TeraStation and LinkStation: temperatures (`temp0`, `temp1`…, as the NAS names them) and fan speed and mode, from `fanctld.sh`.
+- Buffalo TeraStation and LinkStation: whether the last time sync (NTP) worked, and the last firmware check that found it up to date.
+
+These come from the messages already stored, so nothing extra is kept. They only show while the device keeps sending them. They don't alert: the NAS logs its own overheating and fan errors as errors, and those alert as usual.
+
 ### How services affect status
 
 - Services are only checked while the computer is answering pings. Each service has its own count: one failure turns its chip amber, and two in a row turns it red.

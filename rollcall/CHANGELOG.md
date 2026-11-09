@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.37.0 - 2026-11-09
+
+### Added
+- **Readings from syslog** at the top of the **Logs** tab. Buffalo TeraStation and LinkStation units show:
+  - each temperature sensor and the fan speed and mode, with the latest value, the 24-hour range and a small graph;
+  - whether the last time sync (NTP) worked;
+  - the last firmware check that found the firmware up to date.
+
+  The readings are worked out from the stored messages, so nothing extra is kept.
+
 ## 1.36.0 - 2026-11-09
 
 ### Added

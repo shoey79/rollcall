@@ -2006,6 +2006,25 @@ async function openLogs(key) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load the logs.</p>`;
   }
 }
+// Readings the device reports in its log messages (e.g. a TeraStation's temperatures and fan speed).
+function spark(vals) {
+  if (!vals || vals.length < 2) return "";
+  const lo = Math.min(...vals), hi = Math.max(...vals), w = 120, h = 24;
+  const span = Math.max(hi - lo, Math.abs(hi) * 0.05, 1);  // a few RPM either way stays a flat line
+  const pts = vals.map((v, i) => `${(i * w / (vals.length - 1)).toFixed(1)},${(h - 2 - (v - lo) * (h - 4) / span).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+}
+function logReadings(rd, now) {
+  if (!rd || (!(rd.sensors || []).length && !(rd.status || []).length)) return "";
+  const t = s => esc(new Date(s * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}));
+  const rows = (rd.sensors || []).map(r => `<tr><td><b>${esc(r.label)}</b></td>
+      <td>${esc(String(r.value))} ${esc(r.unit)}${r.mode ? ` <small class="muted">(${esc(r.mode)})</small>` : ""}</td>
+      <td>${r.min === r.max ? "steady" : `${esc(String(r.min))}–${esc(String(r.max))} ${esc(r.unit)}`}</td>
+      <td>${spark(r.series)}</td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`)
+    .concat((rd.status || []).map(r => `<tr><td><b>${esc(r.label)}</b></td><td>${r.ok ? `<span class="okc">${esc(r.value)}</span>` : `<b class="old">${esc(r.value)}</b>`}</td>
+      <td colspan="2"><small class="muted">last reported ${t(r.at)}</small></td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`));
+  return sect("Readings from its logs", `<table class="small"><thead><tr><th>Reading</th><th>Latest</th><th>Last 24 h</th><th></th><th>Reported</th></tr></thead><tbody>${rows.join("")}</tbody></table>`);
+}
 function renderLogs(x) {
   const body = document.getElementById("detBody"), canEdit = data && data.can_edit === true;
   const hadFocus = document.activeElement && document.activeElement.id === "logQ";
@@ -2022,6 +2041,7 @@ function renderLogs(x) {
       ${alerting && !canEdit ? `<span class="hint">${alerting} unacknowledged alert${alerting === 1 ? "" : "s"}</span>` : ""}
     </div>
     <p class="hint" style="margin:6px 0 10px">Alerts on ${esc(alertText)}${x.keywords.length ? `, and always on <b>${x.keywords.map(esc).join("</b>, <b>")}</b>` : ""}${x.ignore.length ? `; never on <b>${x.ignore.map(esc).join("</b>, <b>")}</b>` : ""}. Change this with Edit. Messages are kept for the add-on's history days.</p>`;
+  html += logReadings(x.readings, x.now);
   if (!x.rows.length) {
     html += `<p class="empty-note">${logQ || logSev < 7 ? "No messages match." :
       `No messages yet. Set the device to send syslog to Home Assistant's IP address, UDP port <b>${x.port || 514}</b>.`}</p>`;
