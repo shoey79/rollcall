@@ -523,6 +523,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
 
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
@@ -553,7 +554,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 **Failed logons** are grouped by account and source. Each group shows Windows' reason (e.g. "user name doesn't exist", "wrong password", "account locked out"), the logon type, the method (NTLM, Kerberos) and the client's computer name. A user name sent with the domain already in it reads e.g. `contoso\svc_backup (with domain CONTOSO)`, which usually means a saved credential is typed wrongly.
 
-**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
+**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker, certificates and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
 
 ### LAPS
 
@@ -584,6 +585,16 @@ Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.2
 - Removable drives (BitLocker To Go) and drives without a letter aren't checked.
 
 The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
+
+### Certificates
+
+The agent (1.0.23 or later) lists the certificates with a private key in the computer's **Personal**, **Remote Desktop** and **Web Hosting** stores, and when each expires. That covers certificates the network check can't see, such as LDAPS on domain controllers, SQL Server, RD Connection Broker and internal services. Keys are never read.
+
+- **Amber** within `cert_warn_days` (30) of expiry, **red** within `cert_crit_days` (7) or once expired. These are the same options as the network certificate check.
+- **Renewals don't alert.** When a newer certificate with the same name is valid, the old one is marked *Replaced*. A certificate that expired over 30 days ago and isn't bound to anything is marked *Old, not in use*. Neither counts.
+- **Used by** shows what a certificate is bound to: HTTPS bindings (IIS, RD Gateway, WinRM, ADFS), from `netsh http show sslcert`, and the Remote Desktop listener. Services such as LDAPS and SQL Server pick a certificate themselves, so every certificate counts, bound or not.
+- Windows' own self-signed Remote Desktop certificate isn't checked, because Windows renews it.
+- To leave one out, use **Ignore** on its row (`cert:<thumbprint>`, or `cert:<name>`); to leave the check off a computer, ignore the whole check (`cert:certs`).
 
 ### Administrators group
 
@@ -636,7 +647,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 

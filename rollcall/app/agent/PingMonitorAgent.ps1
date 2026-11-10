@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.22'
+$AgentVersion = '1.0.23'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -777,6 +777,78 @@ function Get-TpmInfo {
     }
 }
 
+function Get-StoreCerts([string]$Store) {
+    @(Get-ChildItem -Path "Cert:\LocalMachine\$Store" -ErrorAction Stop)
+}
+
+function Get-CertBindings {
+    # Thumbprints of certificates in use: HTTP.sys bindings (IIS, RD Gateway, WinRM HTTPS, ADFS...)
+    # and the Remote Desktop listener. Lower-case hex, no spaces.
+    $map = @{}
+    try {
+        $out = & netsh.exe http show sslcert 2>$null
+        $where = ''
+        foreach ($line in $out) {
+            if ($line -match '^\s*(IP:port|Hostname:port|Central Certificate Store)\s*:\s*(\S+)') { $where = $Matches[2] }
+            elseif ($line -match '^\s*Certificate Hash\s*:\s*([0-9a-fA-F]{40})') {
+                $t = $Matches[1].ToLower()
+                if (-not $map[$t]) { $map[$t] = New-Object System.Collections.Generic.List[string] }
+                if ($where -and $map[$t].Count -lt 4) { $map[$t].Add("HTTPS $where") }
+            }
+        }
+    } catch { }
+    try {
+        $ts = Get-CimInstance -Namespace 'root\cimv2\TerminalServices' -ClassName Win32_TSGeneralSetting -Filter "TerminalName='RDP-Tcp'" -ErrorAction Stop
+        $t = ([string]$ts.SSLCertificateSHA1Hash).ToLower()
+        if ($t -match '^[0-9a-f]{40}$') {
+            if (-not $map[$t]) { $map[$t] = New-Object System.Collections.Generic.List[string] }
+            $map[$t].Add('Remote Desktop')
+        }
+    } catch { }
+    return $map
+}
+
+function Get-CertificateReport {
+    # Certificates with a private key in the computer's Personal, Remote Desktop and Web Hosting stores:
+    # what they're for and when they expire. Never exports a key.
+    $bind = Get-CertBindings
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($store in 'My', 'Remote Desktop', 'WebHosting') {
+        $certs = @()
+        try { $certs = Get-StoreCerts $store } catch { continue }
+        foreach ($c in $certs) {
+            if (-not $c.HasPrivateKey) { continue }
+            $self = $c.Subject -eq $c.Issuer
+            if ($store -eq 'Remote Desktop' -and $self) { continue }  # Windows makes and renews these itself
+            $t = ([string]$c.Thumbprint).ToLower()
+            $tpl = ''
+            foreach ($e in @($c.Extensions)) {
+                if ($e.Oid.Value -in '1.3.6.1.4.1.311.21.7', '1.3.6.1.4.1.311.20.2') {
+                    $f = $e.Format($false)
+                    $tpl = if ($f -match 'Template=([^(,]+)') { $Matches[1].Trim() } else { $f.Trim() }
+                    break
+                }
+            }
+            $dns = @()
+            try { $dns = @($c.DnsNameList | ForEach-Object { [string]$_.Unicode } | Select-Object -First 6) } catch { }
+            $list.Add([ordered]@{
+                thumbprint = $t
+                store      = $store
+                subject    = Limit-Text ($c.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)) 120
+                issuer     = Limit-Text ($c.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $true)) 120
+                names      = @($dns)
+                not_before = ConvertTo-UtcString $c.NotBefore
+                not_after  = ConvertTo-UtcString $c.NotAfter
+                self_signed = $self
+                template   = Limit-Text $tpl 80
+                used_by    = @(if ($bind[$t]) { $bind[$t] })
+            })
+            if ($list.Count -ge 60) { break }
+        }
+    }
+    return [ordered]@{ certs = $list.ToArray() }  # @() of an empty List fails inside a hashtable literal
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1418,6 +1490,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
+    try {
+        $certs = Measure-Step 'certificates' { Get-CertificateReport }
+        if ($certs -and $certs.certs.Count) { $report.checks.certs = $certs }
+    } catch { Add-CollectorError 'certificates' $_ }
     try {
         $storage = Measure-Step 'storage health' { Get-StorageHealth $State }
         if ($storage) { $report.checks.storage = $storage }

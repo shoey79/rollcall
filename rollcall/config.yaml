@@ -1,5 +1,5 @@
 name: Rollcall
-version: "1.46.2"
+version: "1.47.0"
 slug: ping_monitor
 description: "Who's up, and how are they doing? Server monitoring by ping, service checks, Home Assistant sensors and optional Windows and Linux agents (disk, services, containers, logs, security, updates), with a dashboard and alerts."
 url: https://github.com/shoey79/rollcall

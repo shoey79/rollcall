@@ -2282,7 +2282,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2880,6 +2880,14 @@ class Monitor:
             now = time.time()
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
                 {**j, "_level": lv, "_why": why} for j in bk.get("jobs") or [] for lv, why in [agentlib.backup_job_state(j, now)]]}}
+        cs = (r.get("checks") or {}).get("certs")
+        if cs and cs.get("certs"):  # each certificate's state as the check sees it, for the Security tab
+            ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
+            res = agentlib.cert_store_state(cs["certs"], time.time(), int(self.opts.get("cert_warn_days", 30)),
+                                            int(self.opts.get("cert_crit_days", 7)), ign)
+            states = res[2]["states"] if res else {}
+            r["checks"] = {**r["checks"], "certs": {**cs, "certs": [{**c, "_state": (states.get(c["thumbprint"]) or ["", ""])[0]}
+                                                                    for c in cs["certs"]]}}
         if not include_security:
             r.pop("security", None)
         hist = {k: [{**{kk: vv for kk, vv in i.items() if kk != "_rx"}, "received": i.get("_rx")} for i in v[-100:]]
@@ -3004,7 +3012,7 @@ class Monitor:
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
-                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")),
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)),
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),

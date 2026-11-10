@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.47.0 - 2026-11-10
+
+### Added
+- **Certificates check** (Windows agent 1.0.23). It covers certificates with a private key in the computer's Personal, Remote Desktop and Web Hosting stores, including ones used by LDAPS, SQL Server and RD Connection Broker that the network check can't see.
+  - Amber within `cert_warn_days` (30) of expiry, red within `cert_crit_days` (7) or once expired.
+  - A certificate replaced by a newer one with the same name doesn't alert. Nor does one that expired over 30 days ago and isn't bound to anything.
+  - Shows what each certificate is bound to: HTTPS bindings (IIS, RD Gateway, WinRM, ADFS) and Remote Desktop.
+  - On the Security tab. One certificate (`cert:<thumbprint>`) or the whole check (`cert:certs`) can be ignored.
+
+### Changed
+- **Details:** sections are separated by a line, so tabs with several sections, such as Security, are easier to read.
+
 ## 1.46.2 - 2026-11-10
 
 ### Changed

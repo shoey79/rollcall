@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -269,6 +270,13 @@ def normalize_report(r) -> dict:
             c["bitlocker"]["tpm"] = {"present": tpm.get("present") if isinstance(tpm.get("present"), bool) else None,
                                      **{k: tpm.get(k) if isinstance(tpm.get(k), bool) else None for k in ("enabled", "activated")},
                                      **{k: str(tpm.get(k) or "")[:20] for k in ("version", "maker")}}
+    if "certs" in c:
+        c["certs"] = {"certs": [
+            {"thumbprint": str(x.get("thumbprint") or "").lower()[:40], "store": str(x.get("store") or "")[:30],
+             **{k: str(x.get(k) or "")[:120] for k in ("subject", "issuer", "not_before", "not_after", "template")},
+             "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
+             "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
+            for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
     if "backups" in c:
         b = c["backups"] = _as_dict(c["backups"])
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
@@ -441,7 +449,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert")
 
 
 def disk_key(name) -> str:
@@ -596,6 +604,57 @@ def bitlocker_state(bl: dict, workstation: bool, require: str = "workstations", 
 
 def _cap(s: str) -> str:
     return s[0].upper() + s[1:] if s else s
+
+
+def cert_store_state(certs: list[dict], now: float, warn_days: int = 30, crit_days: int = 7,
+                     ign: "Ignore | None" = None) -> tuple[str, str, dict] | None:
+    """(level, detail, info) for the certificates in the computer's own stores, or None if there are none.
+
+    info["states"] maps each thumbprint to (state, text) for the Details table. A certificate that a newer,
+    valid one with the same name has replaced doesn't count (renewal leaves the old one behind), and nor
+    does one that expired over 30 days ago and isn't bound to anything: those are leftovers. Anything
+    else counts, bound or not, since services such as LDAPS and SQL Server pick a certificate themselves."""
+    if not certs:
+        return None
+    states, bad = {}, []
+    for c in certs:
+        t, exp, start = c["thumbprint"], _ts(c["not_after"]), _ts(c["not_before"])
+        if exp is None:
+            continue
+        name = (c["subject"] or "").lower()
+        newer = any(o["thumbprint"] != t and (o["subject"] or "").lower() == name and (_ts(o["not_after"]) or 0) > exp
+                    and (_ts(o["not_before"]) or 0) <= now < (_ts(o["not_after"]) or 0) for o in certs)
+        days = (exp - now) / DAY
+        when = f"expired {_day(exp)}" if days < 0 else f"expires {_day(exp)}"
+        if ign and (ign.has("cert", t) or (name and ign.has("cert", c["subject"]))):
+            states[t] = ("ignored", when)
+        elif newer:
+            states[t] = ("replaced", when + ", replaced by a newer certificate")
+        elif days < 0 and not c["used_by"] and days < -30:
+            states[t] = ("old", when + ", not in use")
+        elif days < 0:
+            states[t] = ("crit", when)
+            bad.append((CRIT, -1e9 + days, c, f"expired on {_day(exp)}"))
+        elif days <= crit_days:
+            states[t] = ("crit", when)
+            bad.append((CRIT, days, c, "expires within a day" if days < 1 else f"expires in {math.ceil(days)} day{'s' if math.ceil(days) > 1 else ''}"))
+        elif days <= warn_days:
+            states[t] = ("warn", when)
+            bad.append((WARN, days, c, f"expires in {math.ceil(days)} days"))
+        else:
+            states[t] = ("ok", when)
+    info = {"states": states}
+    if not bad:
+        valid = [c for c in certs if states.get(c["thumbprint"], ("",))[0] == "ok"]
+        if not valid:
+            return None
+        soonest = min(valid, key=lambda c: _ts(c["not_after"]) or 0)
+        return OK, f"{len(valid)} certificate(s) valid; next to expire: {soonest['subject'] or soonest['thumbprint'][:8]} on {_day(_ts(soonest['not_after']))}", info
+    bad.sort(key=lambda b: (b[0] != CRIT, b[1]))
+    lvl, _d, c, why = bad[0]
+    use = f" ({', '.join(c['used_by'][:2])})" if c["used_by"] else ""
+    more = f"; {len(bad) - 1} more within {warn_days} days" if len(bad) > 1 else ""
+    return lvl, f"{c['subject'] or c['thumbprint'][:8]} {why}{use}{more}", info
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
@@ -895,6 +954,12 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    cs = rc.get("certs")
+    if cs and not ign.has("cert", "certs"):
+        res = cert_store_state(cs.get("certs") or [], now, int(opts.get("cert_warn_days", 30)), int(opts.get("cert_crit_days", 7)), ign)
+        if res:
+            checks.append(_check("certs", "Certificates", res[0], res[1], confirm=res[0] == CRIT, info=res[2]))
 
     bl = rc.get("bitlocker")
     if bl and not ign.has("bitlocker", "bitlocker"):
