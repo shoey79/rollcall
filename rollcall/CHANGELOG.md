@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.53.3 - 2026-11-10
+
+### Changed
+- **Automatic icons** recognise TP-Link model codes in the name or make and model ([#2](https://github.com/shoey79/rollcall/issues/2)):
+  - Tapo plugs and strips (P100–P125, P300, P304M) and Kasa plugs (HS100–HS110, KP105–KP303, EP10, EP25) get the smart plug icon.
+  - Tapo cameras (C100, C200, C310…) get the camera icon.
+
 ## 1.53.2 - 2026-11-10
 
 ### Added
