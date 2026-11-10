@@ -25,7 +25,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding computers, icons
+2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding computers, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
 4. [Watching devices](#watching-devices): SNMP, syslog, linked Home Assistant devices
 5. [Windows agent](#windows-agent)
@@ -130,6 +130,29 @@ hosts:
 ```
 
 On the next start they're merged into the dashboard list. They're matched by name, so an existing computer is updated rather than duplicated. The add-on then clears the option, so the dashboard stays the one place to manage them. If Home Assistant doesn't let it clear the option, entries already imported are ignored on later starts. That way they can't overwrite your changes or bring back a computer you deleted.
+
+### Discovering devices
+
+![Discover devices: what a network scan found, with a guess at each device](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/discovery.png)
+
+**Manage → Discover devices** scans your network for devices that aren't in Rollcall yet (admins and editors only).
+
+1. **Addresses to scan:** the networks to look at, e.g. `192.168.1.0/24`, `10.0.1.1-200` or single addresses, separated by commas. Rollcall suggests the network Home Assistant is on and the ones your computers are on. Only private addresses can be scanned, up to 1,024 per range (a /22) and 4,096 in all.
+2. **SNMP community:** used to read switches, NAS boxes and UPS cards (`public` unless you've changed it).
+3. **Scan.** A /24 usually takes under a minute. You can close the window and come back; the last scan is kept.
+
+For each address, Rollcall:
+- pings it and checks about 40 common ports (SSH, RDP, SMB, HTTP/HTTPS, LDAP, SQL, printing, and others). Addresses that don't answer ping get a quick port check too, since Windows often blocks ping.
+- looks up the device's DNS name, its NetBIOS name, workgroup or domain and MAC address (Windows and Samba), its SNMP name and description, whether SIP answers (phones and ATAs), and its web page's title.
+
+From that it guesses what the device is: domain controller, Exchange, SQL Server, Windows computer, Linux, NAS (Synology, QNAP, Buffalo, TrueNAS), printer, UPS, switch or router, VoIP phone or ATA, camera, Pi-hole, Proxmox, ESXi, server management card or UniFi. It also suggests the matching checks.
+
+- **Add** opens the Add form with the name, address (the DNS name when there is one), make and model, and suggested checks filled in. Check it and save. For Windows and Linux servers, the [agent](#windows-agent) gives far more detail than port checks.
+- **Hide** takes a device off the list (e.g. phones, TVs, guests). **Show hidden** brings them back.
+- Devices already in Rollcall are left out unless you tick **Show devices already in Rollcall**; then they link to their Details.
+- **Doesn't answer ping:** Rollcall checks by ping, so once added it would show as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent, as a computer counts as up while its agent reports.
+
+The add-on runs in Home Assistant's container network, so it can't read MAC addresses from the ARP table; the MAC shown comes from the NetBIOS reply. A scan sends a ping and a few connection attempts to every address, so intrusion detection on your network may notice it. Each scan is logged with who started it.
 
 ### Icons and make/model
 

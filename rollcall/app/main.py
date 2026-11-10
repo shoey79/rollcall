@@ -47,6 +47,7 @@ import syslogrx as sysloglib
 import certcheck
 import sipcheck
 import syslogreadings
+import discovery
 import hadevice
 import msi as msilib
 from agents import AgentStore, clean_enrol_info, evaluate
@@ -82,6 +83,7 @@ HOSTS_PATH = Path(os.environ.get("PM_HOSTS", str(DB_PATH.parent / "hosts.json"))
 IMPORT_MARK = HOSTS_PATH.with_name("imported_options.json")
 AGENTS_PATH = Path(os.environ.get("PM_AGENTS", str(DB_PATH.parent / "agents.json")))
 AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "agent_reports")))
+DISCOVERY_PATH = Path(os.environ.get("PM_DISCOVERY", str(DB_PATH.parent / "discovery.json")))  # the last network scan
 ICONS_DIR = Path(os.environ.get("PM_ICONS", str(DB_PATH.parent / "icons")))  # uploaded device pictures
 ICON_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "svg": "image/svg+xml"}
 ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)$")
@@ -1222,6 +1224,25 @@ class HomeAssistant:
         except Exception:  # noqa: BLE001
             return {}
 
+    async def host_networks(self) -> list[str]:
+        """Home Assistant's own IPv4 addresses with prefix, e.g. ["192.168.1.5/24"], from the Supervisor."""
+        if not self.enabled:
+            return []
+        try:
+            async with self.session.get(f"{SUPERVISOR_API}/network/info",
+                                        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status >= 400:
+                    return []
+                data = (await resp.json()).get("data") or {}
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for i in data.get("interfaces") or []:
+            if i.get("connected") is False:
+                continue
+            out += [a for a in ((i.get("ipv4") or {}).get("address") or []) if isinstance(a, str)]
+        return out
+
     async def addon_slug(self) -> str | None:
         """This add-on's slug from the Supervisor (e.g. local_ping_monitor)."""
         if not self.enabled:
@@ -1343,6 +1364,8 @@ class Monitor:
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
         self.syslog_unknown: dict[str, dict] = {}
+        self.scan: discovery.Scan | None = None
+        self.discovery = self._load_discovery()
         self.syslog_port: int | None = None  # the port on the Home Assistant machine, if known
         self.ha = ha
         self.interval = int(opts["interval"])
@@ -2488,6 +2511,71 @@ class Monitor:
         if changed:
             hs["domain_changes"] = changes[-50:]
             self._save_agent_settings()
+
+    # ---- Network discovery ----
+    @staticmethod
+    def _load_discovery() -> dict:
+        try:
+            d = json.loads(DISCOVERY_PATH.read_text())
+            return {"results": list(d.get("results") or []), "summary": dict(d.get("summary") or {}),
+                    "ranges": str(d.get("ranges") or ""), "hidden": list(d.get("hidden") or [])}
+        except (OSError, ValueError):
+            return {"results": [], "summary": {}, "ranges": "", "hidden": []}
+
+    def _save_discovery(self) -> None:
+        try:
+            tmp = DISCOVERY_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.discovery))
+            tmp.replace(DISCOVERY_PATH)
+        except OSError as err:
+            log.warning("Couldn't save the network scan: %s", err)
+
+    def known_addresses(self) -> dict[str, str]:
+        """Every address a computer in Rollcall uses, mapped to its key."""
+        out: dict[str, str] = {}
+        for h in self.hosts.values():
+            for a in [h.ip, h.host] + [x for s in h.services for x in (s.resolved, s.target) if x]:
+                if a:
+                    out.setdefault(str(a), h.key)
+        return out
+
+    async def start_scan(self, ranges: str, community: str, who: str) -> dict:
+        if self.scan and self.scan.finished is None:
+            return {"error": "a scan is already running"}
+        addrs, problems = discovery.parse_ranges(ranges)
+        if problems:
+            return {"error": "; ".join(problems)}
+        if not addrs:
+            return {"error": "give an address range to scan, e.g. 192.168.1.0/24"}
+        ping_one = lambda ip: ping(ip, 1, 1)  # noqa: E731
+        self.scan = discovery.Scan(addrs, community, ping_one, self.known_addresses(), who)
+        log.info("Network scan of %s (%d addresses) started by %s", ranges.strip(), len(addrs), who or "someone")
+
+        async def run(sc=self.scan):
+            await sc.run()
+            self.discovery.update(results=sc.results, summary=sc.summary(), ranges=ranges.strip())
+            self._save_discovery()
+            log.info("Network scan finished: %d device(s) found in %d addresses%s", sc.found, sc.done, " (cancelled)" if sc.cancelled else "")
+        self.scan.task = asyncio.create_task(run())
+        return {"ok": True, "total": len(addrs)}
+
+    async def discovery_view(self) -> dict:
+        sc = self.scan if self.scan and self.scan.finished is None else None
+        results = sc.results if sc else self.discovery["results"]
+        known = self.known_addresses()
+        by_name = {h.host.lower().rstrip("."): h.key for h in self.hosts.values() if h.host}  # added by name, not looked up yet
+        for d in results:
+            n = (d.get("dns") or "").lower().rstrip(".")
+            if d["ip"] not in known and n and (n in by_name or n.split(".")[0] in by_name):
+                known[d["ip"]] = by_name.get(n) or by_name[n.split(".")[0]]
+        hidden = set(self.discovery["hidden"])
+        name_of = lambda k: self.hosts[k].name if k in self.hosts else None  # noqa: E731
+        out = [{**d, "known": known.get(d["ip"]), "known_name": name_of(known.get(d["ip"])), "hidden": d["ip"] in hidden}
+               for d in sorted(results, key=lambda d: tuple(int(x) for x in d["ip"].split(".")))]
+        nets = await self.ha.host_networks()
+        return {"running": bool(sc), "summary": sc.summary() if sc else self.discovery["summary"], "results": out,
+                "ranges": self.discovery["ranges"], "suggested": discovery.suggest_ranges([h.ip or h.host for h in self.hosts.values()], nets),
+                "ha_networks": nets}
 
     async def _backup_alerts(self, h: Host, report: dict) -> None:
         """One notification per failed Veeam job run, and one when a job becomes overdue."""
@@ -3769,6 +3857,33 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         h.next_due = 0
         return web.json_response({"ack": h.syslog_ack})
 
+    async def discovery_get(_req):
+        return web.json_response(await monitor.discovery_view())
+
+    async def discovery_scan(req):
+        body = await req.json()
+        user = await access.who(req)
+        res = await monitor.start_scan(str(body.get("ranges") or "")[:2000], str(body.get("community") or "public")[:64], user["display"] or "")
+        return web.json_response(res, status=400 if res.get("error") else 200)
+
+    async def discovery_cancel(_req):
+        if monitor.scan and monitor.scan.finished is None:
+            monitor.scan.cancelled = True
+        return web.json_response({"ok": True})
+
+    async def discovery_hide(req):
+        body = await req.json()
+        ip, hide = str(body.get("ip") or ""), bool(body.get("hide", True))
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            return web.json_response({"error": "invalid address"}, status=400)
+        hidden = set(monitor.discovery["hidden"])
+        (hidden.add if hide else hidden.discard)(ip)
+        monitor.discovery["hidden"] = sorted(hidden)[:2000]
+        monitor._save_discovery()
+        return web.json_response({"ok": True})
+
     async def syslog_forget(req):
         body = await req.json()
         monitor.syslog_unknown.pop(str(body.get("ip")), None)
@@ -3866,6 +3981,10 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/api/hosts/{key}/syslog", host_syslog)
     app.router.add_post("/api/hosts/{key}/syslog/ack", editor_only(host_syslog_ack))
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
+    app.router.add_get("/api/discovery", editor_only(discovery_get))
+    app.router.add_post("/api/discovery/scan", editor_only(discovery_scan))
+    app.router.add_post("/api/discovery/cancel", editor_only(discovery_cancel))
+    app.router.add_post("/api/discovery/hide", editor_only(discovery_hide))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))

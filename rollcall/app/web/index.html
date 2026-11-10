@@ -148,6 +148,8 @@ legend small{font-weight:400}
 dialog.wide{width:min(980px,calc(100vw - 24px))}
 .sect{margin:16px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
 .sect:first-child{border-top:0;padding-top:0;margin-top:4px}
+.discform{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}.discfilters{display:flex;gap:18px;flex-wrap:wrap;margin:4px 0 8px;font-size:13px}
+.discprog{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0}.discprog div{height:100%;background:var(--accent);transition:width .4s}
 .sect h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 6px;font-weight:600}
 .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 18px;font-size:13px}
 .kv div span{display:block;color:var(--muted);font-size:11px}
@@ -392,6 +394,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
       <div class="menu" id="mainMenu" role="menu" hidden>
         <button type="button" id="addHost" role="menuitem">Add computer</button>
         <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
+        <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added">Discover devices</button>
         <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export">Export / import</button>
         <hr>
         <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host">Reset all uptime…</button>
@@ -424,6 +427,14 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   <form method="dialog">
     <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents only send reports; they never take instructions.</div></div>
     <div class="dlg-body" id="agBody"></div>
+    <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="discDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Discover devices</h2><div class="sub">Scan your network for devices that aren't in Rollcall yet. Each one gets a guess at what it is and which checks would suit it; <b>Add</b> fills in the form for you.</div></div>
+    <div class="dlg-body" id="discBody"></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
   </form>
 </dialog>
@@ -2876,6 +2887,100 @@ document.getElementById("agBody").addEventListener("click", async e => {
   }
 });
 document.getElementById("agentsBtn").addEventListener("click", openAgents);
+
+// ---- Network discovery ----
+let disc = null, discTimer = null, discShowKnown = false, discShowHidden = false;
+const PORT_NAMES = {21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP", 81: "HTTP 81", 88: "Kerberos", 135: "RPC", 139: "NetBIOS", 389: "LDAP", 443: "HTTPS",
+  445: "SMB", 515: "LPD", 548: "AFP", 554: "RTSP", 631: "IPP", 636: "LDAPS", 873: "rsync", 902: "ESXi", 1433: "SQL", 1883: "MQTT", 3000: "3000", 3306: "MySQL", 3389: "RDP",
+  5000: "5000", 5001: "5001", 5432: "PostgreSQL", 5900: "VNC", 5985: "WinRM", 8006: "Proxmox", 8007: "PBS", 8080: "HTTP 8080", 8086: "InfluxDB", 8096: "Jellyfin", 8123: "Home Assistant",
+  8443: "HTTPS 8443", 8530: "WSUS", 9100: "Printing", 9392: "Veeam", 32400: "Plex"};
+async function openDiscovery() {
+  document.getElementById("discBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  if (!discDlg.open) discDlg.showModal();
+  await loadDiscovery(true);
+}
+async function loadDiscovery(first) {
+  try {
+    const r = await fetch("api/discovery", {cache: "no-store"});
+    if (!r.ok) throw new Error(r.status);
+    disc = await r.json();
+  } catch (e) { document.getElementById("discBody").innerHTML = `<p class="empty-note">Couldn't load discovery.</p>`; return; }
+  renderDiscovery(first);
+  clearTimeout(discTimer);
+  if (disc.running && discDlg.open) discTimer = setTimeout(() => loadDiscovery(false), 1500);
+}
+function renderDiscovery(first) {
+  const body = document.getElementById("discBody");
+  const keep = first ? null : {ranges: (document.getElementById("discRanges") || {}).value, comm: (document.getElementById("discComm") || {}).value, scroll: body.scrollTop};
+  const sm = disc.summary || {};
+  const ranges = keep && keep.ranges != null ? keep.ranges : disc.ranges || (disc.suggested || []).join(", ");
+  const res = disc.results || [];
+  const shown = res.filter(d => (discShowKnown || !d.known) && (discShowHidden || !d.hidden));
+  const nKnown = res.filter(d => d.known).length, nHidden = res.filter(d => d.hidden && !d.known).length;
+  const when = t => t ? new Date(t * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
+  const pct = sm.total ? Math.round(100 * sm.done / sm.total) : 0;
+  let html = `<div class="discform">
+    <label class="field" style="flex:3;min-width:240px"><span>Addresses to scan</span><input id="discRanges" value="${esc(ranges)}" placeholder="e.g. 192.168.1.0/24, 10.0.1.1-200" spellcheck="false" ${disc.running ? "disabled" : ""}></label>
+    <label class="field" style="flex:1;min-width:120px"><span>SNMP community</span><input id="discComm" value="${esc(keep && keep.comm != null ? keep.comm : "public")}" maxlength="64" spellcheck="false" autocomplete="off" ${disc.running ? "disabled" : ""}></label>
+    <div style="align-self:flex-end">${disc.running ? `<button type="button" id="discCancel">Stop</button>` : `<button type="button" class="primary" id="discGo">Scan</button>`}</div></div>
+    <p class="hint" style="margin:4px 0 10px">Private addresses only, up to 1,024 per range (a /22). ${(disc.suggested || []).length ? `Suggested: ${disc.suggested.map(r => `<a href="#" data-discrange="${esc(r)}">${esc(r)}</a>`).join(", ")} (Home Assistant's network and the ones your computers are on). ` : ""}A /24 usually takes under a minute. Each address gets a ping and a quick look at common ports, so security tools on your network may notice the scan.</p>`;
+  if (disc.running) html += `<div class="discprog"><div style="width:${pct}%"></div></div><p class="empty-note">Scanning: ${sm.done} of ${sm.total} addresses, ${sm.found} device(s) found so far…</p>`;
+  else if (sm.finished) html += `<p class="empty-note">Last scan ${esc(when(sm.finished))}${sm.by ? " by " + esc(sm.by) : ""}: ${sm.found} device(s) in ${sm.done} addresses${sm.cancelled ? " (stopped early)" : ""}.</p>`;
+  if (res.length) {
+    html += `<div class="discfilters"><label><input type="checkbox" id="discKnown" ${discShowKnown ? "checked" : ""}> Show devices already in Rollcall (${nKnown})</label>
+      <label><input type="checkbox" id="discHidden" ${discShowHidden ? "checked" : ""}> Show hidden (${nHidden})</label></div>`;
+    html += shown.length ? tbl(["Device", "Looks like", "Services", "Details", ""], shown.map(d => {
+      const nb = d.netbios || {}, sn = d.snmp || {}, sip = d.sip || {};
+      const webs = Object.entries(d.web || {}).map(([p, w]) => (w.title || w.server) ? `${p}: ${w.title || w.server}` : "").filter(Boolean);
+      const det = [sn.descr && "SNMP: " + sn.descr, sn.location && "location " + sn.location, sip.agent && "SIP: " + sip.agent, ...webs.map(w => "Web " + w),
+        nb.workgroup && "Domain/workgroup " + nb.workgroup, nb.mac && "MAC " + nb.mac].filter(Boolean);
+      const svc = (d.ports || []).map(p => PORT_NAMES[p] || String(p)).concat(sn.descr ? ["SNMP"] : [], sip.code ? ["SIP"] : []);
+      const act = d.known ? `<button type="button" class="mini" data-discopen="${esc(d.known)}" title="Open it in Rollcall">In Rollcall: ${esc(d.known_name || d.known)}</button>`
+        : `<button type="button" class="mini primary" data-discadd="${esc(d.ip)}">Add</button> <button type="button" class="mini" data-dischide="${esc(d.ip)}" data-hide="${d.hidden ? 0 : 1}">${d.hidden ? "Unhide" : "Hide"}</button>`;
+      return `<tr class="${d.known || d.hidden ? "dim" : ""}"><td><b>${esc(d.name || d.ip)}</b>${d.name ? `<br><small class="mono">${esc(d.ip)}</small>` : ""}${d.dns && d.dns.split(".")[0].toLowerCase() !== (d.name || "").toLowerCase() ? `<br><small class="muted">${esc(d.dns)}</small>` : ""}${d.ping ? "" : `<br><small class="old" title="Rollcall checks by ping, so it would show this as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent: a computer counts as up while its agent reports.">doesn't answer ping</small>`}</td>
+        <td>${esc(d.kind || "Device")}${d.model ? `<br><small class="muted">${esc(d.model)}</small>` : ""}${d.agent ? `<br><small class="muted">${d.agent === "windows" ? "Windows agent recommended" : "Linux agent available"}</small>` : ""}</td>
+        <td><small>${esc(svc.join(", ")) || "—"}</small></td><td><small>${esc(det.join(" · "))}</small></td><td style="white-space:nowrap">${act}</td></tr>`;
+    })) : `<p class="empty-note">Everything found is already in Rollcall${nHidden ? " or hidden" : ""}.</p>`;
+  } else if (!disc.running) html += `<p class="empty-note">No scan yet. Check the addresses above and choose <b>Scan</b>.</p>`;
+  body.innerHTML = html;
+  if (keep) body.scrollTop = keep.scroll;
+}
+document.getElementById("discBtn").addEventListener("click", () => { document.getElementById("mainMenu").hidden = true; openDiscovery(); });
+discDlg.addEventListener("close", () => clearTimeout(discTimer));
+document.getElementById("discBody").addEventListener("click", async e => {
+  const rg = e.target.closest("[data-discrange]");
+  if (rg) { e.preventDefault(); const i = document.getElementById("discRanges"); i.value = rg.dataset.discrange; return i.focus(); }
+  if (e.target.closest("#discGo")) {
+    const r = await fetch("api/discovery/scan", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ranges: document.getElementById("discRanges").value, community: document.getElementById("discComm").value})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return alert(j.error || "Couldn't start the scan.");
+    return loadDiscovery(false);
+  }
+  if (e.target.closest("#discCancel")) { await fetch("api/discovery/cancel", {method: "POST"}); return loadDiscovery(false); }
+  const hd = e.target.closest("[data-dischide]");
+  if (hd) { await fetch("api/discovery/hide", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ip: hd.dataset.dischide, hide: hd.dataset.hide === "1"})}); return loadDiscovery(false); }
+  const op = e.target.closest("[data-discopen]");
+  if (op) { discDlg.close(); return openDevice(op.dataset.discopen); }
+  const ad = e.target.closest("[data-discadd]");
+  if (ad) {
+    const d = (disc.results || []).find(x => x.ip === ad.dataset.discadd); if (!d) return;
+    await openDialog(null);
+    fName.value = d.name || d.ip;
+    fHost.value = d.dns && d.dns.split(".")[0].toLowerCase() === (d.name || "").toLowerCase() ? d.dns.replace(/\.$/, "") : d.ip;
+    if (d.model) document.getElementById("fModel").value = d.model;
+    for (const p of d.presets || []) { const cb = form.querySelector(`.preset input[value="${CSS.escape(p)}"]`); if (cb) cb.checked = true; }
+    const comm = document.getElementById("discComm");
+    if ((d.presets || []).includes("snmp") && comm && comm.value && comm.value !== "public") document.getElementById("fSnmpComm").value = comm.value;
+    updatePicked();
+    return fName.focus();
+  }
+});
+document.getElementById("discBody").addEventListener("change", e => {
+  if (e.target.id === "discKnown") { discShowKnown = e.target.checked; renderDiscovery(false); }
+  if (e.target.id === "discHidden") { discShowHidden = e.target.checked; renderDiscovery(false); }
+});
+document.getElementById("dlg").addEventListener("close", () => { if (discDlg.open) loadDiscovery(false); });  // after adding a device, show it as in Rollcall
 
 // ---- Add / Edit computer dialog ----
 const dlg = document.getElementById("dlg");

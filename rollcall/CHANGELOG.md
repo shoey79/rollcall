@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.53.0 - 2026-11-10
+
+### Added
+- **Discover devices** (Manage menu, admins and editors): scan the network for devices that aren't in Rollcall yet.
+  - Scans the ranges you give, e.g. `192.168.1.0/24`. Home Assistant's own network and the ones your computers are on are suggested. Private addresses only, up to 1,024 per range.
+  - Per address: ping, about 40 common ports (also for addresses that block ping), DNS name, NetBIOS name, domain and MAC, SNMP name and description, SIP, and the web page title.
+  - Each device gets a guess at what it is (domain controller, SQL Server, Exchange, Windows, Linux, NAS, printer, UPS, switch, VoIP phone or ATA, camera, Pi-hole, Proxmox, ESXi and more) and the checks that would suit it.
+  - **Add** fills in the Add form with the name, address, model and those checks. **Hide** takes a device off the list.
+  - Devices that block ping are flagged, as they'd show as down until ping is allowed or an agent is installed.
+  - The last scan is kept, and each scan is logged with who started it.
+
 ## 1.52.0 - 2026-11-10
 
 ### Added
