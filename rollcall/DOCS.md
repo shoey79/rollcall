@@ -523,6 +523,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
 
@@ -586,6 +587,15 @@ Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.2
 
 The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
 
+### Scheduled tasks
+
+The agent (1.0.24 or later) lists the scheduled tasks outside Task Scheduler's **Microsoft** folder: your own scripts and jobs, and other vendors' tasks. Each one shows the account it runs as, when it last ran, its result, and when it's next due. They're on the **Services** tab.
+
+- **Amber** when a task's last run failed, or a timed task (daily, weekly, monthly, one-off) missed a run or is over an hour past its due time. The result code is explained where it's a common one, e.g. `0x1` (script error), `0x8007052E` (the account's password is wrong), `0x80070569` (the account isn't allowed to log on as a batch job).
+- **Not alerted on:** disabled tasks; tasks that are running; results that just mean "ready" or "hasn't run yet"; and other vendors' updaters that fail routinely (Edge, Google, OneDrive, Adobe, Mozilla, Intel, NVIDIA and similar), which show as *Not watched*.
+- **Servers only.** Windows 10/11 PCs list their tasks but don't alert, as they're full of vendor tasks.
+- It clears once the task next runs successfully. To leave one out, use **Ignore** on its row (`task:<name>`); to leave the check off a server, ignore the whole check (`task:tasks`).
+
 ### Certificates
 
 The agent (1.0.23 or later) lists the certificates with a private key in the computer's **Personal**, **Remote Desktop** and **Web Hosting** stores, and when each expires. That covers certificates the network check can't see, such as LDAPS on domain controllers, SQL Server, RD Connection Broker and internal services. Keys are never read.
@@ -647,7 +657,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 

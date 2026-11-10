@@ -277,6 +277,14 @@ def normalize_report(r) -> dict:
              "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
              "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
             for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
+    if "tasks" in c:
+        tk = _as_dict(c["tasks"])
+        c["tasks"] = {"total": tk.get("total") if isinstance(tk.get("total"), int) else None, "tasks": [
+            {**{k: str(x.get(k) or "")[:120] for k in ("name", "path", "state", "last_run", "next_run", "run_as", "action", "author")},
+             "result": x.get("result") if isinstance(x.get("result"), int) and not isinstance(x.get("result"), bool) else None,
+             "missed": x.get("missed") if isinstance(x.get("missed"), int) and not isinstance(x.get("missed"), bool) else None,
+             "triggers": [str(t)[:20] for t in _as_list(x.get("triggers"))][:8]}
+            for x in _as_list(tk.get("tasks")) if isinstance(x, dict) and x.get("name")][:80]}
     if "backups" in c:
         b = c["backups"] = _as_dict(c["backups"])
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
@@ -449,7 +457,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task")
 
 
 def disk_key(name) -> str:
@@ -655,6 +663,59 @@ def cert_store_state(certs: list[dict], now: float, warn_days: int = 30, crit_da
     use = f" ({', '.join(c['used_by'][:2])})" if c["used_by"] else ""
     more = f"; {len(bad) - 1} more within {warn_days} days" if len(bad) > 1 else ""
     return lvl, f"{c['subject'] or c['thumbprint'][:8]} {why}{use}{more}", info
+
+
+# Task Scheduler results that aren't failures: ready, running, disabled, not yet run, no more runs, queued
+TASK_OK_RESULTS = {0, 0x41300, 0x41301, 0x41302, 0x41303, 0x41304, 0x41325, 0x8004131F}  # last: an instance was already running
+TASK_RESULT_TEXT = {0x1: "incorrect function or script error", 0x2: "file not found", 0x3: "path not found", 0x5: "access denied",
+                    0x41306: "stopped before it finished", 0x800710E0: "refused to start (its conditions or account)",
+                    0x80070002: "file not found", 0x80070005: "access denied", 0x8007052E: "the account's password is wrong",
+                    0x80070569: "the account isn't allowed to log on as a batch job", 0x8004131F: "an instance was already running",
+                    0xC000013A: "stopped (Ctrl+C or shutdown)", 0x80041326: "the task is disabled"}
+# Other vendors' updaters and per-user tasks that fail routinely: listed, never alerted on
+TASK_NOISE = re.compile(r"^(MicrosoftEdgeUpdate|GoogleUpdate|GoogleUpdater|OneDrive |Adobe|User_Feed_Synchronization|"
+                        r"CreateExplorerShellUnelevatedTask|Firefox (Default Browser Agent|Background Update)|Opera |"
+                        r"BraveSoftwareUpdate|ZoomUpdate|Intel|NVIDIA|NvTm|Lenovo|Dropbox|npcapwatchdog)", re.I)
+TASK_NOISE_PATHS = re.compile(r"^\\(Mozilla|Google|GoogleSystem|Adobe|Intel|NVIDIA|Lenovo|Apple|Dropbox|Zoom|Opera|BraveSoftware)\\", re.I)
+TASK_TIMED = {"daily", "weekly", "monthly", "time"}
+
+
+def task_result_text(code) -> str:
+    if code is None:
+        return ""
+    return f"0x{code:X}" + (f", {TASK_RESULT_TEXT[code]}" if code in TASK_RESULT_TEXT else "")
+
+
+def task_state(t: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str]:
+    """(state, why) for one scheduled task: ok, failed, missed, disabled, vendor (routine noise), running, ignored."""
+    if ign and (ign.has("task", t["name"]) or ign.has("task", (t["path"] + t["name"]))):
+        return "ignored", ""
+    if t["state"].lower() == "disabled":
+        return "disabled", "disabled"
+    if t["state"].lower() == "running":
+        return "running", "running now"
+    vendor = bool(TASK_NOISE.match(t["name"]) or TASK_NOISE_PATHS.match(t["path"]))
+    code = t.get("result")
+    if code is not None and code not in TASK_OK_RESULTS and t.get("last_run"):
+        return ("vendor" if vendor else "failed"), "last run failed (" + task_result_text(code) + ")"
+    timed = bool(TASK_TIMED & set(t.get("triggers") or []))
+    due = _ts(t.get("next_run")) if t.get("next_run") else None
+    if timed and not vendor and ((t.get("missed") or 0) > 0 or (due and due < now - 3600)):
+        n = t.get("missed") or 0
+        return "missed", f"missed {n} scheduled run{'s' if n != 1 else ''}" if n else "was due over an hour ago and hasn't run"
+    return ("vendor" if vendor else "ok"), ""
+
+
+def tasks_check(tk: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str] | None:
+    tasks = tk.get("tasks") or []
+    if not tasks:
+        return None
+    bad = [(t, why) for t in tasks for st, why in [task_state(t, now, ign)] if st in ("failed", "missed")]
+    if bad:
+        t, why = bad[0]
+        return WARN, f"{t['name']}: {why}" + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
+    mine = [t for t in tasks if task_state(t, now, ign)[0] in ("ok", "running")]
+    return OK, f"{len(mine)} scheduled task(s) OK" if mine else "No scheduled tasks of your own to watch"
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
@@ -954,6 +1015,12 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    tk = rc.get("tasks")
+    if tk and report.get("workstation") is not True and not ign.has("task", "tasks"):  # servers only: PCs are full of vendor tasks
+        res = tasks_check(tk, now, ign)
+        if res:
+            checks.append(_check("tasks", "Scheduled tasks", res[0], res[1]))
 
     cs = rc.get("certs")
     if cs and not ign.has("cert", "certs"):

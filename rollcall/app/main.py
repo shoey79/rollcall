@@ -2282,7 +2282,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2880,6 +2880,12 @@ class Monitor:
             now = time.time()
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
                 {**j, "_level": lv, "_why": why} for j in bk.get("jobs") or [] for lv, why in [agentlib.backup_job_state(j, now)]]}}
+        tk = (r.get("checks") or {}).get("tasks")
+        if tk and tk.get("tasks"):  # each task's state as the check sees it, for the Services tab
+            ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
+            now = time.time()
+            r["checks"] = {**r["checks"], "tasks": {**tk, "tasks": [{**t, "_state": st, "_why": why} for t in tk["tasks"]
+                                                                    for st, why in [agentlib.task_state(t, now, ign)]]}}
         cs = (r.get("checks") or {}).get("certs")
         if cs and cs.get("certs"):  # each certificate's state as the check sees it, for the Security tab
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))

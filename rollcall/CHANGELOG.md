@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.48.0 - 2026-11-10
+
+### Added
+- **Scheduled tasks check** (Windows agent 1.0.24). Lists tasks outside Task Scheduler's Microsoft folder, with the account each runs as, its last run and result, and its next run.
+  - Amber when a task's last run failed, or a timed task missed its run. Common result codes are explained, e.g. a wrong password or no "log on as a batch job" right.
+  - Disabled tasks, running tasks and other vendors' updaters (Edge, Google, OneDrive, Adobe and similar) are listed but don't alert.
+  - Alerts on servers only; Windows 10/11 PCs just list their tasks.
+  - On the Services tab. One task (`task:<name>`) or the whole check (`task:tasks`) can be ignored.
+
 ## 1.47.0 - 2026-11-10
 
 ### Added

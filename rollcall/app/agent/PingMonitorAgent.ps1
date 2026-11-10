@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.23'
+$AgentVersion = '1.0.24'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -849,6 +849,43 @@ function Get-CertificateReport {
     return [ordered]@{ certs = $list.ToArray() }  # @() of an empty List fails inside a hashtable literal
 }
 
+function Get-TaskReport {
+    # Scheduled tasks outside \Microsoft\ (yours, and other vendors'): when each last ran, its result and
+    # when it's next due. The server decides which ones alert.
+    $kinds = @{ MSFT_TaskDailyTrigger = 'daily'; MSFT_TaskWeeklyTrigger = 'weekly'; MSFT_TaskMonthlyTrigger = 'monthly'
+        MSFT_TaskMonthlyDOWTrigger = 'monthly'; MSFT_TaskTimeTrigger = 'time'; MSFT_TaskBootTrigger = 'startup'; MSFT_TaskLogonTrigger = 'logon'
+        MSFT_TaskEventTrigger = 'event'; MSFT_TaskIdleTrigger = 'idle'; MSFT_TaskSessionStateChangeTrigger = 'session'; MSFT_TaskRegistrationTrigger = 'registration' }
+    $all = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -notlike '\Microsoft\*' })
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($t in $all) {
+        if ($list.Count -ge 80) { break }
+        $info = $null
+        try { $info = Get-ScheduledTaskInfo -InputObject $t -ErrorAction Stop } catch { }
+        $last = if ($info -and $info.LastRunTime -and ([DateTime]$info.LastRunTime).Year -gt 2000) { ConvertTo-UtcString $info.LastRunTime } else { $null }
+        $next = if ($info -and $info.NextRunTime -and ([DateTime]$info.NextRunTime).Year -gt 2000) { ConvertTo-UtcString $info.NextRunTime } else { $null }
+        $trig = @(@($t.Triggers) | Where-Object { $_ -and $_.Enabled -ne $false } | ForEach-Object {
+            $k = $kinds[[string]$_.CimClass.CimClassName]; if ($k) { $k } else { 'other' } } | Select-Object -Unique)
+        $user = ''
+        try { $user = [string]$t.Principal.UserId; if (-not $user) { $user = [string]$t.Principal.GroupId } } catch { }
+        $action = ''
+        try { $a = @($t.Actions)[0]; if ($a.Execute) { $action = (Split-Path -Leaf ([string]$a.Execute).Trim('"')) } } catch { }
+        $list.Add([ordered]@{
+            name     = Limit-Text ([string]$t.TaskName) 120
+            path     = Limit-Text ([string]$t.TaskPath) 120
+            state    = [string]$t.State
+            last_run = $last
+            result   = if ($info -and $null -ne $info.LastTaskResult) { [int64][uint32]$info.LastTaskResult } else { $null }
+            next_run = $next
+            missed   = if ($info -and $null -ne $info.NumberOfMissedRuns) { [int]$info.NumberOfMissedRuns } else { $null }
+            triggers = @($trig)
+            run_as   = Limit-Text $user 80
+            action   = Limit-Text $action 80
+            author   = Limit-Text ([string]$t.Author) 80
+        })
+    }
+    return [ordered]@{ tasks = $list.ToArray(); total = $all.Count }
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1490,6 +1527,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
+    try {
+        $tasks = Measure-Step 'scheduled tasks' { Get-TaskReport }
+        if ($tasks -and $tasks.total) { $report.checks.tasks = $tasks }
+    } catch { Add-CollectorError 'scheduled tasks' $_ }
     try {
         $certs = Measure-Step 'certificates' { Get-CertificateReport }
         if ($certs -and $certs.certs.Count) { $report.checks.certs = $certs }
