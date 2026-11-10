@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.49.0 - 2026-11-10
+
+### Added
+- **SQL Server check** (Windows agent 1.0.25), for each running instance. It's on the Roles tab.
+  - **Databases:** red when suspect or recovery pending; amber when offline.
+  - **Backups:** amber when a database has had no full or differential backup for `agent_sql_backup_hours` (36, a new option). Veeam's application-aware backups count. System databases, Veeam's and WSUS's databases, and availability group databases backed up on another replica aren't checked.
+  - **Logs:** amber when a database in full recovery is waiting on a log backup that hasn't happened for a day, so its log keeps growing. Log size and use are shown.
+  - **SQL Agent jobs:** amber when an enabled job's last run failed, with SQL Server's message.
+  - The agent connects as SYSTEM with read-only queries. Where it lacks permission it says so, and Details gives the script that grants read-only access.
+  - A database (`sqldb:<name>`), a job (`sqljob:<name>`) or the whole check (`sqldb:sql`) can be ignored.
+
 ## 1.48.0 - 2026-11-10
 
 ### Added

@@ -523,6 +523,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
 | **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
@@ -586,6 +587,30 @@ Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.2
 - Removable drives (BitLocker To Go) and drives without a letter aren't checked.
 
 The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
+
+### SQL Server
+
+On servers running SQL Server (agent 1.0.25 or later), Rollcall checks each running instance. It's on the **Roles** tab.
+
+- **Databases:** each one's state, recovery model, last full or differential backup, last log backup, and log size and use. **Red** when a database is suspect, recovery pending or in emergency mode. **Amber** when it's offline.
+- **Backups:** **amber** when a database has had no full or differential backup for `agent_sql_backup_hours` (36). Any backup that SQL Server records counts, including Veeam's application-aware backups. Not checked: system databases, databases created since, snapshots, availability group databases that are backed up on another replica, and databases their own application protects (Veeam's configuration database, WSUS's SUSDB).
+- **Logs:** **amber** when a database is in full (or bulk-logged) recovery, its log is waiting for a log backup, and there hasn't been one for a day. In that state the log keeps growing until the disk fills. Either back the log up, or switch the database to simple recovery if point-in-time restores aren't needed.
+- **SQL Agent jobs:** **amber** when an enabled job's last run (in the last 30 days) failed, with SQL Server's message.
+
+**Permissions.** The agent connects as the computer's own account, `NT AUTHORITY\SYSTEM`, with read-only queries. On SQL Server 2012 and later that account can see the databases, but often not the backup history or SQL Agent jobs. When it can't, the check goes amber and Details shows this script, which grants read-only access:
+
+```sql
+USE [master];
+GRANT VIEW SERVER STATE TO [NT AUTHORITY\SYSTEM];
+USE [msdb];
+IF USER_ID('NT AUTHORITY\SYSTEM') IS NULL CREATE USER [NT AUTHORITY\SYSTEM] FOR LOGIN [NT AUTHORITY\SYSTEM];
+ALTER ROLE [db_datareader] ADD MEMBER [NT AUTHORITY\SYSTEM];   -- backup history
+ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\SYSTEM];   -- SQL Agent jobs
+```
+
+If the agent can't log in at all, create the login first: `CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS;`.
+
+To leave out a database, use **Ignore** on its row (`sqldb:<name>`, or `sqldb:<instance>\<name>`); a job, `sqljob:<name>`; the whole check, `sqldb:sql`.
 
 ### Scheduled tasks
 
@@ -657,7 +682,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 
@@ -876,6 +901,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
 | `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
+| `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

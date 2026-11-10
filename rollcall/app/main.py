@@ -128,6 +128,7 @@ DEFAULTS = {
     "agent_failed_logons": 20,
     "agent_laps_overdue_days": 3,
     "agent_bitlocker_require": "workstations",
+    "agent_sql_backup_hours": 36,
     "agent_patch_days": 60,
     "agent_security_alerts": True,
     "agent_event_alerts": True,
@@ -2282,7 +2283,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2880,6 +2881,13 @@ class Monitor:
             now = time.time()
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
                 {**j, "_level": lv, "_why": why} for j in bk.get("jobs") or [] for lv, why in [agentlib.backup_job_state(j, now)]]}}
+        sq = (r.get("checks") or {}).get("sql")
+        if sq and sq.get("instances"):  # each database's state as the check sees it, for the Roles tab
+            ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
+            now, hrs = time.time(), float(self.opts.get("agent_sql_backup_hours", 36))
+            r["checks"] = {**r["checks"], "sql": {**sq, "instances": [
+                {**i, "databases": [{**d, "_level": lv, "_state": st, "_why": why} for d in i.get("databases") or []
+                                    for lv, st, why in [agentlib.sql_db_state(i, d, now, hrs, ign)]]} for i in sq["instances"]]}}
         tk = (r.get("checks") or {}).get("tasks")
         if tk and tk.get("tasks"):  # each task's state as the check sees it, for the Services tab
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
@@ -3018,7 +3026,7 @@ class Monitor:
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
-                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)),
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)),
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),

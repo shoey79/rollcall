@@ -277,6 +277,22 @@ def normalize_report(r) -> dict:
              "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
              "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
             for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
+    if "sql" in c:
+        insts = []
+        for i in _as_list(_as_dict(c["sql"]).get("instances"))[:8]:
+            if not isinstance(i, dict) or not i.get("instance"):
+                continue
+            dbs = [{**{k: str(d.get(k) or "")[:128] for k in ("name", "state", "recovery", "log_wait", "created", "last_full", "last_diff", "last_log")},
+                    **{k: d.get(k) is True for k in ("read_only", "snapshot", "system", "ag")},
+                    "ag_preferred": d.get("ag_preferred") if isinstance(d.get("ag_preferred"), bool) else None,
+                    **{k: float(d[k]) if isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool) else None for k in ("log_mb", "log_used_pct")}}
+                   for d in _as_list(i.get("databases")) if isinstance(d, dict) and d.get("name")][:100]
+            jobs = [{**{k: str(j.get(k) or "")[:300] for k in ("name", "outcome", "last_run", "message")}, "enabled": j.get("enabled") is True}
+                    for j in _as_list(i.get("jobs")) if isinstance(j, dict) and j.get("name")][:60]
+            insts.append({**{k: str(i.get(k) or "")[:200] for k in ("instance", "version", "edition", "level", "login", "connect_error")},
+                          "databases": dbs, "jobs": jobs if "jobs" in i else None, "backups_read": i.get("backups_read") is True,
+                          "denied": [str(x)[:20] for x in _as_list(i.get("denied"))][:6], "errors": [str(x)[:220] for x in _as_list(i.get("errors"))][:6]})
+        c["sql"] = {"instances": insts}
     if "tasks" in c:
         tk = _as_dict(c["tasks"])
         c["tasks"] = {"total": tk.get("total") if isinstance(tk.get("total"), int) else None, "tasks": [
@@ -457,7 +473,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob")
 
 
 def disk_key(name) -> str:
@@ -716,6 +732,78 @@ def tasks_check(tk: dict, now: float, ign: "Ignore | None" = None) -> tuple[str,
         return WARN, f"{t['name']}: {why}" + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
     mine = [t for t in tasks if task_state(t, now, ign)[0] in ("ok", "running")]
     return OK, f"{len(mine)} scheduled task(s) OK" if mine else "No scheduled tasks of your own to watch"
+
+
+SQL_BAD_STATES = {"SUSPECT", "RECOVERY_PENDING", "EMERGENCY"}
+# Databases their own application protects or can rebuild: SQL backups of them aren't expected
+SQL_SELF_MANAGED = re.compile(r"^(VeeamBackup|VeeamBackupReporting|VeeamOne|VeeamONE\w*|VBR\w*|SUSDB)$", re.I)
+
+
+def sql_db_state(i: dict, d: dict, now: float, backup_hours: float = 36, ign: "Ignore | None" = None) -> tuple[str, str, str]:
+    """(level, state, why) for one database: OK/WARN/CRIT plus a short state for the table."""
+    name = d["name"]
+    if ign and (ign.has("sqldb", name) or ign.has("sqldb", f"{i['instance']}\\{name}")):
+        return OK, "ignored", ""
+    if d["state"] in SQL_BAD_STATES:
+        return CRIT, "bad", d["state"].replace("_", " ").lower()
+    if d["state"] == "OFFLINE":
+        return WARN, "offline", "offline"
+    if d["state"] != "ONLINE":
+        return OK, "other", d["state"].replace("_", " ").lower()  # restoring (log shipping) or recovering
+    if d["snapshot"]:
+        return OK, "snapshot", "database snapshot"
+    problems = []
+    managed = bool(SQL_SELF_MANAGED.match(name))
+    if not d["system"] and not managed and i.get("backups_read") and not (d.get("ag") and d.get("ag_preferred") is False):
+        last = max((t for t in (_ts(d.get("last_full")), _ts(d.get("last_diff"))) if t), default=None)
+        created = _ts(d.get("created"))
+        if not (created and now - created < backup_hours * 3600):
+            if last is None:
+                problems.append("no backup in the last 35 days")
+            elif now - last > backup_hours * 3600:
+                problems.append(f"last backup {int((now - last) / 3600)} h ago")
+    if d["recovery"] in ("FULL", "BULK_LOGGED") and d["log_wait"] == "LOG_BACKUP" and not d["system"]:
+        lastlog = _ts(d.get("last_log"))
+        if not lastlog or now - lastlog > 24 * 3600:
+            size = f" ({d['log_mb']:.0f} MB)" if d.get("log_mb") else ""
+            problems.append(f"full recovery, but the log isn't being backed up, so it keeps growing{size}")
+    if problems:
+        return WARN, "attention", "; ".join(problems)
+    return OK, "ok", "backed up by its application" if managed else ""
+
+
+def sql_state(sql: dict, now: float, backup_hours: float = 36, ign: "Ignore | None" = None) -> tuple[str, str] | None:
+    insts = sql.get("instances") or []
+    if not insts:
+        return None
+    bad = []  # (level, text)
+    ok_dbs = 0
+    for i in insts:
+        n = i["instance"]
+        if i.get("connect_error"):
+            why = i["connect_error"]
+            hint = " (the computer's account, SYSTEM, needs a login)" if re.search(r"login failed", why, re.I) else ""
+            bad.append((WARN, f"{n}: can't connect{hint}: {why[:120]}"))
+            continue
+        for d in i.get("databases") or []:
+            lvl, _st, why = sql_db_state(i, d, now, backup_hours, ign)
+            if lvl != OK:
+                bad.append((lvl, f"{d['name']}: {why}"))
+            elif d["state"] == "ONLINE":
+                ok_dbs += 1
+        for j in i.get("jobs") or []:
+            if j["enabled"] and j["outcome"] == "failed" and not (ign and ign.has("sqljob", j["name"])):
+                t = _ts(j.get("last_run"))
+                if t and now - t < 30 * DAY:
+                    bad.append((WARN, f"job '{j['name']}' failed"))
+        if i.get("denied"):
+            bad.append((WARN, f"{n}: can't read {', '.join(i['denied'])} (permission; see Details)"))
+    if bad:
+        bad.sort(key=lambda b: b[0] != CRIT)
+        lvl = CRIT if any(b[0] == CRIT for b in bad) else WARN
+        return lvl, bad[0][1] + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
+    backed = all(i.get("backups_read") for i in insts)
+    return OK, f"{ok_dbs} database(s) online" + (" and backed up" if backed else "") + (f" on {len(insts)} instances" if len(insts) > 1 else "")
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
@@ -1015,6 +1103,12 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    sq = rc.get("sql")
+    if sq and not ign.has("sqldb", "sql"):
+        res = sql_state(sq, now, float(opts.get("agent_sql_backup_hours", 36)), ign)
+        if res:
+            checks.append(_check("sql", "SQL Server", res[0], res[1], confirm=res[0] == CRIT))
 
     tk = rc.get("tasks")
     if tk and report.get("workstation") is not True and not ign.has("task", "tasks"):  # servers only: PCs are full of vendor tasks

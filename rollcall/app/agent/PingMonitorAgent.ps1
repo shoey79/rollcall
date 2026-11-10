@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.24'
+$AgentVersion = '1.0.25'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -886,6 +886,95 @@ function Get-TaskReport {
     return [ordered]@{ tasks = $list.ToArray(); total = $all.Count }
 }
 
+function Invoke-SqlQuery([string]$Instance, [string]$Query, [int]$Timeout = 15) {
+    # One query against a local SQL Server instance as this computer's account (SYSTEM). Rows as ordered hashtables.
+    $cn = [System.Data.SqlClient.SqlConnection]::new("Server=$Instance;Database=master;Integrated Security=SSPI;Connect Timeout=5;Application Name=Rollcall agent")
+    try {
+        $cn.Open()
+        $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = $Timeout
+        $rd = $cmd.ExecuteReader()
+        $rows = New-Object System.Collections.Generic.List[object]
+        while ($rd.Read()) {
+            $h = [ordered]@{}
+            for ($i = 0; $i -lt $rd.FieldCount; $i++) { $v = $rd.GetValue($i); $h[$rd.GetName($i)] = if ($v -is [DBNull]) { $null } else { $v } }
+            $rows.Add($h)
+        }
+        $rd.Close()
+        return $rows.ToArray()  # callers wrap this in @(), so one row or none still makes a list
+    } finally { $cn.Dispose() }
+}
+
+function Get-SqlReport($AllServices) {
+    # Each running SQL Server instance: databases and their state, backups, log use and SQL Agent jobs.
+    # Each part is tried on its own, so a missing permission only loses that part (and says so).
+    $names = @($AllServices | Where-Object { $_.State -eq 'Running' -and ($_.Name -eq 'MSSQLSERVER' -or $_.Name -like 'MSSQL$*') } | ForEach-Object { $_.Name } | Sort-Object | Select-Object -First 8)
+    if (-not $names.Count) { return $null }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($svc in $names) {
+        $inst = if ($svc -eq 'MSSQLSERVER') { '.' } else { '.\' + $svc.Substring(6) }
+        $label = if ($svc -eq 'MSSQLSERVER') { 'MSSQLSERVER' } else { $svc.Substring(6) }
+        $i = [ordered]@{ instance = $label; denied = @(); errors = @() }
+        $fail = { param($part, $err) $m = Limit-Text ([string]$err.Exception.InnerException.Message + [string]$(if (-not $err.Exception.InnerException) { $err.Exception.Message })) 200
+            if ($m -match 'permission|denied|not able to access|Login failed') { $i.denied += $part } else { $i.errors += "${part}: $m" } }
+        try {
+            $v = @(Invoke-SqlQuery $inst "SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(40)) AS version, CAST(SERVERPROPERTY('Edition') AS nvarchar(80)) AS edition, CAST(SERVERPROPERTY('ProductLevel') AS nvarchar(20)) AS level, SUSER_SNAME() AS login")[0]
+            $i.version = [string]$v.version; $i.edition = [string]$v.edition; $i.level = [string]$v.level; $i.login = [string]$v.login
+        } catch {
+            $m = Limit-Text ([string]$_.Exception.Message) 200
+            $i.connect_error = $m
+            $out.Add($i); continue
+        }
+        try {
+            $i.databases = @(Invoke-SqlQuery $inst @"
+SELECT name, state_desc AS state, recovery_model_desc AS recovery, is_read_only AS read_only, log_reuse_wait_desc AS log_wait,
+       create_date AS created, CASE WHEN source_database_id IS NULL THEN 0 ELSE 1 END AS snapshot, database_id AS id
+FROM sys.databases WHERE name <> 'tempdb' ORDER BY name
+"@ | Select-Object -First 100 | ForEach-Object { [ordered]@{ name = [string]$_.name; state = [string]$_.state; recovery = [string]$_.recovery
+                read_only = [bool]$_.read_only; log_wait = [string]$_.log_wait; created = ConvertTo-UtcString $_.created; snapshot = [bool]$_.snapshot; system = ([int]$_.id -le 4) } })
+        } catch { & $fail 'databases' $_ }
+        try {
+            $ag = @(Invoke-SqlQuery $inst "SELECT d.name, sys.fn_hadr_backup_is_preferred_replica(d.name) AS preferred FROM sys.databases d WHERE d.replica_id IS NOT NULL")
+            foreach ($r in $ag) { foreach ($d in @($i.databases)) { if ($d.name -eq $r.name) { $d.ag = $true; $d.ag_preferred = [bool]$r.preferred } } }
+        } catch { }  # before SQL Server 2012, or no availability groups
+        try {
+            $bk = @(Invoke-SqlQuery $inst @"
+SELECT database_name AS db, type, MAX(backup_finish_date) AS finished FROM msdb.dbo.backupset
+WHERE type IN ('D', 'I', 'L') AND backup_finish_date > DATEADD(day, -35, GETDATE()) GROUP BY database_name, type
+"@)
+            foreach ($d in @($i.databases)) {
+                foreach ($r in $bk | Where-Object { $_.db -eq $d.name }) {
+                    $k = @{ D = 'last_full'; I = 'last_diff'; L = 'last_log' }[[string]$r.type]
+                    if ($k) { $d[$k] = ConvertTo-UtcString $r.finished }  # SQL Server's times are this computer's local time
+                }
+            }
+            $i.backups_read = $true
+        } catch { & $fail 'backups' $_ }
+        try {
+            $ls = @(Invoke-SqlQuery $inst 'DBCC SQLPERF(LOGSPACE) WITH NO_INFOMSGS')
+            foreach ($d in @($i.databases)) {
+                $r = $ls | Where-Object { $_['Database Name'] -eq $d.name } | Select-Object -First 1
+                if ($r) { $d.log_mb = [math]::Round([double]$r['Log Size (MB)'], 1); $d.log_used_pct = [math]::Round([double]$r['Log Space Used (%)'], 1) }
+            }
+        } catch { & $fail 'log space' $_ }
+        if ($i.edition -notlike 'Express*') {
+            try {
+                $i.jobs = @(Invoke-SqlQuery $inst @"
+SELECT j.name, j.enabled, h.run_status, h.run_date, h.run_time, LEFT(h.message, 300) AS message
+FROM msdb.dbo.sysjobs j
+OUTER APPLY (SELECT TOP 1 run_status, run_date, run_time, message FROM msdb.dbo.sysjobhistory WHERE job_id = j.job_id AND step_id = 0 ORDER BY instance_id DESC) h
+ORDER BY j.name
+"@ | Select-Object -First 60 | ForEach-Object {
+                    $when = $null
+                    if ($_.run_date) { try { $when = ConvertTo-UtcString ([datetime]::ParseExact(('{0:D8}{1:D6}' -f [int]$_.run_date, [int]$_.run_time), 'yyyyMMddHHmmss', $null)) } catch { } }
+                    [ordered]@{ name = Limit-Text ([string]$_.name) 120; enabled = [bool]$_.enabled; outcome = @{ 0 = 'failed'; 1 = 'succeeded'; 2 = 'retry'; 3 = 'cancelled'; 4 = 'running' }[[int]$(if ($null -ne $_.run_status) { $_.run_status } else { -1 })]
+                        last_run = $when; message = Limit-Text ([string]$_.message) 300 } })
+            } catch { & $fail 'jobs' $_ }
+        }
+        $out.Add($i)
+    }
+    return [ordered]@{ instances = $out.ToArray() }
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1527,6 +1616,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
+    try {
+        $sql = Measure-Step 'sql server' { Get-SqlReport $allServices }
+        if ($sql) { $report.checks.sql = $sql }
+    } catch { Add-CollectorError 'sql server' $_ }
     try {
         $tasks = Measure-Step 'scheduled tasks' { Get-TaskReport }
         if ($tasks -and $tasks.total) { $report.checks.tasks = $tasks }
