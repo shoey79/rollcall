@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.29'
+$AgentVersion = '1.0.30'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -376,6 +376,13 @@ function Get-VirtualKind([string]$Vendor, [string]$Model) {
     return ''
 }
 
+function Get-HardwareText($Value) {
+    # A make, model or serial number, or '' when the BIOS only holds a placeholder
+    $t = ([string]$Value).Trim()
+    if ($t -match '^(system manufacturer|system product name|system version|system serial number|system sku|to be filled by o\.?e\.?m\.?|default string|not applicable|not specified|not available|none|n/?a|o\.?e\.?m\.?|oem manufacturer|invalid|undefined|unknown|type1productconfigid|sku|x+|0+|1234567890|0123456789|123456789|base board serial number|chassis serial number|default|empty|\.+|-+)$') { return '' }
+    return $t
+}
+
 function Get-SystemInfo {
     $info = [ordered]@{}
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -393,14 +400,23 @@ function Get-SystemInfo {
     $info.mem_free_mb = [int]($os.FreePhysicalMemory / 1024)
     $info.domain = [string]$cs.Domain
     $info.part_of_domain = [bool]$cs.PartOfDomain
-    $info.hw_vendor = Limit-Text ([string]$cs.Manufacturer).Trim() 80
-    $info.hw_model = Limit-Text ([string]$cs.Model).Trim() 80
+    $vendor = Get-HardwareText $cs.Manufacturer
+    $model = Get-HardwareText $cs.Model
     $info.virtual = Get-VirtualKind ([string]$cs.Manufacturer) ([string]$cs.Model)
+    if (-not $info.virtual -and (-not $vendor -or -not $model)) {
+        # A custom-built PC leaves the system fields as placeholders, so name it by its motherboard instead
+        try {
+            $board = Get-CimInstance -ClassName Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1
+            $bv = Get-HardwareText $board.Manufacturer
+            $bm = Get-HardwareText $board.Product
+            if ($bv -or $bm) { $vendor = $bv; $model = $bm; $info.hw_board = $true }
+        } catch { }
+    }
+    $info.hw_vendor = Limit-Text $vendor 80
+    $info.hw_model = Limit-Text $model 80
     try {
-        $serial = [string](Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber
-        if ($serial -and $serial.Trim() -notmatch '^(0+|None|Default string|To be filled by O\.E\.M\.|System Serial Number)$') {
-            $info.serial = Limit-Text $serial.Trim() 60
-        }
+        $serial = Get-HardwareText (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber
+        if ($serial) { $info.serial = Limit-Text $serial 60 }
     } catch { }
     $info.workstation = ([int]$os.ProductType -eq 1)
     try {

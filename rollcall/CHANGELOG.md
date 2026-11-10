@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.56.0 - 2026-11-10
+
+### Added
+- **Line under the name:** each computer's Edit form can choose what the list shows under its name: Automatic, Make and model, Operating system, Address or Nothing. The new `name_line` option sets the default for every computer.
+
+### Changed
+- **Custom-built PCs:** BIOS placeholders such as "System manufacturer", "System Product Name", "To Be Filled By O.E.M." and "Default string", and dummy serial numbers, are no longer shown. This applies straight away to reports from older agents too.
+  - Windows agent 1.0.30 reports the motherboard's make and model instead (e.g. "ASUSTeK COMPUTER INC. PRIME B660M-A").
+  - With no make or model at all, Automatic shows the operating system instead of a blank line.
+- Drop-down lists in the Edit form now match the other fields.
+
 ## 1.55.0 - 2026-11-10
 
 ### Changed

@@ -169,6 +169,17 @@ For a manufacturer's logo or a photo of the hardware, choose **Upload image** in
 
 **Make and model** (optional) is shown under the name, e.g. "Dell PowerEdge R720xd", and helps choose the automatic icon.
 
+**Line under the name** chooses what the list shows under the computer's name:
+
+| Choice | Shows |
+|---|---|
+| Add-on default | Whatever the `name_line` option says (Automatic unless you change it) |
+| Automatic | The make and model you typed, or what the agent reports. With neither, the operating system |
+| Make and model | Only the make and model |
+| Operating system | The operating system from the agent, e.g. *Windows 11 Pro*. Devices without an agent show their make and model |
+| Address | The address, plus the IP when the address is a name |
+| Nothing | A blank line |
+
 ### Physical or virtual
 
 Agents (Windows 1.0.13 and Linux 1.0.7 or later) report the machine's manufacturer, model and serial number (a Dell service tag, for instance), and whether it's a virtual machine: Hyper-V, VMware, KVM/QEMU (including Proxmox), VirtualBox, Xen or a cloud VM, or a container (LXC, Docker) on Linux.
@@ -176,6 +187,7 @@ Agents (Windows 1.0.13 and Linux 1.0.7 or later) report the machine's manufactur
 - A computer without an agent counts as a Hyper-V VM when a Hyper-V host's agent lists a VM with the same name.
 - You can also type "VM" or "Hyper-V" in **Make and model**.
 - The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. PowerEdge R720xd · ABC1234*), unless you've typed a make and model.
+- **Custom-built PCs** often leave placeholders such as "System manufacturer", "System Product Name" or "To Be Filled By O.E.M." in the BIOS. These are ignored, along with dummy serial numbers. From Windows agent 1.0.30, the agent then reports the motherboard instead (e.g. *ASUSTeK COMPUTER INC. PRIME B660M-A*), and hovering over it says so.
 - To split the list, make a tab with the **Physical or virtual** condition.
 
 ---
@@ -976,6 +988,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
+| `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

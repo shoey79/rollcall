@@ -210,9 +210,26 @@ def admin_key(a: dict) -> str:
     return (a.get("sid") or f'{a.get("type")}:{a.get("account")}').lower()
 
 
+# What motherboard makers leave in the BIOS when nobody fills in the system details (custom-built PCs)
+HW_PLACEHOLDER = re.compile(
+    r"^\s*(system manufacturer|system product name|system version|system serial number|system sku|to be filled by o\.?e\.?m\.?|"
+    r"default string|not applicable|not specified|not available|none|n/?a|o\.?e\.?m\.?|oem manufacturer|invalid|undefined|unknown|"
+    r"type1productconfigid|sku|x+|0+|1234567890|0123456789|123456789|base board serial number|chassis serial number|"
+    r"default|empty|\.+|-+)\s*$", re.I)
+
+
+def clean_hw(v) -> str:
+    """A make, model or serial number, or '' if it's only a placeholder."""
+    t = str(v or "").strip()
+    return "" if not t or HW_PLACEHOLDER.match(t) else t
+
+
 def normalize_report(r) -> dict:
     """Make an agent report safe to evaluate whatever PowerShell did to its lists."""
     r = _as_dict(r)
+    for k in ("hw_vendor", "hw_model", "serial"):
+        if k in r:
+            r[k] = clean_hw(r[k])
     for k in ("roles", "ips", "disks", "errors"):
         r[k] = _as_list(r.get(k))
     r["disks"] = [d for d in r["disks"] if isinstance(d, dict)]

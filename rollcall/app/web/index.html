@@ -93,8 +93,8 @@ html:has(dialog[open]),html:has(dialog[open]) body{overflow:hidden;overscroll-be
 dialog{overscroll-behavior:contain}
 .fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
 .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:600}
-.field input,.custom input{font:inherit;font-size:14px;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
-.field input:focus,.custom input:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
+.field input,.field select,.custom input{font:inherit;font-size:14px;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.field input:focus,.field select:focus,.custom input:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
 fieldset{border:none;padding:0;margin:0 0 14px}
 legend{font-size:12px;color:var(--muted);font-weight:600;padding:0;margin-bottom:6px}
 legend small{font-weight:400}
@@ -304,7 +304,7 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 .addrrow{display:grid;grid-template-columns:minmax(80px,1fr) minmax(130px,1.5fr) minmax(90px,1fr) auto;gap:6px;margin-bottom:6px}
 .addrrow input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0}
 @media (max-width:760px){.addrrow{grid-template-columns:1fr 1fr auto}.addrrow .aports{grid-column:1/3}}
-.iconrow{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:end;margin-top:10px}
+.iconrow{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:end;margin-top:10px}
 .iconbtn{display:flex;align-items:center;gap:8px;font-size:13px;padding:6px 10px;white-space:nowrap}
 .iconbtn .dicon{width:22px;height:22px}
 .icongrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);max-height:300px;overflow:auto}
@@ -504,6 +504,9 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
       <div class="iconrow">
         <div class="field"><span>Icon</span><button type="button" id="fIconBtn" class="iconbtn" aria-expanded="false"><span id="fIconShow"></span><span id="fIconName">Automatic</span> ▾</button></div>
         <label class="field">Make and model<input id="fModel" maxlength="64" placeholder="Optional, e.g. Dell PowerEdge R720xd" autocomplete="off"></label>
+        <label class="field">Line under the name<select id="fSubtitle">
+          <option value="">Add-on default</option><option value="auto">Automatic</option><option value="model">Make and model</option>
+          <option value="os">Operating system</option><option value="address">Address</option><option value="none">Nothing</option></select></label>
       </div>
       <div id="iconGrid" class="icongrid" hidden></div>
       <details class="addrs" id="addrBox">
@@ -784,10 +787,10 @@ function render() {
   document.getElementById("rows").innerHTML = hosts.map(h => {
     const up = h.uptime_24h;
     const strip = h.history.map(c => `<span class="${c}"></span>`).join("");
-    const showHost = h.host !== h.ip;
+    const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model || hwText(h) ? `<div class="model" title="${esc(hwText(h))}">${esc(h.model || hwText(h))}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -984,7 +987,7 @@ function renderHome() {
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
     const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
-    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (h.model ? " · " + h.model : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
+    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
   }).join("")}</div></div>`;
   const unk = data.syslog_unknown || [];
   if (unk.length) {
@@ -1128,6 +1131,21 @@ function hwText(h) {
   if (k) return `${/container/i.test(k) ? k : k + " VM"}${h.vm_host ? " on " + h.vm_host : ""}`;
   if (a && (a.hw_vendor || a.hw_model)) return [a.hw_vendor, a.hw_model].filter(Boolean).join(" ") + (a.serial ? ` · ${a.serial}` : "");
   return "";
+}
+function osText(h) {
+  const os = h.agent && h.agent.os || "";
+  return os.replace(/^Microsoft\s+/i, "").replace(/\s*\([\d.]+\)\s*$/, "").trim();
+}
+function addrText(h) { return h.ip && h.ip !== h.host ? `${h.host} · ${h.ip}` : (h.host || h.ip || ""); }
+// The line under a computer's name: [text, tooltip], from its own choice or the add-on's name_line default
+function subLine(h) {
+  const mode = h.subtitle || (data && data.name_line) || "auto";
+  const hw = hwText(h), model = h.model || hw;
+  const tip = hw + (h.agent && h.agent.hw_board ? " (motherboard: the computer has no make or model set)" : "");
+  if (mode === "none") return ["", ""];
+  if (mode === "address") return [addrText(h), ""];
+  if ((mode === "os" || (mode === "auto" && !model)) && osText(h)) return [osText(h), h.agent.os];
+  return [model, tip];  // "os" for a device without an agent falls back to its make and model
 }
 const PROBLEM = new Set(["red", "degraded", "amber"]);
 // Down, degraded or missed a check, or up but with a check in amber/red: the same things the Overview lists as alerts.
@@ -3243,6 +3261,7 @@ async function openDialog(h) {
   fName.value = h ? h.name : "";
   fHost.value = h ? h.host : "";
   document.getElementById("fModel").value = h ? (h.model || "") : "";
+  document.getElementById("fSubtitle").value = h ? (h.subtitle || "") : "";
   pickIcon = h ? (h.icon || "") : "";
   document.getElementById("iconGrid").hidden = true;
   document.getElementById("fIconBtn").setAttribute("aria-expanded", "false");
@@ -3307,7 +3326,7 @@ form.addEventListener("submit", async e => {
   const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean), addrChecks);
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
-    icon: pickIcon, model: document.getElementById("fModel").value.trim(),
+    icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value,
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};

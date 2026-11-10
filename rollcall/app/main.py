@@ -99,7 +99,8 @@ AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
-SECURITY_KEYS = ("agent_security", "agent_domain")  # checks whose detail names accounts
+SECURITY_KEYS = ("agent_security", "agent_domain")
+SUBTITLES = ("", "auto", "model", "os", "address", "none")  # "" = the add-on's name_line default  # checks whose detail names accounts
 BUCKETS = 48  # 24h strip on the dashboard, 30 min per bucket
 
 log = logging.getLogger("ping_monitor")
@@ -133,6 +134,7 @@ DEFAULTS = {
     "agent_bitlocker_require": "workstations",
     "agent_sql_backup_hours": 36,
     "printer_supply_warn": 10,
+    "name_line": "auto",
     "agent_exchange_queue_warn": 250,
     "agent_patch_days": 60,
     "agent_security_alerts": True,
@@ -639,6 +641,11 @@ def validate_entry(raw: dict) -> dict:
             raise ValueError("Unknown Home Assistant device")
         entry["ha_device"] = dev
         entry["ha_device_name"] = str(raw.get("ha_device_name") or "").strip()[:100] if dev else ""
+    if "subtitle" in raw:
+        sub = str(raw.get("subtitle") or "")
+        if sub not in SUBTITLES:
+            raise ValueError("Unknown choice for the line under the name")
+        entry["subtitle"] = sub
     if "model" in raw:
         model = str(raw.get("model") or "").strip()
         if len(model) > 64 or not model.isprintable():
@@ -1314,6 +1321,7 @@ class Host:
     via_agent: bool = False            # up only because its agent is reporting (no ping reply)
     icon: str = ""                     # "b:<built-in>" or "u:<uploaded file>"; blank = pick from what it is
     model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
+    subtitle: str = ""                 # the line under the name: "" (the default), model, os, address or none
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
     snmp_version: str = "2c"
     snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
@@ -1475,6 +1483,7 @@ class Monitor:
                             **({"check_by": h.check_by} if h.check_by != "auto" else {}),
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
+                            **({"subtitle": h.subtitle} if h.subtitle else {}),
                             **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
@@ -1496,6 +1505,7 @@ class Monitor:
         h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
+        h.subtitle = entry.get("subtitle") if entry.get("subtitle") in SUBTITLES else ""
         h.ha_device = str(entry.get("ha_device") or "")[:64]
         h.ha_device_name = str(entry.get("ha_device_name") or "")[:100]
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
@@ -1542,6 +1552,8 @@ class Monitor:
             h.icon = entry["icon"]
         if "model" in entry:
             h.model = entry["model"]
+        if "subtitle" in entry:
+            h.subtitle = entry["subtitle"]
         if "ha_device" in entry:
             if entry["ha_device"] != h.ha_device:
                 h.ha_data = None
@@ -2953,8 +2965,8 @@ class Monitor:
                 "os_family": r.get("os_family") or ((self.agents.agents.get(h.agent_id) if self.agents else None) or {}).get("os_family") or "windows",
                 "load": r.get("load"),
                 "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot"),
-                "hw_vendor": str(r.get("hw_vendor") or "")[:80], "hw_model": str(r.get("hw_model") or "")[:80],
-                "serial": str(r.get("serial") or "")[:60],
+                "hw_vendor": agentlib.clean_hw(r.get("hw_vendor"))[:80], "hw_model": agentlib.clean_hw(r.get("hw_model"))[:80],
+                "serial": agentlib.clean_hw(r.get("serial"))[:60], "hw_board": r.get("hw_board") is True,
                 # None: an agent too old to say; "": physical; else what it runs on
                 "virtual": None if "virtual" not in r else str(r.get("virtual") or "")[:40]}
 
@@ -3142,7 +3154,7 @@ class Monitor:
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
-                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "check_by": h.check_by, "via_agent": h.via_agent,
+                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "check_by": h.check_by, "via_agent": h.via_agent,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
@@ -3159,7 +3171,7 @@ class Monitor:
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
-                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)),
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)), "name_line": str(self.opts.get("name_line", "auto")),
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
