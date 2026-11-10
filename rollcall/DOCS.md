@@ -523,6 +523,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **Exchange** (Exchange servers) | Back pressure Medium, `agent_exchange_queue_warn` (250) or more messages waiting, anything in the poison queue, maintenance mode or a component inactive, a copy suspended or behind | Back pressure High, or a database copy failed or dismounted (two reports) |
 | **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
 | **SYSVOL replication** (domain controllers) | A partner unreachable for over an hour, initial sync or recovery, or still using FRS | Replication stopped (dirty shutdown, offline too long, or in error; two reports) |
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
@@ -589,6 +590,18 @@ Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.2
 - Removable drives (BitLocker To Go) and drives without a letter aren't checked.
 
 The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
+
+### Exchange
+
+On Exchange servers (agent 1.0.27 or later), Rollcall checks mail flow and the databases. It's on the **Roles** tab.
+
+- **Queues**, from Exchange transport's performance counters: waiting for delivery, submission, retrying, unreachable and poison. **Amber** at `agent_exchange_queue_warn` (250) or more waiting for delivery, 10 or more unreachable, or anything in the poison queue.
+- **Back pressure**, from transport's events (15004–15007). **Red** when it's High, because transport has stopped accepting mail (often a full disk on the queue database's drive). **Amber** at Medium.
+- **Server components**, from the state Exchange keeps in the registry. **Amber** in maintenance mode (ServerWideOffline inactive) or when a component such as HubTransport is inactive. ForwardSyncDaemon and ProvisioningRps are normally inactive and don't count.
+- **Database copies** (mounted, healthy, copy and replay queues, search index), read every 15 minutes with the Exchange snap-in. **Red** when a copy has failed or is dismounted; **amber** when one is suspended, disconnected or over 10 logs behind, or its search index has failed. The agent runs as the computer's account. If Exchange doesn't let it read database copies, Details says so and everything else is still checked.
+- Exchange's certificates, including the Auth certificate, are covered by the [Certificates](#certificates) check.
+
+To leave the check off a server, ignore it (`exchange:exchange`).
 
 ### Group Policy and SYSVOL replication
 
@@ -698,7 +711,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `exchange:exchange`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 
@@ -918,6 +931,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
 | `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
+| `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

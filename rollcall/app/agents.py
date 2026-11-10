@@ -277,6 +277,20 @@ def normalize_report(r) -> dict:
              "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
              "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
             for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
+    if "exchange" in c:
+        x = _as_dict(c["exchange"])
+        num = lambda v: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+        c["exchange"] = {
+            "queues": {k: num(v) for k, v in _as_dict(x.get("queues")).items() if k in ("delivery", "submission", "poison", "unreachable", "retry")},
+            "queues_error": str(x.get("queues_error") or "")[:160],
+            "components": [{"name": str(m.get("name") or "")[:60], "active": m.get("active") is not False, "by": [str(b)[:30] for b in _as_list(m.get("by"))][:6]}
+                           for m in _as_list(x.get("components")) if isinstance(m, dict) and m.get("name")][:60],
+            "back_pressure": [{"id": num(e.get("id")) or 0, "time": str(e.get("time") or "")[:25], "message": str(e.get("message") or "")[:300]}
+                              for e in _as_list(x.get("back_pressure")) if isinstance(e, dict)][:10],
+            "databases": [{**{k: str(d.get(k) or "")[:200] for k in ("name", "status", "index", "message")}, "active": d.get("active") is True,
+                           "copy_queue": num(d.get("copy_queue")), "replay_queue": num(d.get("replay_queue"))}
+                          for d in _as_list(x.get("databases")) if isinstance(d, dict) and d.get("name")][:50] if "databases" in x else None,
+            "databases_error": str(x.get("databases_error") or "")[:200], "databases_checked": str(x.get("databases_checked") or "")[:25]}
     if "gpo" in c:
         g = _as_dict(c["gpo"])
         c["gpo"] = {"last_success": str(g.get("last_success") or "")[:25], "last_computer_success": str(g.get("last_computer_success") or "")[:25],
@@ -486,7 +500,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange")
 
 
 def disk_key(name) -> str:
@@ -798,6 +812,60 @@ def sysvol_state(v: dict, now: float) -> tuple[str, str]:
     if st == 4:
         return OK, "SYSVOL replicating normally (DFS-R)"
     return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
+
+
+EX_NORMALLY_INACTIVE = {"forwardsyncdaemon", "provisioningrps"}
+EX_DB_BAD = {"failed", "failedandsuspended", "dismounted", "servicedown"}
+EX_DB_WARN = {"suspended", "disconnected", "initializing", "resynchronizing", "seeding", "seedingsource", "dismounting", "mounting"}
+
+
+def exchange_state(x: dict, now: float, queue_warn: int = 250) -> tuple[str, str] | None:
+    bad = []  # (level, text)
+    comps = x.get("components") or []
+    off = [m for m in comps if not m["active"] and m["name"].lower() not in EX_NORMALLY_INACTIVE]
+    if any(m["name"].lower() == "serverwideoffline" for m in off):
+        bad.append((WARN, "in maintenance mode (ServerWideOffline is inactive)"))
+    elif off:
+        bad.append((WARN, "component(s) inactive: " + ", ".join(m["name"] for m in off[:4])))
+    bp = sorted(x.get("back_pressure") or [], key=lambda e: _ts(e["time"]) or 0)
+    if bp:
+        last = bp[-1]
+        m = re.search(r"\bto (Normal|Medium|High)\b", last["message"], re.I)
+        level = m.group(1).capitalize() if m else ("High" if last["id"] in (15006, 15007) else None)
+        if level == "High":
+            bad.append((CRIT, "back pressure is High: transport has stopped accepting mail"))
+        elif level == "Medium":
+            bad.append((WARN, "back pressure is Medium: transport is slowing down incoming mail"))
+    q = x.get("queues") or {}
+    if (q.get("delivery") or 0) >= queue_warn:
+        bad.append((WARN, f"{q['delivery']} messages waiting for delivery"))
+    if (q.get("submission") or 0) >= max(50, queue_warn // 2):
+        bad.append((WARN, f"{q['submission']} messages in the submission queue"))
+    if (q.get("poison") or 0) > 0:
+        bad.append((WARN, f"{q['poison']} message(s) in the poison queue"))
+    if (q.get("unreachable") or 0) >= 10:
+        bad.append((WARN, f"{q['unreachable']} messages unreachable"))
+    for d in x.get("databases") or []:
+        st = d["status"].lower()
+        if st in EX_DB_BAD:
+            bad.append((CRIT, f"{d['name']} copy {d['status']}" + (f": {d['message'][:80]}" if d.get("message") else "")))
+        elif st in EX_DB_WARN:
+            bad.append((WARN, f"{d['name']} copy {d['status']}"))
+        elif (d.get("copy_queue") or 0) > 10:
+            bad.append((WARN, f"{d['name']} copy queue {d['copy_queue']}"))
+        if d.get("index", "").lower() in ("failed", "failedandsuspended"):
+            bad.append((WARN, f"{d['name']} search index {d['index']}"))
+    if bad:
+        bad.sort(key=lambda b: b[0] != CRIT)
+        lvl = CRIT if any(b[0] == CRIT for b in bad) else WARN
+        return lvl, bad[0][1][0].upper() + bad[0][1][1:] + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
+    parts = []
+    if q:
+        parts.append(f"{q.get('delivery') or 0} queued")
+    dbs = x.get("databases")
+    if dbs:
+        parts.append(f"{sum(1 for d in dbs if d['status'].lower() == 'mounted')} database(s) mounted, {sum(1 for d in dbs if d['status'].lower() == 'healthy')} copies healthy")
+    return OK, "Mail flowing: " + ", ".join(parts) if parts else "No problems found"
 
 
 SQL_BAD_STATES = {"SUSPECT", "RECOVERY_PENDING", "EMERGENCY"}
@@ -1169,6 +1237,12 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    ex = rc.get("exchange")
+    if ex and not ign.has("exchange", "exchange"):
+        res = exchange_state(ex, now, int(opts.get("agent_exchange_queue_warn", 250)))
+        if res:
+            checks.append(_check("exchange", "Exchange", res[0], res[1], confirm=res[0] == CRIT))
 
     gp = rc.get("gpo")
     if gp and not ign.has("gpo", "gpo"):

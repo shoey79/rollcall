@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.26'
+$AgentVersion = '1.0.27'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -138,6 +138,8 @@ function Read-State {
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
+            if ($raw.exch_dbs) { $state.exch_dbs = [string]$raw.exch_dbs }
+            if ($raw.exch_checked) { try { $state.exch_checked = [int64]$raw.exch_checked } catch { } }
             if ($raw.laps_ad_at) { try { $state.laps_ad_at = [int64]$raw.laps_ad_at; $state.laps_ad_exp = [string]$raw.laps_ad_exp; $state.laps_ad_attr = [string]$raw.laps_ad_attr } catch { } }
             if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
         } catch {
@@ -1024,6 +1026,72 @@ function Get-SysvolStatus {
     return $out
 }
 
+function Get-ExchangeCounters {
+    # Transport queue lengths from Exchange's performance counters (no Exchange permissions needed).
+    $names = @{ 'aggregate delivery queue length (all queues)' = 'delivery'; 'submission queue length' = 'submission'; 'poison queue length' = 'poison'
+        'unreachable queue length' = 'unreachable'; 'retry remote delivery queue length' = 'retry' }
+    $paths = @($names.Keys | ForEach-Object { "\MSExchangeTransport Queues(_total)\$_" })
+    $out = [ordered]@{}
+    $samples = @((Get-Counter -Counter $paths -ErrorAction SilentlyContinue).CounterSamples)
+    foreach ($c in $samples) {
+        $k = $names[($c.Path -split '\\')[-1].ToLower()]
+        if ($k) { $out[$k] = [int][math]::Round($c.CookedValue) }
+    }
+    return $out
+}
+
+function Get-ExComponentStates {
+    # Exchange records each server component's state in the registry: a value per requester
+    # (Functional, Maintenance, Sidelined...), "state:timestamp", 0 = inactive. Inactive if any requester says so.
+    $root = 'HKLM:\SOFTWARE\Microsoft\ExchangeServer\v15\ServerComponentStates'
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($k in @(Get-ChildItem -Path $root -ErrorAction Stop)) {
+        $vals = Get-ItemProperty -Path $k.PSPath -ErrorAction SilentlyContinue
+        $inactive = @()
+        foreach ($p in @($vals.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' })) {
+            if ([string]$p.Value -match '^0:') { $inactive += $p.Name }
+        }
+        $list.Add([ordered]@{ name = [string]$k.PSChildName; active = (-not $inactive.Count); by = @($inactive) })
+    }
+    return $list.ToArray()
+}
+
+function Get-ExDatabaseCopies {
+    # Database copies on this server, from the Exchange snap-in (needs the computer account to be allowed).
+    Add-PSSnapin Microsoft.Exchange.Management.PowerShell.SnapIn -ErrorAction Stop
+    @(Get-MailboxDatabaseCopyStatus -Server $env:COMPUTERNAME -ErrorAction Stop | ForEach-Object {
+        [ordered]@{ name = [string]$_.DatabaseName; status = [string]$_.Status; index = [string]$_.ContentIndexState
+            copy_queue = [int]$_.CopyQueueLength; replay_queue = [int]$_.ReplayQueueLength; active = [bool]($_.ActiveCopy)
+            message = Limit-Text ([string]$_.ErrorMessage) 200 } })
+}
+
+function Get-ExchangeReport($State) {
+    $out = [ordered]@{}
+    try { $out.queues = Get-ExchangeCounters } catch { $out.queues_error = Limit-Text ([string]$_.Exception.Message) 160 }
+    try { $out.components = @(Get-ExComponentStates) } catch { }
+    try {
+        $ev = @(Get-LogEvents 'Application' 'MSExchangeTransport' @(15004, 15005, 15006, 15007) (Get-Date).AddDays(-2) 50)
+        $out.back_pressure = @($ev | Sort-Object TimeCreated -Descending | Select-Object -First 10 | ForEach-Object {
+            [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated
+                message = Limit-Text (([string]$_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 300 } })
+    } catch { }
+    # Database copies: the snap-in takes several seconds to load, so this runs every 15 minutes
+    $nowTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (-not $State.exch_checked -or $nowTs - [int64]$State.exch_checked -ge 900) {
+        try { $State.exch_dbs = (@{ ok = $true; dbs = @(Get-ExDatabaseCopies) } | ConvertTo-Json -Depth 4 -Compress) }
+        catch { $State.exch_dbs = (@{ ok = $false; error = (Limit-Text ([string]$_.Exception.Message) 200) } | ConvertTo-Json -Compress) }
+        $State.exch_checked = $nowTs
+    }
+    if ($State.exch_dbs) {
+        try {
+            $c = $State.exch_dbs | ConvertFrom-Json
+            if ($c.ok) { $out.databases = @($c.dbs) } else { $out.databases_error = [string]$c.error }
+            $out.databases_checked = ConvertTo-UtcString ([DateTimeOffset]::FromUnixTimeSeconds([int64]$State.exch_checked).LocalDateTime)
+        } catch { }
+    }
+    return $out
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1670,6 +1738,9 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     }
     if ($discovery.roles -contains 'Domain controller') {
         try { $report.checks.sysvol = Measure-Step 'sysvol replication' { Get-SysvolStatus } } catch { Add-CollectorError 'sysvol replication' $_ }
+    }
+    if ($discovery.roles -contains 'Exchange') {
+        try { $report.checks.exchange = Measure-Step 'exchange' { Get-ExchangeReport $State } } catch { Add-CollectorError 'exchange' $_ }
     }
     try {
         $sql = Measure-Step 'sql server' { Get-SqlReport $allServices }

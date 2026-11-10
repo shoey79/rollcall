@@ -1584,7 +1584,7 @@ function renderDetails(d) {
   const diskKey = v => { const t = String(v || "").trim();
     return t.startsWith("/") ? (t.replace(/\/+$/, "") || "/") : t.replace(/[\\\/]+$/, "").replace(/:$/, "").toUpperCase() + ":"; };
   const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
-  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol"];
+  const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange"];
     const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
   const findIgnore = (kind, v) => {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
@@ -1757,6 +1757,30 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     }
     html += sect("SQL Server", inner + `<p class="hint">Amber when a database has had no full or differential backup for ${esc(String((data && data.sql_backup_hours) || 36))} h (<code>agent_sql_backup_hours</code>), is in full recovery with its log not being backed up, is offline, or a SQL Agent job's last run failed; red when a database is suspect or recovery pending. Veeam's application-aware backups count. System databases, and ones their own application protects (Veeam's, WSUS), aren't checked for backups. ${chk ? ignBtn("sqldb", "sql", "SQL Server") + " the whole check on this server." : ""}</p>`);
   }
+  if (c.exchange) {
+    // Exchange: queues, back pressure, component state and database copies
+    const x = c.exchange, chk = (d.checks || []).find(k => k.key === "exchange");
+    const when = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
+    const q = x.queues || {};
+    const warnQ = (data && data.exchange_queue_warn) || 250;
+    const qv = (k, lim) => q[k] == null ? "—" : q[k] >= lim ? `<b class="old">${q[k]}</b>` : String(q[k]);
+    let inner = chk ? `<p class="${chk.status !== "green" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>` : "";
+    inner += `<div class="kv"><div><span>Waiting for delivery</span>${qv("delivery", warnQ)}</div><div><span>Submission queue</span>${qv("submission", Math.max(50, Math.floor(warnQ / 2)))}</div>
+      <div><span>Retrying</span>${qv("retry", 1e9)}</div><div><span>Unreachable</span>${qv("unreachable", 10)}</div><div><span>Poison queue</span>${qv("poison", 1)}</div></div>`;
+    if (x.queues_error) inner += `<p class="hint">Couldn't read the queue counters: ${esc(x.queues_error)}</p>`;
+    const NORM = new Set(["forwardsyncdaemon", "provisioningrps"]);
+    const off = (x.components || []).filter(m => !m.active && !NORM.has(m.name.toLowerCase()));
+    if ((x.components || []).length) inner += `<p class="empty-note" style="margin:8px 0 4px">Server components: ${off.length ? `<b class="old">${esc(off.map(m => m.name + (m.by.length ? " (" + m.by.join(", ") + ")" : "")).join(", "))} inactive</b>` : "none inactive"}</p>`;
+    const bp = (x.back_pressure || [])[0];
+    if (bp) inner += `<p class="empty-note" style="margin:4px 0">Back pressure, latest: ${esc(when(bp.time))} · ${esc(bp.message)} <small class="muted">(event ${bp.id})</small></p>`;
+    if (x.databases && x.databases.length) inner += tbl(["Database copy", "Status", "Copy queue", "Replay queue", "Search index"], x.databases.map(b => {
+      const bad = /failed|dismounted|servicedown|suspended|disconnected/i.test(b.status) || (b.copy_queue || 0) > 10 || /failed/i.test(b.index);
+      return `<tr class="${bad ? "hl" : ""}"><td><b>${esc(b.name)}</b>${b.active ? ` <small class="muted">active copy</small>` : ""}${b.message ? `<br><small class="muted">${esc(b.message)}</small>` : ""}</td>
+        <td>${/failed|dismounted/i.test(b.status) ? `<b class="failtxt">${esc(b.status)}</b>` : esc(b.status)}</td><td>${b.copy_queue ?? ""}</td><td>${b.replay_queue ?? ""}</td><td>${esc(b.index)}</td></tr>`;
+    })) + `<p class="hint">Database copies checked ${esc(when(x.databases_checked))}; they're read every 15 minutes.</p>`;
+    else if (x.databases_error) inner += `<p class="hint">Couldn't read the database copies (the agent runs as the computer's account, which Exchange may not allow): ${esc(x.databases_error)}. Queues, back pressure and component state are still checked.</p>`;
+    html += sect("Exchange", inner + `<p class="hint">Red when back pressure is High (transport has stopped accepting mail) or a database copy has failed or is dismounted. Amber at Medium back pressure, ${warnQ}+ messages waiting for delivery (<code>agent_exchange_queue_warn</code>), anything in the poison queue, the server in maintenance mode or a component inactive, or a copy suspended or behind. Exchange certificates are in the Certificates check. ${chk ? ignBtn("exchange", "exchange", "Exchange") + " this check on this server." : ""}</p>`);
+  }
   {
     // Group Policy (domain members) and SYSVOL replication (domain controllers)
     const when = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
@@ -1912,7 +1936,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   }
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
-  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job", laps: "LAPS check", bitlocker: "BitLocker", cert: "Certificate", task: "Scheduled task", sqldb: "SQL database", sqljob: "SQL Agent job", gpo: "Group Policy check", sysvol: "SYSVOL replication check"};
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job", laps: "LAPS check", bitlocker: "BitLocker", cert: "Certificate", task: "Scheduled task", sqldb: "SQL database", sqljob: "SQL Agent job", gpo: "Group Policy check", sysvol: "SYSVOL replication check", exchange: "Exchange check"};
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
@@ -2572,7 +2596,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"]};
+  security: ["security"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], exchange: ["roles", "Exchange"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.51.0 - 2026-11-10
+
+### Added
+- **Exchange check** (Windows agent 1.0.27) on Exchange servers. It's on the Roles tab.
+  - **Mail queues** from transport's performance counters. Amber at 250+ waiting for delivery (`agent_exchange_queue_warn`, a new option), 10+ unreachable, or anything in the poison queue.
+  - **Back pressure** from transport's events. Red at High, because mail has stopped being accepted; amber at Medium.
+  - **Maintenance mode and component state** from Exchange's registry entries. Amber when the server is in maintenance mode or a component is inactive.
+  - **Database copies** every 15 minutes. Red when a copy has failed or is dismounted; amber when one is suspended or behind, or its search index has failed. If Exchange doesn't let the computer's account read them, Details says so.
+
 ## 1.50.0 - 2026-11-10
 
 ### Added
