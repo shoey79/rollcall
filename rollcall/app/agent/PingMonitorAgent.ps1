@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.25'
+$AgentVersion = '1.0.26'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -975,6 +975,55 @@ ORDER BY j.name
     return [ordered]@{ instances = $out.ToArray() }
 }
 
+function Get-LogEvents([string]$Log, [string]$Provider, [int[]]$Ids, [DateTime]$Since, [int]$Max = 200) {
+    $f = @{ LogName = $Log; StartTime = $Since }
+    if ($Provider) { $f.ProviderName = $Provider }
+    if ($Ids) { $f.Id = $Ids }
+    try { @(Get-WinEvent -FilterHashtable $f -MaxEvents $Max -ErrorAction Stop) }
+    catch { if ($_.Exception.Message -match 'No events were found|specified query') { @() } else { throw } }
+}
+
+function Get-GroupPolicyStatus {
+    # Group Policy's own results in the System log over the last 24 hours: when it last applied, and failures since.
+    $ok = 1500, 1501, 1502, 1503
+    $ev = @(Get-LogEvents 'System' 'Microsoft-Windows-GroupPolicy' $null (Get-Date).AddHours(-24) 300)
+    $succ = @($ev | Where-Object { $ok -contains $_.Id } | Sort-Object TimeCreated -Descending)
+    $errs = @($ev | Where-Object { $ok -notcontains $_.Id -and [int]$_.Level -in 1, 2, 3 } | Sort-Object TimeCreated -Descending)
+    $first = { param($e) $m = ([string]$e.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 2) -join ' '; Limit-Text $m 300 }
+    return [ordered]@{
+        last_success          = if ($succ.Count) { ConvertTo-UtcString $succ[0].TimeCreated } else { $null }
+        last_computer_success = ConvertTo-UtcString (@($succ | Where-Object { $_.Id -in 1500, 1502 } | Select-Object -First 1).TimeCreated)
+        failures              = @($errs | Select-Object -First 10 | ForEach-Object {
+            [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated; level = [int]$_.Level; message = & $first $_ } })
+        failures_24h          = $errs.Count
+    }
+}
+
+function Get-SysvolStatus {
+    # SYSVOL replication on a domain controller: DFS-R's state for the SYSVOL folder, the DFS-R events
+    # that mean replication has stopped or a partner can't be reached, and whether it still uses FRS.
+    $out = [ordered]@{}
+    try {
+        $mig = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\DFSR\Parameters\SysVols\Migrating SysVols' -ErrorAction Stop
+        $out.frs_migration = [int]$mig.'Local State'  # 3 = FRS eliminated
+    } catch { }
+    try {
+        $rf = @(Get-CimInstance -Namespace 'root\MicrosoftDFS' -ClassName DfsrReplicatedFolderInfo -ErrorAction Stop | Where-Object { $_.ReplicatedFolderName -eq 'SYSVOL Share' }) | Select-Object -First 1
+        if ($rf) { $out.state = [int]$rf.State }
+    } catch { $out.wmi_error = Limit-Text ([string]$_.Exception.Message) 160 }
+    try {
+        $out.frs_running = ((Get-Service -Name NtFrs -ErrorAction Stop).Status -eq 'Running')
+    } catch { $out.frs_running = $false }
+    $ids = 2212, 2213, 2214, 4012, 4602, 4604, 4614, 5002, 5004, 5008, 5014
+    $ev = @(Get-LogEvents 'DFS Replication' $null $ids (Get-Date).AddDays(-7) 200)
+    $out.events = @($ev | Sort-Object TimeCreated -Descending | Select-Object -First 40 | ForEach-Object {
+        $partner = ''
+        if ([string]$_.Message -match '(?im)^\s*(Partner|Connected Partner|Partner DNS Address|Partner Name)\s*:\s*(\S+)') { $partner = $Matches[2] }
+        [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated; partner = Limit-Text $partner 120
+            message = Limit-Text (([string]$_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 240 } })
+    return $out
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1616,6 +1665,12 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
+    if ($sys -and $sys.part_of_domain) {
+        try { $report.checks.gpo = Measure-Step 'group policy' { Get-GroupPolicyStatus } } catch { Add-CollectorError 'group policy' $_ }
+    }
+    if ($discovery.roles -contains 'Domain controller') {
+        try { $report.checks.sysvol = Measure-Step 'sysvol replication' { Get-SysvolStatus } } catch { Add-CollectorError 'sysvol replication' $_ }
+    }
     try {
         $sql = Measure-Step 'sql server' { Get-SqlReport $allServices }
         if ($sql) { $report.checks.sql = $sql }

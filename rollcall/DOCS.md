@@ -523,6 +523,8 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
+| **SYSVOL replication** (domain controllers) | A partner unreachable for over an hour, initial sync or recovery, or still using FRS | Replication stopped (dirty shutdown, offline too long, or in error; two reports) |
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
 | **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
@@ -587,6 +589,20 @@ Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.2
 - Removable drives (BitLocker To Go) and drives without a letter aren't checked.
 
 The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
+
+### Group Policy and SYSVOL replication
+
+**Group Policy** is checked on every domain-joined computer (agent 1.0.26 or later), from Group Policy's own results in the System log.
+
+- **Amber** when the latest result is a failure and policy hasn't applied for 3 hours. Policy refreshes every 90 minutes or so, so a failure at start-up (before the network is up) that the next refresh fixes doesn't alert.
+- Failures are explained, e.g. *Couldn't read a policy from SYSVOL* (1058), *Couldn't find a domain controller* (1054), *No network connection to a domain controller* (1129), *A settings extension failed* (1085), with Windows' own message.
+
+**SYSVOL replication** is checked on domain controllers, using DFS-R's state for the SYSVOL folder and its event log over the last 7 days.
+
+- **Red** when DFS-R has stopped replicating SYSVOL: after an unclean shutdown (event 2213, which needs resuming with the command in the event), because the DC was offline longer than DFS-R allows (4012, which needs a non-authoritative sync), or the folder is in error.
+- **Amber** while it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since), during initial sync or recovery, or while SYSVOL still replicates with FRS. FRS isn't supported from Windows Server 2019; migrate with `dfsrmig`.
+
+Both are on the **Roles** tab. Each can be ignored on a computer (`gpo:gpo`, `sysvol:sysvol`).
 
 ### SQL Server
 
@@ -682,7 +698,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 

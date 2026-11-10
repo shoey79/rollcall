@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.50.0 - 2026-11-10
+
+### Added
+- **Group Policy check** (Windows agent 1.0.26) on domain-joined computers, from Group Policy's results in the System log.
+  - Amber when it's failing and hasn't applied for 3 hours, so a failure at start-up that the next refresh fixes doesn't alert.
+  - Failures are explained in plain words, e.g. can't read SYSVOL or can't find a domain controller.
+- **SYSVOL replication check** on domain controllers, from DFS-R's state and events.
+  - Red when replication has stopped: after an unclean shutdown (2213), offline too long (4012), or in error.
+  - Amber when a partner can't be reached for over an hour, during initial sync or recovery, or when SYSVOL still uses FRS.
+- Both are on the Roles tab, and can be ignored per computer (`gpo:gpo`, `sysvol:sysvol`).
+
 ## 1.49.0 - 2026-11-10
 
 ### Added

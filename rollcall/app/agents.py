@@ -277,6 +277,19 @@ def normalize_report(r) -> dict:
              "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
              "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
             for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
+    if "gpo" in c:
+        g = _as_dict(c["gpo"])
+        c["gpo"] = {"last_success": str(g.get("last_success") or "")[:25], "last_computer_success": str(g.get("last_computer_success") or "")[:25],
+                    "failures_24h": g.get("failures_24h") if isinstance(g.get("failures_24h"), int) else 0,
+                    "failures": [{"id": f.get("id") if isinstance(f.get("id"), int) else 0, "time": str(f.get("time") or "")[:25],
+                                  "message": str(f.get("message") or "")[:300]} for f in _as_list(g.get("failures")) if isinstance(f, dict)][:10]}
+    if "sysvol" in c:
+        v = _as_dict(c["sysvol"])
+        c["sysvol"] = {"state": v.get("state") if isinstance(v.get("state"), int) else None,
+                       "frs_migration": v.get("frs_migration") if isinstance(v.get("frs_migration"), int) else None,
+                       "frs_running": v.get("frs_running") is True, "wmi_error": str(v.get("wmi_error") or "")[:160],
+                       "events": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0, **{k: str(e.get(k) or "")[:240] for k in ("time", "partner", "message")}}
+                                  for e in _as_list(v.get("events")) if isinstance(e, dict)][:40]}
     if "sql" in c:
         insts = []
         for i in _as_list(_as_dict(c["sql"]).get("instances"))[:8]:
@@ -473,7 +486,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol")
 
 
 def disk_key(name) -> str:
@@ -732,6 +745,59 @@ def tasks_check(tk: dict, now: float, ign: "Ignore | None" = None) -> tuple[str,
         return WARN, f"{t['name']}: {why}" + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
     mine = [t for t in tasks if task_state(t, now, ign)[0] in ("ok", "running")]
     return OK, f"{len(mine)} scheduled task(s) OK" if mine else "No scheduled tasks of your own to watch"
+
+
+GP_TEXT = {1006: "couldn't bind to a domain controller (LDAP)", 1030: "couldn't get the list of Group Policy objects",
+           1053: "couldn't find the user or computer name", 1054: "couldn't find a domain controller",
+           1055: "couldn't resolve the computer name", 1058: "couldn't read a policy from SYSVOL (gpt.ini)",
+           1085: "a settings extension failed", 1096: "couldn't process a policy file (registry.pol)",
+           1129: "no network connection to a domain controller"}
+
+
+def gpo_state(g: dict, now: float) -> tuple[str, str] | None:
+    """Group Policy: amber when the latest result is a failure and it hasn't applied for 3 hours (a refresh
+    is every 90 minutes or so), or when it hasn't succeeded at all in 24 hours despite failing."""
+    fails = g.get("failures") or []
+    last_ok = _ts(g.get("last_success")) if g.get("last_success") else None
+    last_fail = max((t for f in fails if (t := _ts(f.get("time")))), default=None)
+    if last_fail and (not last_ok or last_fail > last_ok) and (not last_ok or now - last_ok > 3 * 3600):
+        f = max(fails, key=lambda f: _ts(f.get("time")) or 0)
+        what = GP_TEXT.get(f["id"]) or f"event {f['id']}"
+        since = f"not applied for {int((now - last_ok) / 3600)} h" if last_ok else "not applied in the last 24 h"
+        return WARN, f"Failing: {what}; {since}"
+    if last_ok:
+        return OK, "Applied " + (f"{int((now - last_ok) / 60)} min ago" if now - last_ok < 2 * 3600 else f"{int((now - last_ok) / 3600)} h ago") + \
+            (f"; {g['failures_24h']} failure(s) in 24 h since resolved" if g.get("failures_24h") else "")
+    return None
+
+
+SYSVOL_STATES = {0: "uninitialised", 1: "initialised", 2: "initial sync", 3: "auto recovery", 4: "normal", 5: "in error"}
+
+
+def sysvol_state(v: dict, now: float) -> tuple[str, str]:
+    ev = sorted(v.get("events") or [], key=lambda e: _ts(e.get("time")) or 0)
+    latest = lambda ids: max((e for e in ev if e["id"] in ids), key=lambda e: _ts(e.get("time")) or 0, default=None)  # noqa: E731
+    t = lambda e: (_ts(e.get("time")) or 0) if e else 0  # noqa: E731
+    if v.get("frs_migration") is not None and v["frs_migration"] < 3 or (v.get("frs_migration") is None and v.get("state") is None and v.get("frs_running")):
+        return WARN, "SYSVOL still replicates with FRS, which Windows Server 2019 and later don't support; migrate it to DFS-R (dfsrmig)"
+    dirty, resumed = latest({2213}), latest({2214})
+    if dirty and t(dirty) > t(resumed):
+        return CRIT, "DFS-R stopped replicating SYSVOL after an unclean shutdown (event 2213); it needs resuming"
+    stale = latest({4012})
+    if stale and t(stale) > t(latest({4602, 4604, 4614})):
+        return CRIT, "DFS-R stopped replicating SYSVOL: this DC was offline too long (event 4012); it needs a non-authoritative sync"
+    st = v.get("state")
+    if st == 5:
+        return CRIT, "DFS-R reports SYSVOL replication in error"
+    if st in (0, 1, 2, 3):
+        return WARN, f"SYSVOL replication is in {SYSVOL_STATES[st]}"
+    down, up = latest({5002, 5008, 5014}), latest({5004})
+    if down and t(down) > t(up) and now - t(down) > 3600:
+        who = f" with {down['partner']}" if down.get("partner") else ""
+        return WARN, f"DFS-R can't replicate SYSVOL{who} (event {down['id']})"
+    if st == 4:
+        return OK, "SYSVOL replicating normally (DFS-R)"
+    return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
 
 
 SQL_BAD_STATES = {"SUSPECT", "RECOVERY_PENDING", "EMERGENCY"}
@@ -1103,6 +1169,16 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    gp = rc.get("gpo")
+    if gp and not ign.has("gpo", "gpo"):
+        res = gpo_state(gp, now)
+        if res:
+            checks.append(_check("gpo", "Group Policy", res[0], res[1]))
+    sv = rc.get("sysvol")
+    if sv and not ign.has("sysvol", "sysvol"):
+        res = sysvol_state(sv, now)
+        checks.append(_check("sysvol", "SYSVOL replication", res[0], res[1], confirm=res[0] == CRIT))
 
     sq = rc.get("sql")
     if sq and not ign.has("sqldb", "sql"):
