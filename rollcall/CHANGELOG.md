@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.45.2 - 2026-11-10
+
+### Fixed
+- **Syslog from unknown devices** kept listing a device after it had been added (or after Syslog was ticked for it), until the add-on restarted. The entry now goes as soon as the sender is matched to a computer.
+- Messages that arrived before the sender was matched are no longer lost. Up to 200 per sender from the last hour are held, and filed in the computer's log once it's matched, e.g. when you add the device or when its name is first looked up.
+
 ## 1.45.1 - 2026-11-10
 
 ### Documentation

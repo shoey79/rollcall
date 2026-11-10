@@ -396,7 +396,7 @@ Messages are matched to the device by the address they come from, including its 
   - Critical, alert and emergency messages, and any message containing one of your **Always alert on these words**, go red and notify. Others you alert on go amber.
   - Messages containing one of the **Never alert on these words** are kept but never alert. Use this for harmless noise a device logs at error level.
 - **Alerts last 24 hours.** **Acknowledge**, in Logs or on the Overview, clears them now; a new message that alerts sets it off again.
-- **Unknown devices.** Messages from devices that aren't in Rollcall, or don't have Syslog ticked, aren't kept. They're listed on the Overview under **Syslog from unknown devices**, with a button to add the device or tick Syslog for it.
+- **Unknown devices.** Messages from devices that aren't in Rollcall, or don't have Syslog ticked, are listed on the Overview under **Syslog from unknown devices**, with a button to add the device or tick Syslog for it. Once you do, the entry goes and its recent messages (up to 200 from the last hour) are filed in the device's log. Older ones aren't kept.
 - **Rate limit.** Each device can send up to 100 messages a second, with bursts up to 200. Anything above that is dropped, so a chatty device can't fill the database.
 - **Trust.** Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof.
 

@@ -89,6 +89,7 @@ ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
 AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
+SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
@@ -1566,6 +1567,7 @@ class Monitor:
         now = time.time()
         h = self._syslog_target(ip)
         if h and any(s.kind == "syslog" for s in h.services):
+            self._syslog_claim(ip, h)
             self.logs.add(h.key, now, m)
             lvl = sysloglib.alert_level(m, h.syslog_alert, h.syslog_keywords, h.syslog_ignore)
             svc = next(s for s in h.services if s.kind == "syslog")
@@ -1576,11 +1578,30 @@ class Monitor:
         if not u:
             if len(self.syslog_unknown) >= 100:
                 self.syslog_unknown.pop(min(self.syslog_unknown, key=lambda k: self.syslog_unknown[k]["last"]))
-            u = self.syslog_unknown[ip] = {"ip": ip, "first": now, "count": 0}
+            u = self.syslog_unknown[ip] = {"ip": ip, "first": now, "count": 0, "held": []}
             log.info("Syslog from %s, which %s", ip, f"is {h.name} but Syslog isn't ticked for it" if h
-                     else "isn't a computer in Rollcall")
+                     else "isn't a computer in Rollcall (yet)")
+        # Kept in memory for a while: a computer added by name isn't matched until its name has been
+        # looked up (just after a restart, or after its address changes), and these are filed then.
+        u["held"] = (u["held"] + [(now, m)])[-SYSLOG_HELD:]
         u.update(count=u["count"] + 1, last=now, msg=m["msg"][:200], app=m["app"], sev=m["sev"], name=m["host"],
                  host_key=h.key if h else None)
+
+    def _syslog_claim(self, ip: str, h: Host) -> None:
+        """This sender turned out to be a known computer: file what was held and stop listing it as unknown."""
+        u = self.syslog_unknown.pop(ip, None)
+        if not u:
+            return
+        held = [(ts, m) for ts, m in u.get("held", []) if ts > time.time() - 3600]
+        for ts, m in held:
+            self.logs.add(h.key, ts, m)
+        log.info("Syslog from %s is %s: %d held message(s) filed", ip, h.name, len(held))
+
+    def syslog_sweep(self) -> None:
+        for ip in list(self.syslog_unknown):
+            h = self._syslog_target(ip)
+            if h and any(s.kind == "syslog" for s in h.services):
+                self._syslog_claim(ip, h)
 
     def syslog_state(self, h: Host, now: float) -> tuple:
         """Alerts in the last 24 hours that haven't been acknowledged."""
@@ -1803,6 +1824,9 @@ class Monitor:
                 async with self.sem:
                     ip = await resolve(h.host)
                     if ip:
+                        if ip != h.ip and self.syslog_unknown:
+                            h.ip = ip
+                            self.syslog_sweep()  # syslog that arrived before this name was looked up
                         h.ip = ip
                         ok, latency = await ping(
                             ip, int(self.opts["ping_count"]), int(self.opts["ping_timeout"]),
@@ -2977,9 +3001,10 @@ class Monitor:
                 } for s in h.services + h.agent_checks],
                 "agent": self._agent_summary(h),
             })
+        self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
                 "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)),
-                "syslog_port": self.syslog_port, "syslog_unknown": sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20],
+                "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
                 "ping_mode": PING_MODE,

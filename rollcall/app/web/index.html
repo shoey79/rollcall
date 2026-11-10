@@ -965,7 +965,7 @@ function renderHome() {
   }).join("")}</div></div>`;
   const unk = data.syslog_unknown || [];
   if (unk.length) {
-    html += `<div class="panel"><h2>Syslog from unknown devices<small>Messages from these addresses aren't kept until you add them</small></h2>` +
+    html += `<div class="panel"><h2>Syslog from unknown devices<small>Only the last hour's messages from these addresses are held until you add them</small></h2>` +
       unk.map(u => {
         const known = u.host_key && data.hosts.find(x => x.key === u.host_key);
         return `<div class="alert" style="cursor:default"><span class="dot unknown"></span>
