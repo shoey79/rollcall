@@ -818,6 +818,7 @@ const ICONS = {
   firewall: ["Firewall", '<path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M4.6 10h14.8M5.8 14.5h12.4M12 6.2V10M8.5 10v4.5M15.5 10v4.5M12 14.5v4.6"/>'],
   ap: ["Access point", '<ellipse cx="12" cy="16" rx="7.5" ry="3"/><path d="M8.8 10.2a4.6 4.6 0 0 1 6.4 0M6.3 7.6a8.2 8.2 0 0 1 11.4 0"/>'],
   hub: ["Smart home hub", '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M12 15.5h.01M9.2 8a4 4 0 0 1 5.6 0M6.8 5.4a7.5 7.5 0 0 1 10.4 0"/>'],
+  plug: ["Smart plug", '<rect x="5.5" y="7.5" width="13" height="13" rx="3"/><path d="M9.5 7.5V3.5M14.5 7.5V3.5M12 11.8v2.4M9.9 12.7a3 3 0 1 0 4.2 0"/>'],
   camera: ["CCTV camera", '<path d="M2.5 7.5l12.5 3-1.6 5.2L1.8 12z"/><path d="M15 10.5l4.5-1.2 1 4-4.4 1.3M8.5 14.5V19H4"/>'],
   dome: ["Dome camera", '<path d="M4 5h16v3H4z"/><path d="M6 8a6 6 0 0 0 12 0"/><circle cx="12" cy="11" r="2"/>'],
   printer: ["Printer", '<path d="M7 9V3.5h10V9"/><rect x="3.5" y="9" width="17" height="8" rx="1.5"/><rect x="7" y="14" width="10" height="6.5" rx=".5"/>'],
@@ -837,6 +838,7 @@ function autoIcon(h) {
   const os = (h.agent && h.agent.os || "").toLowerCase();
   const rules = [[/zigbee|slzb|z-?wave|hue bridge|\bhub\b|bridge/, "hub"], [/\b(ap|uap)\d*\b|access ?point|u6|nanohd|ac ?pro|ac ?lite/, "ap"], [/\bnas\b|terastation|synology|qnap|readynas/, "nas"],
     [/switch|\bpoe|\bsw\d|\bgs\d{3}/, "switch"], [/\bnvr\d*\b|\bdvr\d*\b|\bcctv|\bcam(era)?s?\d*\b|\bipcam|\byi\b|dome|hikvision|dahua|reolink|swann|\baxis\b/, "camera"], [/print|laserjet|mfp/, "printer"],
+    [/smart ?plug|\bplugs?\d*\b|\bsocket|\bshelly ?plug|tasmota|sonoff|\bkasa\b|\bmeross\b/, "plug"],
     [/firewall|\bfw\d*\b|sophos|\bxg\d*|pfsense|opnsense|fortigate/, "firewall"],
     [/\bspa\d{3}|\bata\b|voip|\bsip\b|yealink|snom|polycom|grandstream|gigaset|\bpbx\b|3cx|asterisk|freepbx/, "voip"],
     [/\btv\b|youview|roku|apple ?tv|shield|firestick/, "tv"], [/\bups\b|inverter|battery/, "ups"], [/router|gateway|\budm|\busg|edgerouter|draytek/, "router"],

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.53.2 - 2026-11-10
+
+### Added
+- **Smart plug icon** ([#2](https://github.com/shoey79/rollcall/issues/2)). It's chosen automatically for names like "Kitchen plug", "Plug 3", "socket", or smart-plug makes (Shelly Plug, Sonoff, Tasmota, Kasa, Meross), and can be picked in the icon picker.
+
 ## 1.53.1 - 2026-11-10
 
 ### Changed
