@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.28'
+$AgentVersion = '1.0.29'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -917,7 +917,11 @@ function Get-SqlReport($AllServices) {
     foreach ($svc in $names) {
         $inst = if ($svc -eq 'MSSQLSERVER') { '.' } else { '.\' + $svc.Substring(6) }
         $label = if ($svc -eq 'MSSQLSERVER') { 'MSSQLSERVER' } else { $svc.Substring(6) }
-        $i = [ordered]@{ instance = $label; denied = @(); errors = @() }
+        # Windows Internal Database (WSUS, AD FS, RD Connection Broker, IPAM) only listens on a local pipe
+        $internal = $label -like 'MICROSOFT##*'
+        if ($label -eq 'MICROSOFT##WID') { $inst = 'np:\\.\pipe\MICROSOFT##WID\tsql\query' }
+        elseif ($label -eq 'MICROSOFT##SSEE') { $inst = 'np:\\.\pipe\MSSQL$MICROSOFT##SSEE\sql\query' }
+        $i = [ordered]@{ instance = $label; internal = $internal; denied = @(); errors = @() }
         $fail = { param($part, $err) $m = Limit-Text ([string]$err.Exception.InnerException.Message + [string]$(if (-not $err.Exception.InnerException) { $err.Exception.Message })) 200
             if ($m -match 'permission|denied|not able to access|Login failed') { $i.denied += $part } else { $i.errors += "${part}: $m" } }
         try {
@@ -960,7 +964,7 @@ WHERE type IN ('D', 'I', 'L') AND backup_finish_date > DATEADD(day, -35, GETDATE
                 if ($r) { $d.log_mb = [math]::Round([double]$r['Log Size (MB)'], 1); $d.log_used_pct = [math]::Round([double]$r['Log Space Used (%)'], 1) }
             }
         } catch { & $fail 'log space' $_ }
-        if ($i.edition -notlike 'Express*') {
+        if ($i.edition -notlike 'Express*' -and -not $internal) {  # no SQL Agent in Express or WID
             try {
                 $i.jobs = @(Invoke-SqlQuery $inst @"
 SELECT j.name, j.enabled, h.run_status, h.run_date, h.run_time, LEFT(h.message, 300) AS message

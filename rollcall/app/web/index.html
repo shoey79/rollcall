@@ -1752,7 +1752,12 @@ ALTER ROLE [db_datareader] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- backup histor
 ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agent jobs`;
     let inner = chk ? `<p class="${chk.status !== "green" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>` : "";
     for (const i of c.sql.instances) {
-      inner += `<h4 style="margin:10px 0 4px">${esc(i.instance === "MSSQLSERVER" ? "Default instance" : i.instance)} <small class="muted">${esc([i.edition, i.version && "version " + i.version, i.level].filter(Boolean).join(" · "))}</small></h4>`;
+      const instIgn = ignBtn("sqldb", i.instance + "\\*", i.instance === "MSSQLSERVER" ? "the default instance" : i.instance);
+      const instName = i.internal ? `Windows Internal Database <small class="muted">${esc(i.instance)}</small>` : esc(i.instance === "MSSQLSERVER" ? "Default instance" : i.instance);
+      inner += `<h4 style="margin:10px 0 4px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap"><span>${instName}</span> <small class="muted">${esc([i.edition, i.version && "version " + i.version, i.level].filter(Boolean).join(" · "))}</small><span style="margin-left:auto">${instIgn}</span></h4>`;
+      if (findIgnore("sqldb", i.instance + "\\*")) { inner += `<p class="hint">This instance is ignored on this server: nothing here alerts.</p>`; }
+      if (i.internal) inner += `<p class="hint" style="margin:0 0 6px">Windows roles (WSUS, AD FS, RD Connection Broker, IPAM) keep their data here, and look after its backups themselves. Only database state is checked: red if a database is suspect, amber if it's offline. Microsoft doesn't support changing its logins or settings.</p>`;
+      if (i.connect_error && i.internal) { inner += `<p class="hint">Couldn't connect (${esc(i.connect_error)}); that doesn't alert for the Windows Internal Database.</p>`; continue; }
       if (i.connect_error) { inner += `<p class="old">Couldn't connect: ${esc(i.connect_error)}</p><p class="hint">The agent connects as the computer's account (<code>NT AUTHORITY\\SYSTEM</code>). If it has no login on this instance, create one: <code>CREATE LOGIN [NT AUTHORITY\\SYSTEM] FROM WINDOWS;</code>, then run the grants below.</p><pre class="mono" style="white-space:pre-wrap;margin:4px 0">${esc(GRANT)}</pre>`; continue; }
       const dbs = (i.databases || []).slice().sort((a, b) => (a.system - b.system) || collator.compare(a.name, b.name));
       inner += tbl(["Database", "State", "Recovery", "Last full / diff", "Last log", "Log", ""], dbs.map(x => {
@@ -1762,8 +1767,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
           : `<b class="${x._level === "crit" ? "failtxt" : ""}">${esc(ST[x._state] || x._state)}</b>${x._why && x._state !== "offline" ? `<br><small class="muted">${esc(x._why)}</small>` : ""}`;
         return `<tr class="${rowCls(bad, "sqldb", x.name)}"><td><b>${esc(x.name)}</b>${x.system ? ` <small class="muted">system</small>` : ""}${x.ag ? ` <small class="muted">availability group${x.ag_preferred === false ? ", backed up on another replica" : ""}</small>` : ""}</td>
           <td>${st}</td><td>${esc((x.recovery || "").toLowerCase())}</td>
-          <td>${i.backups_read ? esc(ago(last)) || `<small class="muted">none in 35 days</small>` : `<small class="muted">can't read</small>`}</td>
-          <td>${x.recovery !== "SIMPLE" ? esc(ago(x.last_log)) || `<small class="muted">none</small>` : ""}</td>
+          <td>${i.internal ? `<small class="muted">by its role</small>` : i.backups_read ? esc(ago(last)) || `<small class="muted">none in 35 days</small>` : `<small class="muted">can't read</small>`}</td>
+          <td>${x.recovery !== "SIMPLE" && !i.internal ? esc(ago(x.last_log)) || `<small class="muted">none</small>` : ""}</td>
           <td>${x.log_mb != null ? `${x.log_mb >= 1024 ? (x.log_mb / 1024).toFixed(1) + " GB" : Math.round(x.log_mb) + " MB"} <small class="muted">${x.log_used_pct}% used</small>` : ""}</td>
           <td>${bad || findIgnore("sqldb", x.name) ? ignBtn("sqldb", x.name, x.name) : ""}</td></tr>`;
       }));
@@ -1773,7 +1778,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
           <td>${esc(when(j.last_run)) || `<small class="muted">never</small>`}</td><td>${bad ? `<b class="failtxt">Failed</b>` : esc(j.outcome || "")}</td>
           <td>${bad || findIgnore("sqljob", j.name) ? ignBtn("sqljob", j.name, j.name) : ""}</td></tr>`;
       }));
-      if ((i.denied || []).length) inner += `<p class="old" style="margin-top:8px">Can't read ${esc(i.denied.join(", "))}: the computer's account (<code>NT AUTHORITY\\SYSTEM</code>) needs permission. Run this on the instance (read-only access):</p><pre class="mono" style="white-space:pre-wrap;margin:4px 0">${esc(GRANT)}</pre>`;
+      if ((i.denied || []).length && !i.internal) inner += `<p class="old" style="margin-top:8px">Can't read ${esc(i.denied.join(", "))}: the computer's account (<code>NT AUTHORITY\\SYSTEM</code>) needs permission. Run this on the instance (read-only access):</p><pre class="mono" style="white-space:pre-wrap;margin:4px 0">${esc(GRANT)}</pre>`;
       if ((i.errors || []).length) inner += `<p class="hint">Couldn't check: ${esc(i.errors.join("; "))}</p>`;
     }
     html += sect("SQL Server", inner + `<p class="hint">Amber when a database has had no full or differential backup for ${esc(String((data && data.sql_backup_hours) || 36))} h (<code>agent_sql_backup_hours</code>), is in full recovery with its log not being backed up, is offline, or a SQL Agent job's last run failed; red when a database is suspect or recovery pending. Veeam's application-aware backups count. System databases, and ones their own application protects (Veeam's, WSUS), aren't checked for backups. ${chk ? ignBtn("sqldb", "sql", "SQL Server") + " the whole check on this server." : ""}</p>`);

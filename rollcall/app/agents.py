@@ -328,6 +328,7 @@ def normalize_report(r) -> dict:
                     for j in _as_list(i.get("jobs")) if isinstance(j, dict) and j.get("name")][:60]
             insts.append({**{k: str(i.get(k) or "")[:200] for k in ("instance", "version", "edition", "level", "login", "connect_error")},
                           "databases": dbs, "jobs": jobs if "jobs" in i else None, "backups_read": i.get("backups_read") is True,
+                          "internal": i.get("internal") is True or str(i.get("instance") or "").upper().startswith("MICROSOFT##"),
                           "denied": [str(x)[:20] for x in _as_list(i.get("denied"))][:6], "errors": [str(x)[:220] for x in _as_list(i.get("errors"))][:6]})
         c["sql"] = {"instances": insts}
     if "tasks" in c:
@@ -917,7 +918,7 @@ SQL_SELF_MANAGED = re.compile(r"^(VeeamBackup|VeeamBackupReporting|VeeamOne|Veea
 def sql_db_state(i: dict, d: dict, now: float, backup_hours: float = 36, ign: "Ignore | None" = None) -> tuple[str, str, str]:
     """(level, state, why) for one database: OK/WARN/CRIT plus a short state for the table."""
     name = d["name"]
-    if ign and (ign.has("sqldb", name) or ign.has("sqldb", f"{i['instance']}\\{name}")):
+    if ign and (ign.has("sqldb", name) or ign.has("sqldb", f"{i['instance']}\\{name}") or ign.has("sqldb", f"{i['instance']}\\*")):
         return OK, "ignored", ""
     if d["state"] in SQL_BAD_STATES:
         return CRIT, "bad", d["state"].replace("_", " ").lower()
@@ -927,6 +928,8 @@ def sql_db_state(i: dict, d: dict, now: float, backup_hours: float = 36, ign: "I
         return OK, "other", d["state"].replace("_", " ").lower()  # restoring (log shipping) or recovering
     if d["snapshot"]:
         return OK, "snapshot", "database snapshot"
+    if i.get("internal"):  # Windows Internal Database: its role (WSUS, AD FS, RD Broker) looks after backups
+        return OK, "ok", "managed by Windows"
     problems = []
     managed = bool(SQL_SELF_MANAGED.match(name))
     if not d["system"] and not managed and i.get("backups_read") and not (d.get("ag") and d.get("ag_preferred") is False):
@@ -952,9 +955,13 @@ def sql_state(sql: dict, now: float, backup_hours: float = 36, ign: "Ignore | No
     if not insts:
         return None
     bad = []  # (level, text)
-    ok_dbs = 0
+    ok_dbs = wid_dbs = 0
     for i in insts:
         n = i["instance"]
+        if ign and ign.has("sqldb", f"{n}\\*"):
+            continue
+        if i.get("internal") and i.get("connect_error"):
+            continue  # a role's internal database we can't reach: not worth an alert
         if i.get("connect_error"):
             why = i["connect_error"]
             hint = " (the computer's account, SYSTEM, needs a login)" if re.search(r"login failed", why, re.I) else ""
@@ -964,21 +971,27 @@ def sql_state(sql: dict, now: float, backup_hours: float = 36, ign: "Ignore | No
             lvl, _st, why = sql_db_state(i, d, now, backup_hours, ign)
             if lvl != OK:
                 bad.append((lvl, f"{d['name']}: {why}"))
-            elif d["state"] == "ONLINE":
+            elif d["state"] == "ONLINE" and not i.get("internal"):
                 ok_dbs += 1
+            elif d["state"] == "ONLINE":
+                wid_dbs += 1
         for j in i.get("jobs") or []:
             if j["enabled"] and j["outcome"] == "failed" and not (ign and ign.has("sqljob", j["name"])):
                 t = _ts(j.get("last_run"))
                 if t and now - t < 30 * DAY:
                     bad.append((WARN, f"job '{j['name']}' failed"))
-        if i.get("denied"):
+        if i.get("denied") and not i.get("internal"):
             bad.append((WARN, f"{n}: can't read {', '.join(i['denied'])} (permission; see Details)"))
     if bad:
         bad.sort(key=lambda b: b[0] != CRIT)
         lvl = CRIT if any(b[0] == CRIT for b in bad) else WARN
         return lvl, bad[0][1] + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
-    backed = all(i.get("backups_read") for i in insts)
-    return OK, f"{ok_dbs} database(s) online" + (" and backed up" if backed else "") + (f" on {len(insts)} instances" if len(insts) > 1 else "")
+    backed = all(i.get("backups_read") for i in insts if not i.get("internal"))
+    user = [i for i in insts if not i.get("internal")]
+    parts = [f"{ok_dbs} database(s) online" + (" and backed up" if backed else "") + (f" on {len(user)} instances" if len(user) > 1 else "")] if user else []
+    if wid_dbs:
+        parts.append(f"Windows Internal Database: {wid_dbs} database(s) online")
+    return OK, "; ".join(parts) or "No databases to check"
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:

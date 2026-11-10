@@ -669,7 +669,9 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\SYSTEM];   -- SQL Agent
 
 If the agent can't log in at all, create the login first: `CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS;`.
 
-To leave out a database, use **Ignore** on its row (`sqldb:<name>`, or `sqldb:<instance>\<name>`); a job, `sqljob:<name>`; the whole check, `sqldb:sql`.
+**Windows Internal Database** (WID, `MICROSOFT##WID`) is the cut-down SQL Server that Windows roles install for themselves: WSUS, AD FS, the RD Connection Broker and IPAM. The agent connects to it through its local pipe and lists its databases. Only their state is checked: red if one is suspect, amber if it's offline. There are no backup, log or job alerts, because each role looks after its own data. A WID the agent can't reach doesn't alert. Microsoft doesn't support changing WID's logins or settings, so no permissions are needed or recommended.
+
+To leave out a database, use **Ignore** on its row (`sqldb:<name>`, or `sqldb:<instance>\<name>`); a whole instance, **Ignore** by its name (`sqldb:<instance>\*`, e.g. `sqldb:MICROSOFT##WID\*`); a job, `sqljob:<name>`; the whole check, `sqldb:sql`.
 
 ### Scheduled tasks
 

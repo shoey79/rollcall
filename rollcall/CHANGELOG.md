@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.55.0 - 2026-11-10
+
+### Changed
+- **SQL Server: Windows Internal Database** (WID, used by WSUS, AD FS, RD Connection Broker and IPAM) is handled properly (Windows agent 1.0.29).
+  - The agent connects to it through its local pipe, so it no longer shows as "can't connect".
+  - Only database state is checked (suspect red, offline amber). Backups, logs and jobs are left to the role that owns the data, and no permission changes are needed.
+  - A WID that can't be reached doesn't alert. Its databases don't count towards "backed up".
+- **SQL Server:** a whole instance can be ignored with the new **Ignore** button next to its name (`sqldb:<instance>\*`).
+
 ## 1.54.1 - 2026-11-10
 
 ### Changed
