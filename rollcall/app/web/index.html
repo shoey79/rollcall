@@ -836,7 +836,7 @@ function autoIcon(h) {
   const n = (h.name + " " + (h.model || "")).toLowerCase(), checks = (h.checks || []).join(" ").toLowerCase();
   const os = (h.agent && h.agent.os || "").toLowerCase();
   const rules = [[/zigbee|slzb|z-?wave|hue bridge|\bhub\b|bridge/, "hub"], [/\b(ap|uap)\d*\b|access ?point|u6|nanohd|ac ?pro|ac ?lite/, "ap"], [/\bnas\b|terastation|synology|qnap|readynas/, "nas"],
-    [/switch|\bpoe|\bsw\d|\bgs\d{3}/, "switch"], [/\bnvr\b|\bdvr\b|\bcctv\b|\bcam(era)?\b|\byi\b|dome/, "camera"], [/print|laserjet|mfp/, "printer"],
+    [/switch|\bpoe|\bsw\d|\bgs\d{3}/, "switch"], [/\bnvr\d*\b|\bdvr\d*\b|\bcctv|\bcam(era)?s?\d*\b|\bipcam|\byi\b|dome|hikvision|dahua|reolink|swann|\baxis\b/, "camera"], [/print|laserjet|mfp/, "printer"],
     [/firewall|\bfw\d*\b|sophos|\bxg\d*|pfsense|opnsense|fortigate/, "firewall"],
     [/\bspa\d{3}|\bata\b|voip|\bsip\b|yealink|snom|polycom|grandstream|gigaset|\bpbx\b|3cx|asterisk|freepbx/, "voip"],
     [/\btv\b|youview|roku|apple ?tv|shield|firestick/, "tv"], [/\bups\b|inverter|battery/, "ups"], [/router|gateway|\budm|\busg|edgerouter|draytek/, "router"],
@@ -847,6 +847,7 @@ function autoIcon(h) {
   if (vk) return "vm";
   if (h.agent) return /server/.test(os) || h.agent.os_family === "linux" ? "server" : "desktop";
   if (/printer/.test(checks)) return "printer";
+  if (/\bcamera\b|rtsp|:554\b/.test(checks)) return "camera";  // the IP camera / NVR preset, or any check on RTSP (554)
   if (/\bvoip\b|\bata2\b|\bspa1[12]2\b|\bsip\b/.test(checks)) return "voip";
   if (/\bsnmp/.test(checks)) return "switch";
   if (/proxmox|esxi|hyperv|truenas|unraid/.test(checks)) return "server";
@@ -867,7 +868,10 @@ async function loadIcons() {
 }
 let pickIcon = "";
 function showPicked(h) {
-  const fake = {...(h || {name: fName.value, checks: []}), icon: pickIcon, name: fName.value || (h && h.name) || "", model: document.getElementById("fModel").value};
+  // what's ticked in the form now, so "Automatic" follows the checks as you pick them (e.g. RTSP: camera)
+  const ticked = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
+    .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
+  const fake = {...(h || {}), checks: ticked, icon: pickIcon, name: fName.value || (h && h.name) || "", model: document.getElementById("fModel").value};
   document.getElementById("fIconShow").innerHTML = iconHtml(fake);
   const u = uploadedIcons.find(x => x.id === pickIcon);
   document.getElementById("fIconName").textContent = !pickIcon ? `Automatic (${(ICONS[autoIcon(fake)] || ICONS.device)[0]})`
@@ -3003,6 +3007,7 @@ async function loadPresets() {
         `<span><b>${esc(p.title)}</b><small>${esc(p.summary)}</small></span></label>`;
     }).join("") + `</div></div>`).join("");
   document.getElementById("presetGroups").addEventListener("change", updatePicked);
+  document.getElementById("customList").addEventListener("input", () => { if (!pickIcon) showPicked(editing); });
 }
 
 function filterPresets() {
@@ -3036,6 +3041,7 @@ function snmpShow() {
 }
 for (const id of ["fSnmpVer", "fV3Auth", "fV3Priv"]) document.getElementById(id).addEventListener("change", snmpShow);
 function updatePicked() {
+  if (!pickIcon) showPicked(editing);
   const snmpOn = !!form.querySelector('.preset input[value="snmp"]:checked');
   document.getElementById("snmpBox").hidden = !snmpOn;
   document.getElementById("syslogBox").hidden = !form.querySelector('.preset input[value="syslog"]:checked');

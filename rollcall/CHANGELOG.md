@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.53.1 - 2026-11-10
+
+### Changed
+- **Automatic icons:** a computer with the *IP camera / NVR (RTSP)* preset, or any check on port 554, gets the CCTV camera icon. Names like `NVR01` or `CAM02`, and camera makes (Hikvision, Dahua, Reolink, Swann, Axis), do too ([#1](https://github.com/shoey79/rollcall/issues/1)).
+- In the Add and Edit form, *Automatic* now follows the checks you tick, so the icon updates as you choose them.
+
 ## 1.53.0 - 2026-11-10
 
 ### Added

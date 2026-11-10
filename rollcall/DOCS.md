@@ -156,7 +156,7 @@ The add-on runs in Home Assistant's container network, so it can't read MAC addr
 
 ### Icons and make/model
 
-Each computer has an icon, in the list and on the Overview. By default it's picked from the computer's name (e.g. "AP1", "NAS", "SQL01", "CCTV"), its agent (Windows Server or desktop, Linux) or its checks (printer, SNMP, SIP).
+Each computer has an icon, in the list and on the Overview. By default it's picked from the computer's name or make (e.g. "AP1", "NAS", "SQL01", "NVR01", "Hikvision"), its agent (Windows Server or desktop, Linux) or its checks (printer, RTSP camera, SNMP, SIP). In the form, *Automatic* shows which icon that gives, and follows the checks as you tick them.
 
 To choose one yourself, choose **Icon** in Edit. There are 24 device types: rack, storage and tower servers, desktop, laptop, VM, database, NAS, switch, router, firewall, access point, smart home hub, CCTV and dome cameras, printer, UPS, TV, phone, VoIP phone/ATA, single-board computer, web service, cloud and other. They're generic and drawn for Rollcall, with no company logos.
 
