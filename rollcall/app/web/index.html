@@ -839,7 +839,7 @@ const svgIcon = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${(ICONS[k] ||
 function autoIcon(h) {
   const n = (h.name + " " + (h.model || "")).toLowerCase(), checks = (h.checks || []).join(" ").toLowerCase();
   const os = (h.agent && h.agent.os || "").toLowerCase();
-  const rules = [[/zigbee|slzb|z-?wave|hue bridge|\bhub\b|bridge/, "hub"], [/\b(ap|uap)\d*\b|access ?point|u6|nanohd|ac ?pro|ac ?lite/, "ap"], [/\bnas\b|terastation|synology|qnap|readynas/, "nas"],
+  const rules = [[/zigbee|slzb|z-?wave|hue bridge|\bhub\b|bridge|\btapo ?h[12]00\b|^h[12]00\b/, "hub"],  // Tapo H100/H200 are hubs [/\b(ap|uap)\d*\b|access ?point|u6|nanohd|ac ?pro|ac ?lite/, "ap"], [/\bnas\b|terastation|synology|qnap|readynas/, "nas"],
     [/switch|\bpoe|\bsw\d|\bgs\d{3}/, "switch"], [/\bnvr\d*\b|\bdvr\d*\b|\bcctv|\bcam(era)?s?\d*\b|\bipcam|\byi\b|dome|hikvision|dahua|reolink|swann|\baxis\b|\btapo ?c\d{3}\b/, "camera"], [/print|laserjet|mfp/, "printer"],
     // smart plugs and strips: Tapo P100-P125 and P300/P304M, Kasa HS100-HS110, KP1xx/KP3xx and EP10/EP25
     [/smart ?plug|\bplugs?\d*\b|\bsocket|\bshelly ?plug|tasmota|sonoff|\bkasa\b|\bmeross\b|\bp1[0-2]\dm?\b|\bp30\dm?\b|\bhs1[01]\d\b|\bkp[1-4]\d\d\b|\bep[1-4]\d\b/, "plug"],

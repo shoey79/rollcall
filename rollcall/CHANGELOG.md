@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.54.1 - 2026-11-10
+
+### Changed
+- **Automatic icons:** Tapo H100 and H200 smart hubs get the smart home hub icon, from a name or model such as "H200" or "Tapo H200". A server with an NVIDIA H100 isn't caught.
+
 ## 1.54.0 - 2026-11-10
 
 ### Added
