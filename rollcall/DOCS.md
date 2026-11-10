@@ -568,7 +568,33 @@ The Security tab (admins only, agent 1.0.17 or later) lists every direct member 
 - **Disks → Change** sets that disk's own amber and red levels (% free), e.g. amber below 8% and red below 3% for a large data volume. Leave a box blank to use the default, or enter 0 to turn that level off. **Use defaults** removes the override.
 - **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything. The items stay listed, greyed out, and anything new turns the check amber again. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
 
+- **Security filters**: for security events that are expected and low-risk, so they stop alerting. See below.
+
 These settings are kept in the add-on's data folder (`agent_settings.json`), across restarts and agent updates.
+
+#### Security filters
+
+Some account and group changes are routine: LAPS recreating its managed account, a deployment tool adding a service account to a group, a helpdesk group that changes every week. A filter stops events like these from alerting, while everything else of the same kind still does.
+
+On the **Security** tab, choose **Filter…** next to an event (admins and editors). The form is filled in from that event, and an event has to match every part you leave in:
+
+| Part | Matches | Example |
+|---|---|---|
+| The event | That event type. Untick it to match any security event | User account created (4720) |
+| Account | The account the event is about | `*\LAPSAdmin`, `svc_*`, `CONTOSO\svc_deploy` |
+| Group | The group it was added to or removed from | `Builtin\Administrators`, `CONTOSO\Helpdesk*` |
+| Done by | Who made the change | `SYSTEM*` (Windows itself, e.g. LAPS or Group Policy), `CONTOSO\svc_deploy` |
+| Applies to | This server, or all servers | |
+| Note | Why it's expected; shown next to filtered events | "LAPS manages this account" |
+
+- `*` stands for any run of characters and `?` for any one. Matching ignores upper and lower case. An empty box matches anything.
+- For a local account on the computer the event came from, the account is suggested as `*\name`, so one filter covers that account on every computer.
+- The form says how many of the listed events the filter matches before you save it, and warns if it would hide every event of a type.
+- **What a filter does:** matching events don't notify and don't turn the Security check amber. They're still listed, greyed out, with the note. It applies straight away, including to events from the last 24 hours, so an alert it covers clears now.
+- **Security filters**, under the events, lists every filter for this server and for all servers, with who added it and when. **Apply to all servers** widens one; **Remove** deletes it, and matching events from the last 24 hours count again.
+- A filter needs at least an event type or one pattern. Each add and removal is logged with who did it.
+
+Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the change you want to hear about; "LAPSAdmin added to Administrators by SYSTEM" doesn't. Filters work for the Linux agent's security events too.
 
 **From the Configuration tab (all servers):**
 
@@ -684,10 +710,10 @@ The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-a
 Some amber states clear themselves after a while. **Acknowledge** clears them now. A new occurrence still alerts.
 
 - **Syslog alerts**: in the Logs tab or on the Overview.
-- **Agent Events and Security**: on the check's card or at the top of its tab. **Undo** puts it back.
+- **Agent Events and Security**: on the check's card or at the top of its tab. **Undo** puts it back. For security events that are expected every time, use a [security filter](#security-filters) instead.
 - **An SNMP device's restart**: in the SNMP tab or on the Overview.
 
-Problems that clear themselves once fixed, such as a reading over its limit or a SIP line not registered, can't be acknowledged; they turn green when they're resolved. To stop something alerting at all, use **Ignore** (agents) or **Never alert on these words** (syslog).
+Problems that clear themselves once fixed, such as a reading over its limit or a SIP line not registered, can't be acknowledged; they turn green when they're resolved. To stop something alerting at all, use **Ignore** (agents), a [security filter](#security-filters) (security events) or **Never alert on these words** (syslog).
 
 ### Pausing for reboots (maintenance mode)
 

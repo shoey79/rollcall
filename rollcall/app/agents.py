@@ -313,6 +313,87 @@ class Ignore:
         return str(value).strip().lower().rstrip(":") in self.items.get(kind, set())
 
 
+# --------------------------------------------------------------------------
+# Security filters: expected, low-risk security events that shouldn't alert
+# --------------------------------------------------------------------------
+SEC_FILTER_FIELDS = ("account", "group", "by")
+
+
+def _pretty_account(value) -> str:
+    """A directory DN ("CN=Sam Lee,OU=...") shown as its name; anything else as it is."""
+    v = str(value or "").strip()
+    m = re.match(r"^CN=((?:[^,\\]|\\.)+)", v, re.I)
+    return m.group(1).replace("\\", "") if m else v
+
+
+def _wild(pattern: str) -> "re.Pattern":
+    """A filter pattern as a regex: * is any run of characters, ? any one; the rest is literal.
+    Matching ignores case and has to cover the whole value."""
+    out = "".join(".*" if c == "*" else "." if c == "?" else re.escape(c) for c in pattern)
+    return re.compile(out + r"\Z", re.I | re.S)
+
+
+def clean_sec_filter(raw) -> dict:
+    """Validate one security filter from the dashboard.
+
+    {"events": [4732], "account": "*\\LAPSAdmin", "group": "Builtin\\Administrators", "by": "SYSTEM*", "note": "..."}
+    Every part that's given has to match. An empty events list means any event; an empty pattern
+    means anything. A filter with nothing in it, or only wildcards, is refused."""
+    raw = raw if isinstance(raw, dict) else {}
+    events = []
+    for e in raw.get("events") or []:
+        try:
+            e = int(e)
+        except (TypeError, ValueError):
+            raise ValueError("event IDs must be numbers") from None
+        if not 1 <= e <= 65535:
+            raise ValueError("event IDs must be between 1 and 65535")
+        if e not in events:
+            events.append(e)
+    if len(events) > 20:
+        raise ValueError("a filter can name up to 20 events")
+    out = {"events": sorted(events)}
+    for k in SEC_FILTER_FIELDS:
+        v = str(raw.get(k) or "").strip()
+        if len(v) > 128 or not v.isprintable():
+            raise ValueError("patterns are up to 128 ordinary characters")
+        out[k] = "" if not v.strip("*?") else v  # only wildcards = anything
+    note = str(raw.get("note") or "").strip()
+    if len(note) > 80 or not note.isprintable():
+        raise ValueError("the note is up to 80 ordinary characters")
+    out["note"] = note
+    if not out["events"] and not any(out[k] for k in SEC_FILTER_FIELDS):
+        raise ValueError("a filter needs an event type or an account, group or 'done by' to match")
+    return out
+
+
+def sec_filter_matches(f: dict, item: dict) -> bool:
+    if f.get("events") and int(item.get("id") or 0) not in f["events"]:
+        return False
+    for k in SEC_FILTER_FIELDS:
+        pat = f.get(k)
+        if not pat:
+            continue
+        value = _pretty_account(item.get(k)) if k == "account" else str(item.get(k) or "")
+        if not _wild(pat).match(value.strip()):
+            return False
+    return True
+
+
+def apply_sec_filters(items: list, filters: list, alert_ids: set) -> None:
+    """Decide which security events alert: those whose ID is in alert_ids, unless a filter matches.
+    A filtered event stays in the list, marked with the filter that matched it."""
+    for item in items:
+        hit = next((f for f in filters or [] if sec_filter_matches(f, item)), None)
+        item["alert"] = int(item.get("id") or 0) in alert_ids and not hit
+        if hit:
+            item["filtered"] = hit.get("note") or "filter"
+            item["filter_id"] = hit.get("id") or ""
+        else:
+            item.pop("filtered", None)
+            item.pop("filter_id", None)
+
+
 def _watch_match(entries, source: str, event_id: int) -> bool:
     src = (source or "").lower()
     for e in entries or []:
@@ -764,10 +845,8 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
 
     sec = report.get("security") or {}
     alert_ids = set(int(i) for i in opts.get("agent_security_alert_ids", DEFAULT_SECURITY_ALERT_IDS))
-    for item in sec.get("items") or []:
-        item = dict(item)
-        item["alert"] = int(item.get("id") or 0) in alert_ids
-        notable["security"].append(item)
+    notable["security"] = [dict(item) for item in sec.get("items") or []]
+    apply_sec_filters(notable["security"], settings.get("sec_filters") or [], alert_ids)
     fl = sec.get("failed_logons") or {}
     threshold = int(opts.get("agent_failed_logons", 20))
     if fl.get("count"):

@@ -2519,7 +2519,43 @@ class Monitor:
     def _host_settings(self, h: Host) -> dict:
         hs = self.agent_settings["hosts"].get(h.key) or {}
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
-                "disks": dict(hs.get("disks") or {})}
+                "disks": dict(hs.get("disks") or {}),
+                "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
+
+    async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
+                             who: str | None = None) -> dict | None:
+        """Add, remove or widen ("promote" to all servers) a security filter, then apply it straight
+        away to the events already received, so an alert it covers clears now."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        mine, everyone = hs.setdefault("sec_filters", []), self.agent_settings.setdefault("global_sec_filters", [])
+        lst = everyone if scope == "all" else mine
+        done = None
+        if action == "add" and flt:
+            if len(lst) >= 100:
+                raise ValueError("that's the limit of 100 filters; remove one first")
+            same = next((f for f in lst if all(f.get(k) == flt.get(k) for k in ("events", *agentlib.SEC_FILTER_FIELDS))), None)
+            done = same or {**flt, "id": secrets.token_hex(4), "at": time.time(), "by_user": who or ""}
+            if not same:
+                lst.append(done)
+        elif action == "remove":
+            done = next((f for f in lst if f.get("id") == fid), None)
+            if done:
+                lst.remove(done)
+        elif action == "promote":
+            done = next((f for f in mine if f.get("id") == fid), None)
+            if done:
+                mine.remove(done)
+                everyone.append(done)
+                scope = "all"
+        if not done:
+            return None
+        self._save_agent_settings()
+        log.info("Security filter %s (%s) %s by %s: %s", done.get("id"), "all servers" if scope == "all" else h.name,
+                 {"add": "added", "remove": "removed", "promote": "applied to all servers"}[action], who or "someone",
+                 {k: done.get(k) for k in ("events", *agentlib.SEC_FILTER_FIELDS, "note") if done.get(k)})
+        for x in ([x for x in self.hosts.values() if x.agent_report] if scope == "all" else [h]):
+            await self.reevaluate(x)
+        return done
 
     async def set_ignore(self, h: Host, item: str, scope: str, remove: bool) -> None:
         hs = self.agent_settings["hosts"].setdefault(h.key, {})
@@ -2570,6 +2606,9 @@ class Monitor:
         for e in h.agent_history.get("events", []):
             if ign.has("event", e.get("id")):
                 e["alert"] = False
+        # Security filters added or removed since an event arrived apply to it too.
+        agentlib.apply_sec_filters(h.agent_history.get("security", []), settings["sec_filters"],
+                                   set(int(i) for i in self.opts.get("agent_security_alert_ids", agentlib.DEFAULT_SECURITY_ALERT_IDS)))
         if not restoring and not reeval:
             self._history_add(h, "events", notable["events"], received)
             self._history_add(h, "security", notable["security"], received)
@@ -2823,6 +2862,8 @@ class Monitor:
         hs = self.agent_settings["hosts"].get(h.key) or {}
         settings = {"ignore": hs.get("ignore") or [], "global_ignore": self.agent_settings.get("global_ignore") or [],
                     "ack": hs.get("ack") or {},
+                    "sec_filters": (hs.get("sec_filters") or []) if include_security else [],
+                    "global_sec_filters": (self.agent_settings.get("global_sec_filters") or []) if include_security else [],
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
         if include_security and hs.get("admins_seen") is not None:
@@ -3210,6 +3251,29 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         scope = "all" if body.get("scope") == "all" else "host"
         await monitor.set_ignore(h, item, scope, bool(body.get("remove")))
         return web.json_response({"ok": True, "item": item, "scope": scope})
+
+    async def agent_sec_filter(req):
+        """Add, remove or widen a security filter (events that match don't alert)."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        action = body.get("action")
+        if action not in ("add", "remove", "promote"):
+            return web.json_response({"error": "action must be add, remove or promote"}, status=400)
+        scope = "all" if body.get("scope") == "all" else "host"
+        user = await access.who(req)
+        try:
+            flt = agentlib.clean_sec_filter(body.get("filter")) if action == "add" else None
+            done = await monitor.set_sec_filter(h, action, scope, flt, str(body.get("id") or ""), user.get("display"))
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        if not done:
+            return web.json_response({"error": "That filter isn't there any more"}, status=404)
+        return web.json_response({"ok": True, "filter": done})
 
     async def agent_ack(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -3734,6 +3798,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/resume/{key}", editor_only(resume))
     app.router.add_get("/api/hosts/{key}/details", host_details)
     app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
+    app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))

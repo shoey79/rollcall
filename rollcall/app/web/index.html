@@ -366,6 +366,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 }
 .subh{margin:12px 0 4px;font-size:13px;font-weight:600}
 .rdform{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}.rdform label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:2px}.rdform input{width:110px}.rdform label:first-child input{width:160px}.rdform .unit{color:var(--muted);font-size:12px;padding-bottom:6px}
+.secflt .chk{display:flex;gap:6px;align-items:center;margin:0 0 8px;font-size:13px}.secflt .rdform input{width:190px}.secflt code{background:var(--chip,rgba(127,127,127,.15));padding:0 3px;border-radius:3px}
 </style>
 </head>
 <!-- Starts view-only: admin controls only appear once the add-on confirms this user can make changes. -->
@@ -1568,7 +1569,7 @@ document.getElementById("detRefresh").addEventListener("click", () => detKey && 
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
-  const st = d.settings || {ignore: [], global_ignore: [], config_ignore: [], disks: {}, defaults: {warn: 15, crit: 5}};
+  const st = d.settings || {ignore: [], global_ignore: [], config_ignore: [], disks: {}, defaults: {warn: 15, crit: 5}, sec_filters: [], global_sec_filters: []};
   detSettings = st;
   document.getElementById("detTitle").textContent = d.name;
   document.getElementById("detSub").textContent = d.received
@@ -1752,9 +1753,12 @@ function renderDetails(d) {
       `<p class="empty-note">None.</p>`);
     const sec = (hist.security || []).slice().reverse();
     html += ackBar("security", "notable security event(s)");
-    html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By"], sec.map(x =>
-      `<tr class="${alertCls(x, "security")}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td></tr>`)) ||
+    detSec = {events: sec, host: String(r.hostname || "").toUpperCase(), linux};
+    html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By", ""], sec.map((x, i) =>
+      `<tr class="${x.filtered ? "dim" : alertCls(x, "security")}" data-secrow="${i}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}${x.filtered ? `<br><small class="muted">Filtered${x.filtered !== "filter" ? ": " + esc(x.filtered) : ""}</small>` : ""}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td>
+       <td>${x.filtered ? "" : `<button type="button" class="mini edit-only" data-secflt="${i}" title="Don't alert on expected events like this one">Filter…</button>`}</td></tr>`)) ||
       `<p class="empty-note">No notable security events in the last 24 hours.</p>`);
+    html += secFiltersSection(st);
     html += adminsSection(r, st, linux);
   } else {
     html += sect("Security events", `<p class="empty-note">Only Home Assistant admins can see security events.</p>`);
@@ -1832,6 +1836,110 @@ function lapsSection(l, chk) {
     </div>` + (l.last_error ? `<p class="hint failtxt">${esc(l.last_error)}</p>` : "") + (l.ad_error ? `<p class="hint">Couldn't read the expiry from AD: ${esc(l.ad_error)}</p>` : "")
     + `<p class="hint">Amber once the password is more than a day past due; red once it's ${esc(String((data && data.laps_overdue_days) || 3))} days past due. Rollcall never reads the password itself.</p>`);
 }
+// ---- Security filters: expected, low-risk security events that shouldn't alert ----
+let detSec = {events: [], host: "", linux: false};
+const SEC_NAMES = {4740: "Account locked out", 4720: "User account created", 4726: "User account deleted",
+  4728: "Added to global security group", 4732: "Added to local security group", 4756: "Added to universal security group",
+  4729: "Removed from global security group", 4733: "Removed from local security group", 4757: "Removed from universal security group",
+  1102: "Security log cleared", 4719: "Audit policy changed", 4724: "Password reset by another account", 4767: "Account unlocked",
+  4722: "User account enabled", 4725: "User account disabled", 4673: "Not allowed to use sudo", 4624: "Logged on over SSH"};
+// * is any run of characters, ? any one; everything else is literal. Same rules as the add-on.
+function wildRe(p) { return new RegExp("^" + [...p].map(c => c === "*" ? ".*" : c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("") + "$", "is"); }
+function secMatches(f, x) {
+  if ((f.events || []).length && !f.events.includes(+x.id)) return false;
+  for (const k of ["account", "group", "by"]) {
+    if (!f[k] || !f[k].replace(/[*?]/g, "")) continue;
+    if (!wildRe(f[k]).test(String(k === "account" ? prettyAcct(x.account) : x[k] || "").trim())) return false;
+  }
+  return true;
+}
+function secFilterText(f) {
+  const ev = (f.events || []).length ? f.events.map(i => `${esc(SEC_NAMES[i] || "Event")} <small class="muted">${i}</small>`).join(", ") : "Any security event";
+  const parts = [["account", "account"], ["group", "group"], ["by", "done by"]].filter(([k]) => f[k]).map(([k, w]) => `${w} <code>${esc(f[k])}</code>`);
+  return `${ev}${parts.length ? "<br>" + parts.join(" · ") : ""}${f.note ? `<br><small class="muted">${esc(f.note)}</small>` : ""}`;
+}
+function secFiltersSection(st) {
+  const rows = [...(st.sec_filters || []).map(f => ({f, scope: "host"})), ...(st.global_sec_filters || []).map(f => ({f, scope: "all"}))];
+  if (!rows.length) return `<p class="hint">Expected changes, such as a managed account being recreated, can be filtered so they don't alert: use <b>Filter…</b> on an event. Filtered events stay in the list.</p>`;
+  return sect(`Security filters (${rows.length})`, tbl(["Doesn't alert when", "Applies to", "Added", ""], rows.map(({f, scope}) => {
+    const n = detSec.events.filter(x => secMatches(f, x)).length;
+    return `<tr><td>${secFilterText(f)}</td><td>${scope === "host" ? "This server" : "All servers"}<br><small class="muted">${n} of the events listed</small></td>
+      <td><small class="muted">${esc(f.by_user || "")}${f.at ? "<br>" + when(new Date(f.at * 1000).toISOString()) : ""}</small></td>
+      <td><div class="actions">${scope === "host" ? `<button type="button" class="mini edit-only" data-secflt-all="${esc(f.id)}">Apply to all servers</button>` : ""}
+        <button type="button" class="mini danger edit-only" data-secflt-rm="${esc(f.id)}" data-scope="${scope}">Remove</button></div></td></tr>`;
+  })) + `<p class="hint">An event that matches a filter is still listed, greyed out, but doesn't notify or turn the Security check amber. Removing a filter makes matching events from the last 24 hours count again.</p>`);
+}
+function secFilterForm(i) {
+  const x = detSec.events[i];
+  let acct = prettyAcct(x.account);
+  // A local account on this computer (PC01\name): suggest the same account on any computer
+  if (detSec.host && acct.toUpperCase().startsWith(detSec.host + "\\")) acct = "*" + acct.slice(detSec.host.length);
+  const by = String(x.by || "");
+  const bySuggest = /^SYSTEM\b/i.test(by) ? "SYSTEM*" : by;
+  return `<tr class="rdedit" data-secform="${i}"><td colspan="6"><div class="secflt">
+    <p style="margin:0 0 6px"><b>Don't alert when all of these match</b></p>
+    <label class="chk"><input type="checkbox" data-f="ev" checked> The event is <b>${esc(x.what || SEC_NAMES[x.id] || "event")}</b>${detSec.linux ? "" : ` <small class="muted">${x.id}</small>`}</label>
+    <div class="rdform">
+      <label>Account<input data-f="account" maxlength="128" value="${esc(acct)}" placeholder="any" spellcheck="false"></label>
+      <label>Group<input data-f="group" maxlength="128" value="${esc(x.group || "")}" placeholder="any" spellcheck="false"></label>
+      <label>Done by<input data-f="by" maxlength="128" value="" placeholder="anyone" spellcheck="false"></label>
+      ${bySuggest ? `<button type="button" class="mini" data-secflt-by="${esc(bySuggest)}" title="This event was done by ${esc(by)}">Only by ${esc(bySuggest)}</button>` : ""}
+    </div>
+    <div class="rdform" style="margin-top:6px">
+      <label>Applies to<select data-f="scope"><option value="host">This server</option><option value="all">All servers</option></select></label>
+      <label style="flex:1;min-width:200px">Note (optional)<input data-f="note" maxlength="80" placeholder="e.g. LAPS recreates this account" style="width:100%"></label>
+    </div>
+    <p class="hint" data-secflt-preview style="margin:6px 0"></p>
+    <div class="actions"><button type="button" class="mini primary" data-secflt-save="${i}">Save filter</button><button type="button" class="mini" data-secflt-cancel="1">Cancel</button></div>
+    <p class="hint" style="margin:6px 0 0"><code>*</code> stands for anything, e.g. <code>*\\LAPSAdmin</code> is that account on any computer, and <code>svc_*</code> any account starting svc_. Leave a box empty to match anything. Keep filters narrow: matching events are still listed, but nobody is told about them.</p>
+  </div></td></tr>`;
+}
+function secFormValue(row) {
+  const v = f => row.querySelector(`[data-f="${f}"]`).value.trim(), i = +row.dataset.secform;
+  return {filter: {events: row.querySelector('[data-f="ev"]').checked ? [+detSec.events[i].id] : [], account: v("account"), group: v("group"), by: v("by"), note: v("note")},
+          scope: v("scope")};
+}
+function secFormPreview(row) {
+  const {filter, scope} = secFormValue(row), el = row.querySelector("[data-secflt-preview]");
+  const empty = !filter.events.length && !["account", "group", "by"].some(k => filter[k].replace(/[*?]/g, ""));
+  const n = detSec.events.filter(x => secMatches(filter, x)).length;
+  const broad = !empty && !["account", "group", "by"].some(k => filter[k].replace(/[*?]/g, ""));
+  el.innerHTML = empty ? `<b class="old">Tick the event or fill in a box: a filter has to match something.</b>`
+    : `Matches <b>${n}</b> of the ${detSec.events.length} event${detSec.events.length === 1 ? "" : "s"} listed here${scope === "all" ? ", and the same on every other server" : ""}.`
+      + (broad ? ` <b class="old">With no account, group or "done by", this hides every event of this type.</b>` : "");
+  row.querySelector("[data-secflt-save]").disabled = empty;
+}
+document.getElementById("detBody").addEventListener("input", e => {
+  const row = e.target.closest("[data-secform]");
+  if (row) secFormPreview(row);
+});
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-secflt],[data-secflt-by],[data-secflt-save],[data-secflt-cancel],[data-secflt-rm],[data-secflt-all]");
+  if (!b) return;
+  e.stopPropagation();
+  const d = b.dataset;
+  if (d.secflt !== undefined) {
+    document.querySelectorAll("[data-secform]").forEach(r => r.remove());
+    const tr = b.closest("tr");
+    tr.insertAdjacentHTML("afterend", secFilterForm(+d.secflt));
+    const row = tr.nextElementSibling;
+    secFormPreview(row); row.querySelector('[data-f="account"]').focus();
+  } else if (d.secfltBy !== undefined) {
+    const row = b.closest("[data-secform]");
+    row.querySelector('[data-f="by"]').value = d.secfltBy; secFormPreview(row);
+  } else if (d.secfltCancel) {
+    b.closest("[data-secform]").remove();
+  } else if (d.secfltSave !== undefined) {
+    const {filter, scope} = secFormValue(b.closest("[data-secform]"));
+    if (scope === "all" && !confirm("Apply this filter to every server?")) return;
+    b.disabled = true;
+    if (!await detPost("/agent/sec-filter", {action: "add", filter, scope})) b.disabled = false;
+  } else if (d.secfltRm) {
+    await detPost("/agent/sec-filter", {action: "remove", id: d.secfltRm, scope: d.scope});
+  } else if (d.secfltAll) {
+    if (confirm("Apply this filter to every server?")) await detPost("/agent/sec-filter", {action: "promote", id: d.secfltAll});
+  }
+}, true);
 // Who is in the Administrators group (Windows), or can act as root (Linux).
 function adminsSection(r, st, linux) {
   const title = linux ? "Administrators (sudo and root)" : "Administrators group";

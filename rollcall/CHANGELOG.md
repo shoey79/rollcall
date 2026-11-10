@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.45.0 - 2026-11-10
+
+### Added
+- **Security filters**, for security events that are expected and low-risk. **Filter…** next to an event on the Security tab makes a filter from it.
+  - A filter matches on the event type, the account, the group and who made the change. `*` is a wildcard, e.g. `*\LAPSAdmin` or `SYSTEM*`.
+  - It applies to one server or to all of them, and can carry a note saying why the event is expected.
+  - Matching events no longer notify or turn the Security check amber. They stay in the list, greyed out with the note.
+  - A new filter applies straight away, including to events from the last 24 hours.
+  - The form shows how many listed events a filter would match, and warns when it would hide a whole event type.
+  - **Security filters** on the Security tab lists them, with who added each and when, and lets you widen or remove them.
+  - Admins and editors only. Every change is logged.
+
 ## 1.44.4 - 2026-11-10
 
 ### Changed
