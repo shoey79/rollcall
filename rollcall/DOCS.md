@@ -55,6 +55,9 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 
 ### The Overview
 
+![The Overview: totals, alerts and every computer at a glance](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/dashboard.png)
+*Screenshots in this guide show made-up computers.*
+
 Rollcall opens on the **Overview**:
 
 - **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open the matching list.
@@ -87,6 +90,8 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are
 
 ### Details
 
+![Details of a Windows server with the agent: its checks and system information](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/details.png)
+
 **Details** on a row opens everything Rollcall knows about that computer, in tabs:
 
 - **Overview** (computers without an agent). The whole device on one page:
@@ -100,6 +105,8 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are
 Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit opens on top of Details, and Details refreshes when you save or cancel. It closes if you delete the computer.
 
 ### Adding and editing computers
+
+![Adding a computer: name, address and the services to check](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/add.png)
 
 - **Manage → Add computer** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
 - **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
@@ -303,6 +310,8 @@ The check reads whatever certificate the service presents; internal and self-sig
 
 Tick **VoIP phone, ATA or PBX** to check a device's SIP service on UDP 5060. For two-line adapters such as the Cisco SPA112/122, tick **Two-line ATA**: Line 1 is UDP 5060 and Line 2 is UDP 5061. For another port, use `sip:PORT`, e.g. `Line 3=sip:5062`, or `sip:HOST:PORT` for another address.
 
+![A two-line ATA with both SIP lines answering](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/sip.png)
+
 Each check sends a SIP OPTIONS request, the standard "are you there?" message, and any SIP reply counts as up:
 
 - Replies such as 404 Not Found or 401 Unauthorized are normal, because the request isn't addressed to a real number. The chip says e.g. `SIP answering (404 Not Found, normal for this probe) · Cisco/SPA122-1.4.1(SR5)`.
@@ -343,6 +352,8 @@ To bring in *all* of a device's entities at once, link its Home Assistant device
 ## Watching devices
 
 ### SNMP
+
+![A UPS read over SNMP: battery, runtime, load and its network port](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/snmp.png)
 
 For network kit you can't install an agent on, tick **SNMP** (under Network) when adding or editing the device, and choose the version:
 
@@ -393,6 +404,8 @@ Messages are matched to the device by the address they come from, including its 
 
 Some devices report readings in their routine log messages. Rollcall picks these out and shows them at the top of the **Logs** tab, and as tiles on the Overview: the latest value, the range and a small graph over 24 hours, and when it was last reported.
 
+![A NAS's Logs tab: temperatures, fan, time sync and firmware picked out of its syslog](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/syslog.png)
+
 | Device | Readings |
 |---|---|
 | Buffalo TeraStation and LinkStation | Temperatures (`temp0`, `temp1`…, as the NAS names them) and fan speed and mode, from `fanctld.sh`; whether the last time sync (NTP) worked; the last firmware check that found it up to date |
@@ -430,6 +443,8 @@ It turns green again when the line registers. Tip: add `getOptRdata` to the adap
 
 If Home Assistant already has an integration for a device, link its Home Assistant device and Rollcall reads all of the integration's entities, with no extra passwords. In **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. To remove it, choose **Unlink**.
 
+![A Pi-hole linked to its Home Assistant device, with its readings and controls](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/ha.png)
+
 This adds a **Home Assistant** check and a **Home Assistant** tab in Details, including for computers with an agent. On computers without an agent, the Overview shows it too:
 
 - **Readings:** every entity and its state. Diagnostic and configuration entities are folded away.
@@ -452,6 +467,8 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 **Requirements:** Windows Server 2012 R2 or later (Windows PowerShell 4.0+), and port 8100 open from the servers to Home Assistant. Workstations work too; they just have no server roles.
 
 ### Setting it up
+
+![Manage → Agents: where agents report to, and the downloads](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/agents.png)
 
 1. In the dashboard, open **Manage → Agents** and download **PingMonitorAgent.ps1**. Check the address first: it's what your servers use to reach Home Assistant on port 8100 (use the IP if they can't resolve the name). The script has the address and the enrolment key built in.
 2. Copy it to `\\your-domain\NETLOGON`, or any share the servers can read.
@@ -575,6 +592,8 @@ These settings are kept in the add-on's data folder (`agent_settings.json`), acr
 #### Security filters
 
 Some account and group changes are routine: LAPS recreating its managed account, a deployment tool adding a service account to a group, a helpdesk group that changes every week. A filter stops events like these from alerting, while everything else of the same kind still does.
+
+![Making a security filter from an event on the Security tab](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/security-filter.png)
 
 On the **Security** tab, choose **Filter…** next to an event (admins and editors). The form is filled in from that event, and an event has to match every part you leave in:
 

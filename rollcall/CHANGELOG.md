@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.45.1 - 2026-11-10
+
+### Documentation
+- Screenshots in the documentation: the Overview, Details, adding a computer, SIP, SNMP (a UPS), readings from syslog, a linked Home Assistant device, setting up agents and security filters. They show made-up computers.
+
 ## 1.45.0 - 2026-11-10
 
 ### Added
