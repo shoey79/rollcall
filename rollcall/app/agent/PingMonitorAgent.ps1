@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.20'
+$AgentVersion = '1.0.21'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -709,6 +709,57 @@ function Get-LocalAdmins {
     return $list
 }
 
+function Get-BitLockerStatus {
+    # BitLocker state of each fixed drive, from WMI (works without the BitLocker PowerShell module).
+    # Reads states and which kinds of key protector exist; never the keys or recovery passwords themselves.
+    $vols = $null
+    try { $vols = @(Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -ErrorAction Stop) }
+    catch { return $null }  # BitLocker isn't installed here (a server without the feature)
+    $methods = @{ 1 = 'AES 128 with Diffuser'; 2 = 'AES 256 with Diffuser'; 3 = 'AES 128'; 4 = 'AES 256'; 5 = 'Hardware encryption'; 6 = 'XTS-AES 128'; 7 = 'XTS-AES 256' }
+    $kinds = @{ 1 = 'TPM'; 2 = 'External key'; 3 = 'Recovery password'; 4 = 'TPM and PIN'; 5 = 'TPM and startup key'; 6 = 'TPM, PIN and startup key'
+        7 = 'Certificate'; 8 = 'Password'; 9 = 'TPM certificate'; 10 = 'Active Directory account' }
+    $states = @('decrypted', 'encrypted', 'encrypting', 'decrypting', 'encrypting_paused', 'decrypting_paused')
+    $list = New-Object System.Collections.Generic.List[object]
+    foreach ($v in $vols) {
+        $type = [int]$v.VolumeType
+        if (-not $v.DriveLetter -or $type -eq 2) { continue }  # no letter, or removable (BitLocker To Go)
+        $conv = [int]$v.ConversionStatus
+        $pct = $null
+        try {
+            $cs = Invoke-CimMethod -InputObject $v -MethodName GetConversionStatus -ErrorAction Stop
+            if ([int]$cs.ReturnValue -eq 0) { $conv = [int]$cs.ConversionStatus; $pct = [int]$cs.EncryptionPercentage }
+        } catch { }
+        $prot = New-Object System.Collections.Generic.List[string]
+        try {
+            $kp = Invoke-CimMethod -InputObject $v -MethodName GetKeyProtectors -Arguments @{ KeyProtectorType = [uint32]0 } -ErrorAction Stop
+            foreach ($id in @($kp.VolumeKeyProtectorID)) {
+                if (-not $id) { continue }
+                $t = Invoke-CimMethod -InputObject $v -MethodName GetKeyProtectorType -Arguments @{ VolumeKeyProtectorID = [string]$id } -ErrorAction Stop
+                $n = $kinds[[int]$t.KeyProtectorType]
+                if ($n -and -not $prot.Contains($n)) { $prot.Add($n) }
+            }
+        } catch { }
+        $locked = $null
+        try {
+            $ls = Invoke-CimMethod -InputObject $v -MethodName GetLockStatus -ErrorAction Stop
+            if ([int]$ls.ReturnValue -eq 0) { $locked = ([int]$ls.LockStatus -eq 1) }
+        } catch { }
+        $ps = [int]$v.ProtectionStatus
+        $list.Add([ordered]@{
+            drive      = ([string]$v.DriveLetter).ToUpper()
+            kind       = if ($type -eq 0) { 'os' } else { 'data' }
+            protection = if ($ps -eq 1) { 'on' } elseif ($ps -eq 0) { 'off' } else { 'unknown' }
+            status     = if ($conv -ge 0 -and $conv -lt $states.Count) { $states[$conv] } else { 'unknown' }
+            percent    = $pct
+            method     = [string]$methods[[int]$v.EncryptionMethod]
+            protectors = @($prot)
+            locked     = $locked
+        })
+        if ($list.Count -ge 26) { break }
+    }
+    return [ordered]@{ volumes = @($list | Sort-Object { $_.kind -ne 'os' }, { $_.drive }) }
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1346,6 +1397,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $laps = Measure-Step 'laps' { Get-LapsStatus $State ($discovery.roles -contains 'Domain controller') $(if ($sys) { [bool]$sys.part_of_domain } else { $false }) }
         if ($laps) { $report.checks.laps = $laps }
     } catch { Add-CollectorError 'laps' $_ }
+    try {
+        $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
+        if ($bl) { $report.checks.bitlocker = $bl }
+    } catch { Add-CollectorError 'bitlocker' $_ }
     try {
         $storage = Measure-Step 'storage health' { Get-StorageHealth $State }
         if ($storage) { $report.checks.storage = $storage }

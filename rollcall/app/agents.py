@@ -255,6 +255,15 @@ def normalize_report(r) -> dict:
         c["rds"] = _as_dict(c["rds"])
     if "laps" in c:
         c["laps"] = {k: (v if isinstance(v, (bool, int, float)) or v is None else str(v)[:300]) for k, v in _as_dict(c["laps"]).items()}
+    if "bitlocker" in c:
+        bl = _as_dict(c["bitlocker"])
+        c["bitlocker"] = {"volumes": [
+            {"drive": str(v.get("drive") or "")[:3].upper(), "kind": "os" if v.get("kind") == "os" else "data",
+             "protection": str(v.get("protection") or "unknown")[:10], "status": str(v.get("status") or "unknown")[:20],
+             "percent": v.get("percent") if isinstance(v.get("percent"), (int, float)) else None,
+             "method": str(v.get("method") or "")[:40], "protectors": [str(x)[:40] for x in _as_list(v.get("protectors"))][:12],
+             "locked": v.get("locked") if isinstance(v.get("locked"), bool) else None}
+            for v in _as_list(bl.get("volumes")) if isinstance(v, dict) and v.get("drive")][:26]}
     if "backups" in c:
         b = c["backups"] = _as_dict(c["backups"])
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
@@ -427,7 +436,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker")
 
 
 def disk_key(name) -> str:
@@ -515,6 +524,58 @@ def laps_state(laps: dict, now: float, overdue_days: float = 3) -> tuple[str, st
         level = max(level, lvl, key=[OK, WARN, CRIT].index)
         detail = (detail + "; " if detail else "") + why
     return level, detail[0].upper() + detail[1:], info
+
+
+BITLOCKER_REQUIRE = ("off", "workstations", "all")
+
+
+def bitlocker_state(bl: dict, workstation: bool, require: str = "workstations", ign: "Ignore | None" = None,
+                    pending_reboot: bool = False) -> tuple[str, str] | None:
+    """(level, detail) for BitLocker on the fixed drives, or None when there's nothing to check.
+
+    A computer that doesn't use BitLocker only gets the check when encryption is expected of it:
+    require = "workstations" (Windows 10/11, the default), "all" (servers too) or "off".
+    One that does use it is always checked: every fixed drive encrypted with protection on, and a
+    recovery password on the Windows drive. Never red: an unencrypted drive isn't an outage."""
+    vols = [v for v in bl.get("volumes") or [] if not (ign and ign.has("bitlocker", v["drive"]))]
+    if not vols:
+        return None
+    in_use = any(v["status"] != "decrypted" for v in vols)
+    expected = require == "all" or (require == "workstations" and workstation)
+    if not in_use:
+        if not expected:
+            return None
+        drives = ", ".join(v["drive"] for v in vols)
+        return WARN, f"Not encrypted: {drives} (BitLocker is off)"
+    problems, notes = [], []
+    for v in vols:
+        d, st = v["drive"], v["status"]
+        pct = f" ({int(v['percent'])}%)" if v.get("percent") is not None else ""
+        if v.get("locked"):
+            problems.append(f"{d} is locked")
+        elif st == "decrypted":
+            problems.append(f"{d} isn't encrypted")
+        elif st == "decrypting":
+            problems.append(f"{d} is being decrypted{pct}")
+        elif st in ("encrypting_paused", "decrypting_paused"):
+            problems.append(f"{d} {'encryption' if st.startswith('enc') else 'decryption'} is paused{pct}")
+        elif st == "encrypting":
+            notes.append(f"{d} encrypting{pct}")
+        elif v["protection"] == "off":
+            # Windows Update and firmware updates suspend it until the next restart
+            problems.append(f"{d} protection is suspended" + (" until the pending restart" if pending_reboot else ""))
+        if v["kind"] == "os" and st != "decrypted" and v.get("protectors") and "Recovery password" not in v["protectors"]:
+            problems.append(f"{d} has no recovery password")
+    if problems:
+        return WARN, _cap("; ".join(problems + notes))
+    done = [v for v in vols if v["status"] == "encrypted"]
+    methods = sorted({v["method"] for v in done if v.get("method")})
+    detail = "; ".join(([", ".join(v["drive"] for v in done) + " encrypted" + (f" ({', '.join(methods)})" if methods else "")] if done else []) + notes)
+    return OK, _cap(detail)
+
+
+def _cap(s: str) -> str:
+    return s[0].upper() + s[1:] if s else s
 
 
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
@@ -814,6 +875,14 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    bl = rc.get("bitlocker")
+    if bl and not ign.has("bitlocker", "bitlocker"):
+        require = str(opts.get("agent_bitlocker_require", "workstations"))
+        res = bitlocker_state(bl, report.get("workstation") is True, require if require in BITLOCKER_REQUIRE else "workstations", ign,
+                              report.get("pending_reboot") is True)
+        if res:
+            checks.append(_check("bitlocker", "BitLocker", res[0], res[1]))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 

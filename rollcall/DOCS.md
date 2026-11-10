@@ -522,6 +522,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Defender** | Definitions over 7 days old | Real-time protection off, or malware not removed |
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
+| **BitLocker** (computers that use it, and Windows 10/11 by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
 | **Events** | Alert-worthy events in the last 24 h | |
 
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
@@ -552,7 +553,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 **Failed logons** are grouped by account and source. Each group shows Windows' reason (e.g. "user name doesn't exist", "wrong password", "account locked out"), the logon type, the method (NTLM, Kerberos) and the client's computer name. A user name sent with the domain already in it reads e.g. `contoso\svc_backup (with domain CONTOSO)`, which usually means a saved credential is typed wrongly.
 
-**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
+**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
 
 ### LAPS
 
@@ -566,6 +567,18 @@ On computers where a LAPS policy applies (agent 1.0.18 or later), Rollcall check
 - **Computers without LAPS** don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
 
 The Security tab shows the product, where the policy comes from, where it backs up to, how often it rotates, the managed account, when the password was last set and when it expires, the last backup and the last LAPS run.
+
+### BitLocker
+
+Rollcall checks BitLocker on each fixed drive (agent 1.0.21 or later). It reads the state from Windows (WMI), the same as `manage-bde -status`, and never reads the keys or recovery passwords.
+
+- **Which computers:** any computer that has a BitLocker-encrypted drive is checked. One that doesn't is only expected to use it if `agent_bitlocker_require` says so: `workstations` (Windows 10/11, the default), `all` (servers too) or `off`. Computers without BitLocker installed (servers without the feature) don't get the check.
+- **Amber** when a fixed drive isn't encrypted, protection is suspended, encryption is paused, the drive is being decrypted, a drive is locked, or the Windows drive has no recovery password (so it couldn't be recovered if the TPM failed). It never goes red: an unencrypted drive isn't an outage.
+- **Suspended protection** is often deliberate: Windows Update and firmware updates suspend it until the next restart. When a restart is pending the alert says so, and it clears once the computer restarts and protection resumes.
+- **Encrypting** shows the percentage and stays green.
+- Removable drives (BitLocker To Go) and drives without a letter aren't checked.
+
+The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
 
 ### Administrators group
 
@@ -618,7 +631,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 
@@ -836,6 +849,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_disk_crit` | 5 | Default red level, % free |
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
+| `agent_bitlocker_require` | workstations | Which computers must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Computers that use it are always checked |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

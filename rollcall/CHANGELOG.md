@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.46.0 - 2026-11-10
+
+### Added
+- **BitLocker check** (Windows agent 1.0.21). For each fixed drive: encrypted or not, protection on or suspended, the encryption method and what unlocks it. Keys and recovery passwords are never read.
+  - Amber when a drive isn't encrypted, protection is suspended, encryption is paused, a drive is being decrypted or is locked, or the Windows drive has no recovery password. Never red.
+  - Computers that use BitLocker are always checked. Ones that don't are only expected to use it per the new `agent_bitlocker_require` option: `workstations` (Windows 10/11, the default), `all` or `off`.
+  - When protection is suspended and a restart is pending (as Windows Update does), the alert says so.
+  - Shown on the Security tab. A single drive (`bitlocker:D:`) or the whole check (`bitlocker:bitlocker`) can be ignored.
+  - Agents update themselves to 1.0.21.
+
 ## 1.45.2 - 2026-11-10
 
 ### Fixed
