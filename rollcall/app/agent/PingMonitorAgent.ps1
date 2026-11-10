@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.27'
+$AgentVersion = '1.0.28'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -140,6 +140,8 @@ function Read-State {
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
             if ($raw.exch_dbs) { $state.exch_dbs = [string]$raw.exch_dbs }
             if ($raw.exch_checked) { try { $state.exch_checked = [int64]$raw.exch_checked } catch { } }
+            if ($raw.ad_report) { $state.ad_report = [string]$raw.ad_report }
+            if ($raw.ad_checked) { try { $state.ad_checked = [int64]$raw.ad_checked } catch { } }
             if ($raw.laps_ad_at) { try { $state.laps_ad_at = [int64]$raw.laps_ad_at; $state.laps_ad_exp = [string]$raw.laps_ad_exp; $state.laps_ad_attr = [string]$raw.laps_ad_attr } catch { } }
             if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
         } catch {
@@ -1092,6 +1094,68 @@ function Get-ExchangeReport($State) {
     return $out
 }
 
+function Test-IsPdc {
+    # The domain-wide checks run on one DC only: the one holding the PDC emulator role.
+    $d = [System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain()
+    return ([string]$d.PdcRoleOwner.Name -split '\.')[0] -eq $env:COMPUTERNAME
+}
+
+function Find-AdObjects([string]$Filter, [string[]]$Props, [int]$Max = 200, [string]$Base = '') {
+    # LDAP search of this domain as the computer's account. Rows as ordered hashtables (first value of each property).
+    if (-not $Base) { $Base = ([ADSI]'LDAP://RootDSE').defaultNamingContext }
+    $s = [System.DirectoryServices.DirectorySearcher]::new([ADSI]"LDAP://$Base", $Filter)
+    $s.PageSize = 500; $s.SizeLimit = $Max
+    foreach ($p in $Props) { [void]$s.PropertiesToLoad.Add($p) }
+    $out = New-Object System.Collections.Generic.List[object]
+    $res = $s.FindAll()
+    try {
+        foreach ($r in $res) {
+            $h = [ordered]@{}
+            foreach ($p in $Props) { $v = $r.Properties[$p.ToLower()]; $h[$p] = if ($v -and $v.Count) { $v[0] } else { $null } }
+            $out.Add($h)
+            if ($out.Count -ge $Max) { break }
+        }
+    } finally { $res.Dispose() }
+    return $out.ToArray()
+}
+
+function Get-DomainSecurity($State) {
+    # Once an hour, on the PDC emulator: privileged group members, KRBTGT's password age, and accounts worth reviewing.
+    $nowTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($State.ad_report -and $State.ad_checked -and $nowTs - [int64]$State.ad_checked -lt 3600) {
+        if ($State.ad_report -eq 'not-pdc') { return $null }
+        return ($State.ad_report | ConvertFrom-Json)
+    }
+    if (-not (Test-IsPdc)) { $State.ad_report = 'not-pdc'; $State.ad_checked = $nowTs; return $null }
+    $ft = { param($v) if ($null -eq $v -or [int64]$v -le 0 -or [int64]$v -ge 9223372036854775807) { $null } else { ConvertTo-UtcString ([DateTime]::FromFileTimeUtc([int64]$v)) } }
+    $acct = { param($o) [ordered]@{ name = [string]$o.sAMAccountName; kind = $(if ([string]$o.objectClass -eq 'group' -or "$($o.objectCategory)" -like 'CN=Group,*') { 'group' } elseif ("$($o.objectCategory)" -like 'CN=Computer,*') { 'computer' } else { 'user' })
+        enabled = -not ([int]$o.userAccountControl -band 2); last_logon = & $ft $o.lastLogonTimestamp; pwd_set = & $ft $o.pwdLastSet } }
+    $props = 'sAMAccountName', 'objectCategory', 'userAccountControl', 'lastLogonTimestamp', 'pwdLastSet', 'whenCreated', 'distinguishedName'
+    $out = [ordered]@{ domain = ''; groups = @(); checked = ConvertTo-UtcString (Get-Date) }
+    try { $out.domain = [string]([System.DirectoryServices.ActiveDirectory.Domain]::GetComputerDomain()).Name } catch { }
+    $names = 'Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators', 'Account Operators', 'Server Operators', 'Backup Operators', 'Print Operators', 'DnsAdmins', 'Group Policy Creator Owners'
+    foreach ($g in $names) {
+        $grp = @(Find-AdObjects "(&(objectClass=group)(sAMAccountName=$g))" @('distinguishedName') 1) | Select-Object -First 1
+        if (-not $grp) { continue }
+        $dn = ([string]$grp.distinguishedName).Replace('\', '\5c').Replace('(', '\28').Replace(')', '\29').Replace('*', '\2a')  # LDAP filter escaping
+        $members = @(Find-AdObjects "(memberOf=$dn)" $props 100 | ForEach-Object { & $acct $_ })
+        $out.groups += [ordered]@{ name = $g; members = $members }
+    }
+    $k = @(Find-AdObjects '(&(objectCategory=person)(objectClass=user)(sAMAccountName=krbtgt))' @('pwdLastSet') 1) | Select-Object -First 1
+    if ($k) { $out.krbtgt_pwd_set = & $ft $k.pwdLastSet }
+    $enabled = '(!(userAccountControl:1.2.840.113556.1.4.803:=2))'
+    $out.never_expires = @(Find-AdObjects "(&(objectCategory=person)(objectClass=user)$enabled(userAccountControl:1.2.840.113556.1.4.803:=65536))" $props 200 | ForEach-Object { & $acct $_ })
+    $out.no_password = @(Find-AdObjects "(&(objectCategory=person)(objectClass=user)$enabled(userAccountControl:1.2.840.113556.1.4.803:=32))" $props 100 | ForEach-Object { & $acct $_ })
+    $cut = (Get-Date).AddDays(-90).ToFileTimeUtc()
+    $created = (Get-Date).AddDays(-90).ToUniversalTime().ToString('yyyyMMddHHmmss.0Z')
+    $stale = "(|(lastLogonTimestamp<=$cut)(&(!(lastLogonTimestamp=*))(whenCreated<=$created)))"
+    $out.stale_users = @(Find-AdObjects "(&(objectCategory=person)(objectClass=user)$enabled$stale)" $props 200 | ForEach-Object { & $acct $_ })
+    $out.stale_computers = @(Find-AdObjects "(&(objectCategory=computer)$enabled$stale)" $props 200 | ForEach-Object { & $acct $_ })
+    $State.ad_report = ($out | ConvertTo-Json -Depth 5 -Compress)
+    $State.ad_checked = $nowTs
+    return $out
+}
+
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {
     # Which LAPS applies and whether it's rotating the managed password on schedule. Never reads the password.
     # Windows LAPS uses the first of these policy roots that has any setting (Microsoft's documented order).
@@ -1738,6 +1802,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     }
     if ($discovery.roles -contains 'Domain controller') {
         try { $report.checks.sysvol = Measure-Step 'sysvol replication' { Get-SysvolStatus } } catch { Add-CollectorError 'sysvol replication' $_ }
+        try {
+            $dsec = Measure-Step 'domain security' { Get-DomainSecurity $State }
+            if ($dsec) { $report.checks.domain = $dsec }
+        } catch { Add-CollectorError 'domain security' $_ }
     }
     if ($discovery.roles -contains 'Exchange') {
         try { $report.checks.exchange = Measure-Step 'exchange' { Get-ExchangeReport $State } } catch { Add-CollectorError 'exchange' $_ }

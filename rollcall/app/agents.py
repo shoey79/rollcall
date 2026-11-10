@@ -277,6 +277,16 @@ def normalize_report(r) -> dict:
              "names": [str(n)[:120] for n in _as_list(x.get("names"))][:6], "self_signed": x.get("self_signed") is True,
              "used_by": [str(n)[:60] for n in _as_list(x.get("used_by"))][:4]}
             for x in _as_list(_as_dict(c["certs"]).get("certs")) if isinstance(x, dict) and x.get("thumbprint")][:60]}
+    if "domain" in c:
+        dm = _as_dict(c["domain"])
+        acct = lambda a: {"name": str(a.get("name") or "")[:64], "kind": str(a.get("kind") or "user")[:10], "enabled": a.get("enabled") is not False,  # noqa: E731
+                          "last_logon": str(a.get("last_logon") or "")[:25], "pwd_set": str(a.get("pwd_set") or "")[:25]}
+        lst = lambda k, n=200: [acct(a) for a in _as_list(dm.get(k)) if isinstance(a, dict) and a.get("name")][:n]  # noqa: E731
+        c["domain"] = {"domain": str(dm.get("domain") or "")[:120], "checked": str(dm.get("checked") or "")[:25],
+                       "krbtgt_pwd_set": str(dm.get("krbtgt_pwd_set") or "")[:25],
+                       "groups": [{"name": str(g.get("name") or "")[:64], "members": [acct(a) for a in _as_list(g.get("members")) if isinstance(a, dict) and a.get("name")][:100]}
+                                  for g in _as_list(dm.get("groups")) if isinstance(g, dict) and g.get("name")][:12],
+                       **{k: lst(k) for k in ("never_expires", "no_password", "stale_users", "stale_computers")}}
     if "exchange" in c:
         x = _as_dict(c["exchange"])
         num = lambda v: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
@@ -500,7 +510,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange", "domain", "aduser")
 
 
 def disk_key(name) -> str:
@@ -812,6 +822,37 @@ def sysvol_state(v: dict, now: float) -> tuple[str, str]:
     if st == 4:
         return OK, "SYSVOL replicating normally (DFS-R)"
     return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
+
+
+PRIVILEGED_GROUPS = ("Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators")
+
+
+def domain_key(group: str, name: str) -> str:
+    return f"{group.lower()}|{name.lower()}"
+
+
+def domain_state(dm: dict, changes: list, now: float, krbtgt_days: int = 180, ign: "Ignore | None" = None) -> tuple[str, str]:
+    """Domain-wide security, from the PDC emulator: recent additions to privileged groups (24 h),
+    an old KRBTGT password, and enabled accounts that don't need a password. Other lists are for review."""
+    bad = []
+    added = [c for c in changes or [] if c.get("change") == "added" and now - (c.get("time") or 0) < DAY]
+    for c in added[::-1]:
+        bad.append(f"{c['account']} added to {c['group']}")
+    k = _ts(dm.get("krbtgt_pwd_set")) if dm.get("krbtgt_pwd_set") else None
+    if k and now - k > krbtgt_days * DAY:
+        bad.append(f"KRBTGT password last reset {int((now - k) / DAY)} days ago")
+    nopw = [a for a in dm.get("no_password") or [] if not (ign and ign.has("aduser", a["name"]))]
+    if nopw:
+        bad.append(f"{len(nopw)} enabled account(s) don't require a password ({', '.join(a['name'] for a in nopw[:3])})")
+    if bad:
+        return WARN, bad[0] + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
+    priv = {a["name"].lower() for g in dm.get("groups") or [] if g["name"] in PRIVILEGED_GROUPS for a in g["members"] if a["kind"] == "user"}
+    parts = [f"{len(priv)} privileged user account(s)"]
+    if k:
+        parts.append(f"KRBTGT reset {int((now - k) / DAY)} days ago")
+    if dm.get("stale_computers") or dm.get("stale_users"):
+        parts.append(f"{len(dm.get('stale_computers') or [])} stale computer(s), {len(dm.get('stale_users') or [])} stale user(s) to review")
+    return OK, "; ".join(parts)
 
 
 EX_NORMALLY_INACTIVE = {"forwardsyncdaemon", "provisioningrps"}
@@ -1237,6 +1278,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
+
+    dm = rc.get("domain")
+    if dm and not ign.has("domain", "domain"):
+        res = domain_state(dm, settings.get("domain_changes") or [], now, 180, ign)
+        checks.append(_check("domain", "Domain security", res[0], res[1]))
 
     ex = rc.get("exchange")
     if ex and not ign.has("exchange", "exchange"):

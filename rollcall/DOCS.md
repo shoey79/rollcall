@@ -523,6 +523,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
 | **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **Domain security** (the PDC emulator) | For 24 h after someone is added to a privileged group; KRBTGT password over 180 days old; an enabled account that doesn't require a password | |
 | **Exchange** (Exchange servers) | Back pressure Medium, `agent_exchange_queue_warn` (250) or more messages waiting, anything in the poison queue, maintenance mode or a component inactive, a copy suspended or behind | Back pressure High, or a database copy failed or dismounted (two reports) |
 | **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
 | **SYSVOL replication** (domain controllers) | A partner unreachable for over an hour, initial sync or recovery, or still using FRS | Replication stopped (dirty shutdown, offline too long, or in error; two reports) |
@@ -660,6 +661,17 @@ The agent (1.0.23 or later) lists the certificates with a private key in the com
 - Windows' own self-signed Remote Desktop certificate isn't checked, because Windows renews it.
 - To leave one out, use **Ignore** on its row (`cert:<thumbprint>`, or `cert:<name>`); to leave the check off a computer, ignore the whole check (`cert:certs`).
 
+### Domain security
+
+The domain-wide checks run on one domain controller only: the one holding the **PDC emulator** role (agent 1.0.28 or later). They're read from Active Directory once an hour, as the DC's own account, and are on its **Security** tab. Like security events, they're shown to admins and editors only.
+
+- **Privileged groups:** the members of Domain Admins, Enterprise Admins, Schema Admins, Administrators, Account Operators, Server Operators, Backup Operators, Print Operators, DnsAdmins and Group Policy Creator Owners. Rollcall remembers who was there; anyone added later is highlighted with the time, and the check is **amber for 24 hours**. Removals are listed too. Members there when Rollcall first looked show as *before monitoring*. The DC's security log still reports each change as it happens (events 4728/4732/4756); this check covers changes made on any DC and gives the full picture.
+- **KRBTGT:** **amber** once its password is over 180 days old. Reset it twice, some hours apart, so tickets issued with the old key expire in between.
+- **Accounts that don't require a password** (enabled, with *password not required* set): **amber**. To accept one, use **Ignore** on its row (`aduser:<name>`).
+- **For review, without alerting:** enabled accounts whose password never expires, and enabled users and computers with no logon for 90 days. *Last logon* is AD's replicated value (`lastLogonTimestamp`), which can be up to 14 days behind.
+
+To leave the check off, ignore it (`domain:domain`).
+
 ### Administrators group
 
 The Security tab (admins only, agent 1.0.17 or later) lists every direct member of the computer's built-in Administrators group, with its type (user or group), where it's from (Local, Domain, Azure AD, Built-in) and its SID.
@@ -711,7 +723,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 **From the Configuration tab (all servers):**
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
-- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `exchange:exchange`, `update:immich`.
+- `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `exchange:exchange`, `domain:domain`, `aduser:<name>`, `update:immich`.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 

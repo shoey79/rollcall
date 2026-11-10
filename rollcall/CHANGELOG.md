@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.52.0 - 2026-11-10
+
+### Added
+- **Domain security check** (Windows agent 1.0.28). It runs on the domain controller holding the PDC emulator role, hourly, and is on that DC's Security tab (admins and editors only).
+  - **Privileged groups** (Domain, Enterprise and Schema Admins, Administrators, the Operators groups, DnsAdmins, Group Policy Creator Owners): members are listed, and additions and removals are tracked with the time. Amber for 24 hours after someone is added.
+  - **KRBTGT:** amber when its password is over 180 days old.
+  - **Accounts that don't require a password:** amber; each can be ignored (`aduser:<name>`).
+  - **For review, without alerting:** accounts whose password never expires, and users and computers with no logon for 90 days.
+
 ## 1.51.0 - 2026-11-10
 
 ### Added

@@ -97,6 +97,7 @@ AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
+SECURITY_KEYS = ("agent_security", "agent_domain")  # checks whose detail names accounts
 BUCKETS = 48  # 24h strip on the dashboard, 30 min per bucket
 
 log = logging.getLogger("ping_monitor")
@@ -2284,7 +2285,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2458,6 +2459,36 @@ class Monitor:
             hs["admins_changes"] = changes[-30:]
             self._save_agent_settings()
 
+    def _track_domain(self, h: Host, report: dict, now: float) -> None:
+        """Remember who is in the domain's privileged groups (from the PDC emulator's report), so additions
+        and removals show with a date and additions alert for 24 hours. Members there at first sight have no date."""
+        dm = (report.get("checks") or {}).get("domain")
+        if not dm or not dm.get("groups"):
+            return
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        cur = {agentlib.domain_key(g["name"], a["name"]): (g["name"], a) for g in dm["groups"] for a in g["members"]}
+        seen = hs.get("domain_seen")
+        if seen is None:
+            hs["domain_seen"] = {k: {"group": g, "account": a["name"], "since": None} for k, (g, a) in cur.items()}
+            hs["domain_changes"] = []
+            self._save_agent_settings()
+            return
+        changes, changed = hs.setdefault("domain_changes", []), False
+        for k in cur.keys() - seen.keys():
+            g, a = cur[k]
+            seen[k] = {"group": g, "account": a["name"], "since": now}
+            changes.append({"time": now, "change": "added", "group": g, "account": a["name"], "kind": a["kind"]})
+            log.info("%s: %s added to %s", h.name, a["name"], g)
+            changed = True
+        for k in seen.keys() - cur.keys():
+            gone = seen.pop(k)
+            changes.append({"time": now, "change": "removed", "group": gone["group"], "account": gone["account"]})
+            log.info("%s: %s removed from %s", h.name, gone["account"], gone["group"])
+            changed = True
+        if changed:
+            hs["domain_changes"] = changes[-50:]
+            self._save_agent_settings()
+
     async def _backup_alerts(self, h: Host, report: dict) -> None:
         """One notification per failed Veeam job run, and one when a job becomes overdue."""
         jobs = ((report.get("checks") or {}).get("backups") or {}).get("jobs") or []
@@ -2546,7 +2577,7 @@ class Monitor:
     def _host_settings(self, h: Host) -> dict:
         hs = self.agent_settings["hosts"].get(h.key) or {}
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
-                "disks": dict(hs.get("disks") or {}),
+                "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
@@ -2622,6 +2653,8 @@ class Monitor:
 
     async def _apply(self, h: Host, agent: dict, report: dict, received: float, restoring: bool = False,
                      reeval: bool = False) -> None:
+        if not restoring and not reeval:
+            self._track_domain(h, report, received)
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
         h.agent_report, h.agent_seen = report, received
@@ -2914,6 +2947,16 @@ class Monitor:
                     "global_sec_filters": (self.agent_settings.get("global_sec_filters") or []) if include_security else [],
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
+        if include_security and hs.get("domain_seen") is not None:
+            dseen = hs["domain_seen"]
+            dm = (r.get("checks") or {}).get("domain")
+            if dm:
+                r["checks"] = {**r["checks"], "domain": {**dm, "groups": [
+                    {**g, "members": [{**a, "_since": (dseen.get(agentlib.domain_key(g["name"], a["name"])) or {}).get("since")} for a in g["members"]]}
+                    for g in dm.get("groups") or []]}}
+            settings["domain_changes"] = hs.get("domain_changes") or []
+        elif not include_security and (r.get("checks") or {}).get("domain"):
+            r["checks"] = {**r["checks"], "domain": {"hidden": True}}  # account names are for admins and editors
         if include_security and hs.get("admins_seen") is not None:
             seen = hs["admins_seen"]
             sec = r.get("security") or {}
@@ -2925,7 +2968,7 @@ class Monitor:
                 "settings": settings,
                 "received": h.agent_seen, "security_visible": include_security,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
-                            "detail": s.detail if include_security or s.key != "agent_security" else SECURITY_HIDDEN}
+                            "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN}
                            for s in h.agent_checks]}
 
     # -- reporting --------------------------------------------------------
@@ -3131,7 +3174,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         if not user["can_edit"]:
             for h in snap["hosts"]:
                 for sv in h["services"]:
-                    if sv["key"] == "agent_security":
+                    if sv["key"] in SECURITY_KEYS:
                         sv["detail"] = SECURITY_HIDDEN
         return web.json_response(snap)
 
