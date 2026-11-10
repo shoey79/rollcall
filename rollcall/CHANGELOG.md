@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.46.2 - 2026-11-10
+
+### Changed
+- Clicking a computer's name in the list opens its Details, the same as the **Details** button (which is still there). It works from the keyboard too.
+
 ## 1.46.1 - 2026-11-10
 
 ### Changed

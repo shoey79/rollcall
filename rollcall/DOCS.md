@@ -92,7 +92,7 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are
 
 ![Details of a Windows server with the agent: its checks and system information](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/details.png)
 
-**Details** on a row opens everything Rollcall knows about that computer, in tabs:
+**Details** on a row, or the computer's name, opens everything Rollcall knows about that computer, in tabs:
 
 - **Overview** (computers without an agent). The whole device on one page:
   - tiles for status, 24-hour uptime with its history bar, and ping time;

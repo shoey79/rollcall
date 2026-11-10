@@ -46,7 +46,8 @@ tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
 .svc.red i{background:var(--orange)}
 .status{display:flex;align-items:center;gap:8px;font-weight:600}
 .note{color:var(--muted);font-size:12px;font-weight:400;margin:2px 0 0 18px;white-space:normal;max-width:150px;line-height:1.3}
-.name{font-weight:600}.host{color:var(--muted);font-size:12px}
+.name{font-weight:600}
+.namelink{all:unset;cursor:pointer;font-weight:600;overflow-wrap:anywhere}.namelink:hover{text-decoration:underline}.namelink:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:2px;border-radius:3px}.host{color:var(--muted);font-size:12px}
 .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
 .num{font-variant-numeric:tabular-nums}
 .up-g{color:var(--green)}.up-a{color:var(--amber)}.up-r{color:var(--red)}
@@ -771,7 +772,7 @@ function render() {
     const showHost = h.host !== h.ip;
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name">${esc(h.name)}${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model || hwText(h) ? `<div class="model" title="${esc(hwText(h))}">${esc(h.model || hwText(h))}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : ""}</div>${h.model || hwText(h) ? `<div class="model" title="${esc(hwText(h))}">${esc(h.model || hwText(h))}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
