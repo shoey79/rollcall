@@ -3,6 +3,7 @@ walks over UDP), plus the readers Rollcall uses for switches, PoE, Buffalo TeraS
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import time
 
@@ -634,6 +635,102 @@ async def read_upsmib(s: "Session") -> dict | None:
         "self_test_date": "", "calibration": "", "calibration_date": "", "alarms": alarms}
 
 
+# Printer-MIB (RFC 3805) and the printer part of HOST-RESOURCES-MIB
+PRT = "1.3.6.1.2.1.43"
+PRINTER_ENTERPRISES = {"11", "2435", "1602", "1248", "1347", "641", "367", "253", "18334", "2385", "2001", "236", "1129", "2699", "10642"}
+SUPPLY_TYPE = {3: "toner", 4: "waste toner", 5: "ink", 6: "ink cartridge", 7: "ink ribbon", 8: "waste ink", 9: "drum", 10: "developer",
+               13: "fuser", 15: "transfer unit", 18: "staples", 20: "waste toner", 21: "toner cartridge", 22: "fuser oil",
+               25: "transfer belt", 32: "toner"}
+PRINTER_STATUS = {1: "other", 2: "unknown", 3: "idle", 4: "printing", 5: "warming up"}
+# hrPrinterDetectedErrorState bits, first byte's high bit first
+PRINTER_ERRORS = ["low paper", "no paper", "low toner", "no toner", "door open", "paper jam", "offline", "service requested",
+                  "input tray missing", "output tray missing", "supply missing", "output nearly full", "output full",
+                  "input tray empty", "maintenance overdue"]
+
+
+def _octets(v) -> bytes:
+    """An OCTET STRING as bytes, however it was decoded (text, or hex with colons)."""
+    if v is None:
+        return b""
+    if isinstance(v, bytes):
+        return v
+    t = str(v)
+    if re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2})*", t):
+        return bytes.fromhex(t.replace(":", ""))
+    return bytes(ord(c) & 0xFF for c in t)
+
+
+def _text(v) -> str:
+    t = str(v or "")
+    if re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2})+", t):  # undecodable as UTF-8: try Latin-1
+        t = bytes.fromhex(t.replace(":", "")).decode("latin-1", "replace")
+    return re.sub(r"[\x00-\x1f]+", " ", t).strip()
+
+
+async def read_printer(s: "Session") -> dict | None:
+    """Supplies (toner, ink, drums, waste), trays, status and error flags, page count, alerts and the
+    front-panel display, from the standard Printer MIB. None if the device doesn't have it."""
+    try:
+        sup = _cols(await s.walk(f"{PRT}.11.1.1", limit=400))
+    except SnmpError:
+        return None
+    if not sup:
+        return None
+    colours = {}
+    try:
+        for k, v in (await s.walk(f"{PRT}.12.1.1.4", limit=60)).items():
+            colours[k.rsplit(".", 1)[-1]] = _text(v)
+    except SnmpError:
+        pass
+    supplies = []
+    for idx, r in sorted(sup.items(), key=lambda kv: [int(x) for x in kv[0].split(".") if x.isdigit()]):
+        mx, lv = r.get("8"), r.get("9")
+        mx = mx if isinstance(mx, int) else None
+        lv = lv if isinstance(lv, int) else None
+        pct = round(100 * lv / mx) if lv is not None and mx and mx > 0 and lv >= 0 else None
+        kind = SUPPLY_TYPE.get(r.get("5"), "")
+        supplies.append({"index": idx, "name": _text(r.get("6"))[:80], "type": kind,
+                         "colour": colours.get(str(r.get("3") or ""), "") if r.get("3") else "",
+                         "receptacle": r.get("4") == 4 or "waste" in kind, "level": lv, "max": mx,
+                         "pct": max(0, min(100, pct)) if pct is not None else None,
+                         "some_left": lv == -3, "unknown": lv in (-1, -2) or (lv is not None and lv >= 0 and not mx)})
+    out = {"supplies": supplies[:40], "trays": [], "status": "", "errors": [], "pages": None, "display": [], "alerts": []}
+    try:
+        st = await s.walk("1.3.6.1.2.1.25.3.5.1.1", limit=4)
+        v = next(iter(st.values()), None)
+        out["status"] = PRINTER_STATUS.get(v, "") if isinstance(v, int) else ""
+        es = await s.walk("1.3.6.1.2.1.25.3.5.1.2", limit=4)
+        raw = _octets(next(iter(es.values()), None))
+        out["errors"] = [name for i, name in enumerate(PRINTER_ERRORS) if i // 8 < len(raw) and raw[i // 8] & (0x80 >> (i % 8))]
+    except SnmpError:
+        pass
+    try:
+        lc = await s.walk(f"{PRT}.10.2.1.4", limit=4)
+        v = next(iter(lc.values()), None)
+        out["pages"] = v if isinstance(v, int) and v >= 0 else None
+    except SnmpError:
+        pass
+    try:
+        for idx, r in sorted(_cols(await s.walk(f"{PRT}.8.2.1", limit=300)).items()):
+            mx, lv = r.get("9"), r.get("10")
+            name = _text(r.get("13")) or _text(r.get("18")) or f"Tray {idx.rsplit('.', 1)[-1]}"
+            out["trays"].append({"name": name[:60], "media": _text(r.get("12"))[:60], "max": mx if isinstance(mx, int) else None,
+                                 "level": lv if isinstance(lv, int) else None,
+                                 "pct": round(100 * lv / mx) if isinstance(lv, int) and isinstance(mx, int) and mx > 0 and lv >= 0 else None})
+        out["trays"] = out["trays"][:12]
+    except SnmpError:
+        pass
+    try:
+        out["display"] = [t for t in (_text(v)[:80] for v in (await s.walk(f"{PRT}.16.5.1.2", limit=8)).values()) if t]
+    except SnmpError:
+        pass
+    try:
+        out["alerts"] = [t for t in (_text(v)[:160] for v in (await s.walk(f"{PRT}.18.1.1.8", limit=20)).values()) if t][:10]
+    except SnmpError:
+        pass
+    return out
+
+
 def _smart(v) -> str:
     """TeraStations report SMART as a number (1 = healthy) or, on some firmware, as text."""
     if v is None or v == "":
@@ -690,7 +787,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out = {"descr": str(sysv.get(f"{SYS}.1.0") or ""), "object_id": str(sysv.get(f"{SYS}.2.0") or ""),
                "uptime_s": (sysv.get(f"{SYS}.3.0") or 0) // 100 if isinstance(sysv.get(f"{SYS}.3.0"), int) else None,
                "name": str(sysv.get(f"{SYS}.5.0") or ""), "location": str(sysv.get(f"{SYS}.6.0") or ""),
-               "ports": [], "poe": None, "nas": None, "ups": None, "uptime_source": "snmp"}
+               "ports": [], "poe": None, "nas": None, "ups": None, "printer": None, "uptime_source": "snmp"}
         # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
         # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
         # Asked once per device: some switches (e.g. Netgear smart switches) stall their SNMP service
@@ -802,6 +899,12 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         ent = oid.split(".")[6] if oid.startswith("1.3.6.1.4.1.") and oid.count(".") >= 6 else ""
         reader = read_apc if ent == "318" else read_upsmib if (
             oid.startswith("1.3.6.1.2.1.33") or ent in UPS_ENTERPRISES or re.search(r"\bups\b", text, re.I)) else None
+        # Printers: by maker (sysObjectID) or description; the Printer MIB is only asked for then
+        if ent in PRINTER_ENTERPRISES or re.search(r"printer|laserjet|officejet|deskjet|jetdirect|brother|kyocera|ecosys|ricoh|xerox|"
+                                                   r"lexmark|canon|imagerunner|i-sensys|epson|konica|bizhub|sharp|oki|samsung|toshiba|e-studio", text, re.I):
+            got = await timed("Printer", read_printer(s))
+            if got:
+                out["printer"] = got
         if reader:
             got = await timed("UPS", reader(s))
             if got:
@@ -818,7 +921,10 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
     return out
 
 
-UPS_LIMITS = {"runtime_warn": 15, "runtime_crit": 5, "load_warn": 80, "load_crit": 95, "temp_warn": 40}
+UPS_LIMITS = {"runtime_warn": 15, "runtime_crit": 5, "load_warn": 80, "load_crit": 95, "temp_warn": 40, "supply_warn": 10}
+# printer error flags that need someone (low paper and low toner are left to the supply levels and trays)
+PRINTER_ALERT = {"paper jam": "crit", "no paper": "warn", "door open": "warn", "offline": "warn", "service requested": "warn",
+                 "supply missing": "warn", "output full": "warn", "input tray missing": "warn", "output tray missing": "warn", "no toner": "warn"}
 
 
 def boot_time(d: dict, now: float | None = None) -> float | None:
@@ -888,6 +994,21 @@ def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = 
                     add("warn", f"Array {a['index']}", f"{pct:.0f}% full")
         for e in nas.get("errors") or []:
             add("warn", "NAS reports", e)
+    prn = d.get("printer")
+    if prn:
+        for e in prn.get("errors") or []:
+            if e in PRINTER_ALERT:
+                add(PRINTER_ALERT[e], "Printer", e)
+        for x in prn.get("supplies") or []:
+            pct = x.get("pct")
+            name = x.get("name") or x.get("type") or "supply"
+            if pct is None:
+                continue
+            if x.get("receptacle"):  # a waste box: its level is the space left
+                if pct <= lim.get("supply_warn", 10):
+                    add("warn", name, "nearly full" if pct > 0 else "full")
+            elif pct <= lim.get("supply_warn", 10):
+                add("warn", name, f"{pct}% left" if pct > 0 else "empty")
     ups = d.get("ups")
     if ups and ups.get("error"):
         add("warn", "UPS", ups["error"])

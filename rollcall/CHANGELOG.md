@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.54.0 - 2026-11-10
+
+### Added
+- **Printers over SNMP**, using the standard Printer MIB that most network printers support. Tick SNMP on a printer to see, on its SNMP tab:
+  - each toner or ink cartridge with its colour and a level bar, plus drums, fusers and waste toner boxes;
+  - paper trays, page count, status and error flags, the front-panel display and the printer's own alerts.
+- Alerts: amber when a supply is at `printer_supply_warn` (10%, a new option) or less, a waste box is nearly full, or the printer reports no paper, door open, offline or service needed; red for a paper jam.
+- Printers found by **Discover devices** that answer SNMP have the SNMP check suggested, so adding one includes its supplies.
+
 ## 1.53.3 - 2026-11-10
 
 ### Changed

@@ -397,6 +397,12 @@ Rollcall reads the device at every check while it answers ping. The **SNMP** tab
 - **UPS**: APC Network Management Cards are detected automatically. Other makes' network cards (Eaton, CyberPower, Riello, Socomec, Vertiv, Tripp Lite…) are read through the standard UPS-MIB. It shows output status, battery charge, runtime left, load, input and output voltage, battery temperature, when the battery was last replaced, the last self-test and runtime calibration, model, serial and firmware.
   - **Red:** on battery (with how long and the runtime left), output off, battery low or faulty, battery needs replacing, a failed self-test, under `ups_runtime_crit_minutes` (5) of runtime, or load at 95% or more.
   - **Amber:** under `ups_runtime_warn_minutes` (15) of runtime, load at or over `ups_load_warn` (80%), on bypass (the load isn't protected), or a battery over 40 °C.
+- **Printers** (most network printers, through the standard Printer MIB; detected from the maker or description, e.g. HP, Brother, Canon, Epson, Kyocera, Lexmark, Ricoh, Xerox, Konica Minolta). It shows each toner or ink cartridge with its colour and level, plus drums, fusers and waste toner boxes. It also shows the paper trays, the page count, the printer's status and error flags, what its front-panel display says, and its own alerts.
+  - **Amber:** a supply at `printer_supply_warn` (10%) or less, a waste toner box nearly full, or the printer reporting no paper, door open, offline, service requested, a missing supply, or an output tray full.
+  - **Red:** a paper jam.
+  - Some printers report only "some left" for third-party cartridges, so those can't alert on level.
+
+  ![A colour laser printer read over SNMP: toner levels, drum, waste box, trays and its display](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/printer.png)
   - Other makes' alarms (fan or fuse failure, charger failed, overload…) are shown, and the serious ones go red.
   - A power cut goes red at the check after it's seen. If you need to know about power cuts quickly, shorten `interval`.
 - **Restarts**: amber for an hour after the device restarts. If it was planned or expected, choose **Acknowledge** next to it (SNMP tab or Overview, admins and editors). That clears the warning for that restart only; a later restart still shows. Devices that don't report their own uptime (many switches, APC cards) count a restart of their SNMP service or management card too.
@@ -967,6 +973,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
+| `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

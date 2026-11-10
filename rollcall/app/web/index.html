@@ -148,6 +148,9 @@ legend small{font-weight:400}
 dialog.wide{width:min(980px,calc(100vw - 24px))}
 .sect{margin:16px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
 .sect:first-child{border-top:0;padding-top:0;margin-top:4px}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px;box-shadow:0 0 0 1px var(--line)}.swatch.none{background:transparent;box-shadow:none}
+.lcd{font-family:ui-monospace,Consolas,monospace;background:#1d2b1d;color:#b6f5b0;border-radius:6px;padding:8px 12px;margin:8px 0;display:inline-block;min-width:240px;font-size:13px}
+ul.tight{margin:4px 0 8px;padding-left:20px}
 .discform{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}.discfilters{display:flex;gap:18px;flex-wrap:wrap;margin:4px 0 8px;font-size:13px}
 .discprog{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0}.discprog div{height:100%;background:var(--accent);transition:width .4s}
 .sect h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 6px;font-weight:600}
@@ -2438,6 +2441,32 @@ function renderSnmp(x) {
     ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small>${i.ack === "restart" && canEdit ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
   if (!d) { body.innerHTML = html; return; }
+  const pr = d.printer;
+  if (pr) {
+    // Printer MIB: supplies with level bars, trays, status, page count, front panel and alerts
+    const warnAt = (x.ups_limits || {}).supply_warn || 10;
+    const SW = {black: "#1b1b1b", cyan: "#00a3e0", magenta: "#d6007e", yellow: "#ffd400", "photo black": "#2b2b2b", "matte black": "#3a3a3a",
+      "light cyan": "#7fd3f2", "light magenta": "#f07fc0", grey: "#8a8a8a", gray: "#8a8a8a", red: "#d62d20", blue: "#2b59c3", green: "#2e9e44"};
+    const sw = c => { const k = String(c || "").toLowerCase().replace(/ (toner|ink)$/, ""); const col = SW[k] || (/black/.test(k) ? "#1b1b1b" : /cyan/.test(k) ? "#00a3e0" : /magenta/.test(k) ? "#d6007e" : /yellow/.test(k) ? "#ffd400" : "");
+      return col ? `<span class="swatch" style="background:${col}" title="${esc(c)}"></span>` : `<span class="swatch none"></span>`; };
+    const lvl = (pct, receptacle) => { const low = pct != null && pct <= warnAt;
+      return `<div class="bar" style="display:inline-block;width:140px;vertical-align:middle;margin-right:6px"><i class="${low ? (pct === 0 && !receptacle ? "red" : "amber") : ""}" style="width:${Math.max(1, Math.min(100, pct))}%"></i></div>`; };
+    const bad = new Set(["paper jam", "no paper", "door open", "offline", "service requested", "supply missing", "output full", "input tray missing", "output tray missing", "no toner"]);
+    const errs = (pr.errors || []).map(e => bad.has(e) ? `<b class="${e === "paper jam" ? "failtxt" : "old"}">${esc(e)}</b>` : esc(e));
+    let inner = `<div class="kv"><div><span>Status</span>${esc(pr.status || "—")}${errs.length ? " · " + errs.join(", ") : ""}</div>${pr.pages != null ? `<div><span>Pages printed</span>${pr.pages.toLocaleString()}</div>` : ""}</div>`;
+    if ((pr.display || []).length) inner += `<div class="lcd" title="What the printer's own display shows">${pr.display.map(esc).join("<br>")}</div>`;
+    const sup = pr.supplies || [];
+    if (sup.length) inner += tbl(["Supply", "Level", ""], sup.map(x2 => {
+      const low = x2.pct != null && x2.pct <= warnAt;
+      const txt = x2.pct != null ? (x2.receptacle ? `${x2.pct}% space left` : `${x2.pct}%`) : x2.some_left ? "some left" : "level not reported";
+      return `<tr class="${low ? "hl" : ""}"><td>${x2.receptacle ? `<span class="swatch none"></span>` : sw(x2.colour || x2.name)}${esc(x2.name || x2.type)}${x2.type && !String(x2.name).toLowerCase().includes(x2.type) ? ` <small class="muted">${esc(x2.type)}</small>` : ""}</td>
+        <td style="white-space:nowrap">${x2.pct != null ? lvl(x2.pct, x2.receptacle) : ""}${low ? `<b class="old">${esc(txt)}</b>` : `<small class="muted">${esc(txt)}</small>`}</td><td></td></tr>`;
+    }));
+    if ((pr.trays || []).length) inner += tbl(["Paper tray", "Paper", "Level"], pr.trays.map(t =>
+      `<tr><td>${esc(t.name)}</td><td>${esc(t.media)}</td><td>${t.pct != null ? `${t.pct}%` : t.level === -3 ? "some paper" : t.level === 0 ? `<b class="old">empty</b>` : `<small class="muted">not reported</small>`}</td></tr>`));
+    if ((pr.alerts || []).length) inner += `<p class="empty-note" style="margin:8px 0 2px"><b>Printer's alerts</b></p><ul class="tight">${pr.alerts.map(a2 => `<li>${esc(a2)}</li>`).join("")}</ul>`;
+    html += sect("Printer", inner + `<p class="hint">From the standard Printer MIB. Amber when a cartridge, drum or other supply is at ${esc(String(warnAt))}% or less (<code>printer_supply_warn</code>), a waste box is nearly full, or the printer reports no paper, door open, offline, service requested or a missing supply; red for a paper jam. Some printers report only "some left" for third-party cartridges.</p>`);
+  }
   const u = d.ups;
   if (u && u.error) html += sect("UPS", `<p class="empty-note">${esc(u.error)}</p>`);
   else if (u) {

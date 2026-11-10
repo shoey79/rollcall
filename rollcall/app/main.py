@@ -132,6 +132,7 @@ DEFAULTS = {
     "agent_laps_overdue_days": 3,
     "agent_bitlocker_require": "workstations",
     "agent_sql_backup_hours": 36,
+    "printer_supply_warn": 10,
     "agent_exchange_queue_warn": 250,
     "agent_patch_days": 60,
     "agent_security_alerts": True,
@@ -2052,7 +2053,7 @@ class Monitor:
     def ups_limits(self) -> dict:
         o = self.opts
         return {"runtime_warn": int(o.get("ups_runtime_warn_minutes", 15)), "runtime_crit": int(o.get("ups_runtime_crit_minutes", 5)),
-                "load_warn": int(o.get("ups_load_warn", 80))}
+                "load_warn": int(o.get("ups_load_warn", 80)), "supply_warn": int(o.get("printer_supply_warn", 10))}
 
     async def snmp_check(self, h: Host, now: float) -> tuple:
         """Poll the device over SNMP. Warnings (e.g. PoE near its budget) stay amber;
