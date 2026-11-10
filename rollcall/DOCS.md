@@ -522,7 +522,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Defender** | Definitions over 7 days old | Real-time protection off, or malware not removed |
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
-| **BitLocker** (computers that use it, and Windows 10/11 by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
 | **Events** | Alert-worthy events in the last 24 h | |
 
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
@@ -570,9 +570,14 @@ The Security tab shows the product, where the policy comes from, where it backs 
 
 ### BitLocker
 
-Rollcall checks BitLocker on each fixed drive (agent 1.0.21 or later). It reads the state from Windows (WMI), the same as `manage-bde -status`, and never reads the keys or recovery passwords.
+Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.21 or later; the TPM check needs 1.0.22). It reads the state from Windows (WMI), the same as `manage-bde -status`, and never reads the keys or recovery passwords.
 
-- **Which computers:** any computer that has a BitLocker-encrypted drive is checked. One that doesn't is only expected to use it if `agent_bitlocker_require` says so: `workstations` (Windows 10/11, the default), `all` (servers too) or `off`. Computers without BitLocker installed (servers without the feature) don't get the check.
+- **Which computers:**
+  - **Virtual machines** (Hyper-V, VMware, VirtualBox and others) aren't checked; their drives are still listed.
+  - A physical computer with a BitLocker-encrypted drive is always checked.
+  - One that doesn't use BitLocker is only expected to when it has a TPM, and `agent_bitlocker_require` covers it: `workstations` (Windows 10/11, the default), `all` (servers too) or `off`. No TPM, no warning. A TPM that's turned off still counts as present, and the alert says it's turned off.
+  - Computers without BitLocker installed (servers without the feature) don't get the check.
+- **The TPM** is read from Windows (`Win32_Tpm`), the same as `Get-Tpm`: its version, maker, and whether it's turned on. The Security tab shows it, and why a computer isn't checked when it isn't.
 - **Amber** when a fixed drive isn't encrypted, protection is suspended, encryption is paused, the drive is being decrypted, a drive is locked, or the Windows drive has no recovery password (so it couldn't be recovered if the TPM failed). It never goes red: an unencrypted drive isn't an outage.
 - **Suspended protection** is often deliberate: Windows Update and firmware updates suspend it until the next restart. When a restart is pending the alert says so, and it clears once the computer restarts and protection resumes.
 - **Encrypting** shows the percentage and stays green.
@@ -849,7 +854,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_disk_crit` | 5 | Default red level, % free |
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
-| `agent_bitlocker_require` | workstations | Which computers must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Computers that use it are always checked |
+| `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |

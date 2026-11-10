@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.21'
+$AgentVersion = '1.0.22'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -757,7 +757,24 @@ function Get-BitLockerStatus {
         })
         if ($list.Count -ge 26) { break }
     }
-    return [ordered]@{ volumes = @($list | Sort-Object { $_.kind -ne 'os' }, { $_.drive }) }
+    return [ordered]@{ volumes = @($list | Sort-Object { $_.kind -ne 'os' }, { $_.drive }); tpm = Get-TpmInfo }
+}
+
+function Get-TpmInfo {
+    # Whether this computer has a TPM that Windows can use. No instance means no TPM (or it's turned off
+    # in the firmware); an error means it couldn't be checked, which is left as unknown.
+    $t = $null
+    try { $t = @(Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop) | Select-Object -First 1 }
+    catch { return [ordered]@{ present = $null } }
+    if (-not $t) { return [ordered]@{ present = $false } }
+    $ver = ([string]$t.SpecVersion -split ',')[0].Trim()
+    return [ordered]@{
+        present   = $true
+        version   = Limit-Text $ver 10
+        enabled   = if ($null -ne $t.IsEnabled_InitialValue) { [bool]$t.IsEnabled_InitialValue } else { $null }
+        activated = if ($null -ne $t.IsActivated_InitialValue) { [bool]$t.IsActivated_InitialValue } else { $null }
+        maker     = Limit-Text ([string]$t.ManufacturerIdTxt).Trim() 20
+    }
 }
 
 function Get-LapsStatus($State, [bool]$IsDc, [bool]$Domain) {

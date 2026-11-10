@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.46.1 - 2026-11-10
+
+### Changed
+- **BitLocker** (Windows agent 1.0.22):
+  - Virtual machines aren't checked any more. Their drives are still listed on the Security tab.
+  - A computer that doesn't use BitLocker is only flagged if it has a TPM. The agent now reports the TPM (version, maker, turned on or off), and the Security tab shows it.
+  - Physical computers that use BitLocker are checked as before, with or without a TPM.
+  - The Security tab says why a computer isn't checked: a virtual machine, no TPM, or not required by `agent_bitlocker_require`.
+
 ## 1.46.0 - 2026-11-10
 
 ### Added

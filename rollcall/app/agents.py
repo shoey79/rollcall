@@ -264,6 +264,11 @@ def normalize_report(r) -> dict:
              "method": str(v.get("method") or "")[:40], "protectors": [str(x)[:40] for x in _as_list(v.get("protectors"))][:12],
              "locked": v.get("locked") if isinstance(v.get("locked"), bool) else None}
             for v in _as_list(bl.get("volumes")) if isinstance(v, dict) and v.get("drive")][:26]}
+        tpm = _as_dict(bl.get("tpm"))
+        if tpm:
+            c["bitlocker"]["tpm"] = {"present": tpm.get("present") if isinstance(tpm.get("present"), bool) else None,
+                                     **{k: tpm.get(k) if isinstance(tpm.get(k), bool) else None for k in ("enabled", "activated")},
+                                     **{k: str(tpm.get(k) or "")[:20] for k in ("version", "maker")}}
     if "backups" in c:
         b = c["backups"] = _as_dict(c["backups"])
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
@@ -529,24 +534,39 @@ def laps_state(laps: dict, now: float, overdue_days: float = 3) -> tuple[str, st
 BITLOCKER_REQUIRE = ("off", "workstations", "all")
 
 
+def bitlocker_skip(bl: dict, workstation: bool, require: str = "workstations", virtual: str = "") -> str:
+    """Why a computer gets no BitLocker check ('' if it does, or might): virtual machines never do,
+    and one that doesn't use BitLocker is only expected to when require covers it and it has a TPM."""
+    if virtual:
+        return "virtual"
+    if any(v["status"] != "decrypted" for v in bl.get("volumes") or []):
+        return ""
+    if not (require == "all" or (require == "workstations" and workstation)):
+        return "not_required"
+    if (bl.get("tpm") or {}).get("present") is not True:  # no TPM, or an agent too old to say
+        return "no_tpm"
+    return ""
+
+
 def bitlocker_state(bl: dict, workstation: bool, require: str = "workstations", ign: "Ignore | None" = None,
-                    pending_reboot: bool = False) -> tuple[str, str] | None:
+                    pending_reboot: bool = False, virtual: str = "") -> tuple[str, str] | None:
     """(level, detail) for BitLocker on the fixed drives, or None when there's nothing to check.
 
-    A computer that doesn't use BitLocker only gets the check when encryption is expected of it:
-    require = "workstations" (Windows 10/11, the default), "all" (servers too) or "off".
-    One that does use it is always checked: every fixed drive encrypted with protection on, and a
-    recovery password on the Windows drive. Never red: an unencrypted drive isn't an outage."""
+    Virtual machines aren't checked. A physical computer that doesn't use BitLocker only gets the
+    check when encryption is expected of it (require = "workstations", the default, for Windows 10/11;
+    "all" for servers too; or "off") and it has a TPM to use. One that does use BitLocker is always
+    checked: every fixed drive encrypted with protection on, and a recovery password on the Windows
+    drive. Never red: an unencrypted drive isn't an outage."""
+    if bitlocker_skip(bl, workstation, require, virtual):
+        return None
     vols = [v for v in bl.get("volumes") or [] if not (ign and ign.has("bitlocker", v["drive"]))]
     if not vols:
         return None
-    in_use = any(v["status"] != "decrypted" for v in vols)
-    expected = require == "all" or (require == "workstations" and workstation)
-    if not in_use:
-        if not expected:
-            return None
+    if not any(v["status"] != "decrypted" for v in vols):
         drives = ", ".join(v["drive"] for v in vols)
-        return WARN, f"Not encrypted: {drives} (BitLocker is off)"
+        tpm = bl.get("tpm") or {}
+        has = "TPM" + (f" {tpm['version']}" if tpm.get("version") else "") + (" (turned off)" if tpm.get("enabled") is False else "")
+        return WARN, f"Not encrypted: {drives} (BitLocker is off, though this computer has a {has})"
     problems, notes = [], []
     for v in vols:
         d, st = v["drive"], v["status"]
@@ -880,7 +900,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if bl and not ign.has("bitlocker", "bitlocker"):
         require = str(opts.get("agent_bitlocker_require", "workstations"))
         res = bitlocker_state(bl, report.get("workstation") is True, require if require in BITLOCKER_REQUIRE else "workstations", ign,
-                              report.get("pending_reboot") is True)
+                              report.get("pending_reboot") is True, str(report.get("virtual") or ""))
         if res:
             checks.append(_check("bitlocker", "BitLocker", res[0], res[1]))
 

@@ -1739,16 +1739,23 @@ function renderDetails(d) {
     const whole = findIgnore("bitlocker", "bitlocker");
     const BL = {decrypted: "Not encrypted", encrypted: "Encrypted", encrypting: "Encrypting", decrypting: "Decrypting", encrypting_paused: "Encryption paused", decrypting_paused: "Decryption paused"};
     const used = c.bitlocker.volumes.some(v => v.status !== "decrypted");
+    const tpm = c.bitlocker.tpm || {};
+    const req = (data && data.bitlocker_require) || "workstations";
+    const why = r.virtual ? `This is a virtual machine (${esc(r.virtual)}), so BitLocker isn't checked.`
+      : used ? "" : !(req === "all" || req === "workstations" && r.workstation) ? `BitLocker isn't in use here, and it's only expected on ${req === "off" ? "no computers" : "Windows 10/11"} (the <code>agent_bitlocker_require</code> option), so there's no check.`
+      : tpm.present !== true ? `BitLocker isn't in use here. ${tpm.present === false ? "This computer has no TPM" : "The agent didn't report a TPM"}, so it isn't expected, and there's no check.` : "";
     const head = chk ? `<p class="${chk.status === "amber" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>`
       : whole ? `<p class="hint" style="margin:0 0 8px">The BitLocker check is ignored ${whole.scope === "host" ? "on this server" : "on all servers"}.</p>`
-      : `<p class="hint" style="margin:0 0 8px">BitLocker isn't in use here, and it's only expected on ${data && data.bitlocker_require === "off" ? "no computers" : "Windows 10/11"} (the <code>agent_bitlocker_require</code> option), so there's no check.</p>`;
-    html += sect("BitLocker", head + tbl(["Drive", "State", "Protection", "Method", "Unlocked by", ""], c.bitlocker.volumes.map(v => {
-      const bad = v.locked || v.status !== "encrypted" && (used || chk) && v.status !== "encrypting" || v.status === "encrypted" && v.protection === "off";
+      : `<p class="hint" style="margin:0 0 8px">${why || "All drives that would be checked are ignored."}</p>`;
+    const tpmLine = c.bitlocker.tpm ? `<p class="empty-note" style="margin:0 0 8px">TPM: ${tpm.present === true ? esc(tpm.version || "present") + (tpm.maker ? ` (${esc(tpm.maker)})` : "") + (tpm.enabled === false ? " · <b>disabled</b>" : tpm.activated === false ? " · <b>not activated</b>" : " · ready")
+      : tpm.present === false ? "none found" : "couldn't be checked"}</p>` : "";
+    html += sect("BitLocker", head + tpmLine + tbl(["Drive", "State", "Protection", "Method", "Unlocked by", ""], c.bitlocker.volumes.map(v => {
+      const bad = chk && (v.locked || v.status !== "encrypted" && v.status !== "encrypting" || v.status === "encrypted" && v.protection === "off");
       const state = (BL[v.status] || v.status) + (v.percent != null && !["encrypted", "decrypted"].includes(v.status) ? ` (${v.percent}%)` : "");
       const prot = v.locked ? "Locked" : v.status === "decrypted" ? "" : v.protection === "on" ? "On" : v.protection === "off" ? "<b>Suspended</b>" : "Unknown";
       return `<tr class="${rowCls(bad, "bitlocker", v.drive)}"><td>${esc(v.drive)} <small class="muted">${v.kind === "os" ? "Windows" : "data"}</small></td><td>${esc(state)}</td><td>${prot}</td>
         <td>${esc(v.method || "")}</td><td>${esc((v.protectors || []).join(", "))}</td><td>${bad || findIgnore("bitlocker", v.drive) ? ignBtn("bitlocker", v.drive, "BitLocker on " + v.drive) : ""}</td></tr>`;
-    })) + `<p class="hint">Amber when a fixed drive isn't encrypted, protection is suspended, encryption is paused or being removed, a drive is locked, or the Windows drive has no recovery password. Rollcall never reads the keys or recovery passwords. ${chk && !whole ? ignBtn("bitlocker", "bitlocker", "BitLocker") + " the whole check on this server." : ""}</p>`);
+    })) + `<p class="hint">Amber when a fixed drive isn't encrypted, protection is suspended, encryption is paused or being removed, a drive is locked, or the Windows drive has no recovery password. A computer that doesn't use BitLocker is only flagged if it has a TPM; virtual machines aren't checked. Rollcall never reads the keys or recovery passwords. ${chk && !whole ? ignBtn("bitlocker", "bitlocker", "BitLocker") + " the whole check on this server." : ""}</p>`);
   }
   flush("security");
   const dets = (hist.detections || []).slice().reverse();
