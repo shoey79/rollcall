@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.44.4 - 2026-11-10
+
+### Changed
+- **Documentation reorganised** by task, not by when each feature arrived. It now has:
+  - a contents list and a quick start;
+  - Using the dashboard, Checks, Watching devices (SNMP, syslog, linked Home Assistant devices), Windows and Linux agents, Agent addresses and updates, Alerts and quiet times, and Administration;
+  - a Reference section with a table of every option, its default and what it does, plus ports, sensors, events and files;
+  - a Troubleshooting section.
+
+  Nothing was removed; long paragraphs are now shorter steps and lists.
+
 ## 1.44.3 - 2026-11-09
 
 ### Changed
