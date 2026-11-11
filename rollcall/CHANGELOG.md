@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.63.1 - 2026-11-11
+
+### Fixed
+- **Agents page:** "(optional)" under **From outside** sat on its own line, pushing that box lower than **Inside your network** beside it. It's now beside the label, and the two boxes line up.
+
 ## 1.63.0 - 2026-11-11
 
 ### Added

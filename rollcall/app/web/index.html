@@ -3206,7 +3206,7 @@ function renderAgents() {
   html += sect("1. Where the agents report to", `
     <div class="srvgrid">
       <label class="field">Inside your network<input type="text" id="agServer" value="${esc(defaultServer())}" spellcheck="false" placeholder="http://192.168.1.5:${a.port}"></label>
-      <label class="field">From outside <small class="muted">(optional)</small><input type="text" id="agServerExt" value="${esc(ext)}" spellcheck="false" placeholder="https://rollcall.example.com:${a.port}"></label>
+      <label class="field"><span>From outside <small class="muted">(optional)</small></span><input type="text" id="agServerExt" value="${esc(ext)}" spellcheck="false" placeholder="https://rollcall.example.com:${a.port}"></label>
     </div>
     ${a.ssl ? `<label class="row-inline" style="margin-top:6px;font-size:13px"><input type="checkbox" id="agIgnoreCert"> Accept a self-signed certificate</label>` : ""}
     <p class="hint">Agents try the inside address first, then the outside one, and remember which worked so a laptop away from the office goes straight to the outside address next time.
