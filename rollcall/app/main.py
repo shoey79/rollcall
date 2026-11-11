@@ -2886,6 +2886,9 @@ class Monitor:
                     last = recent[-1]
                     level, detail = agentlib.WARN, (f"{len(recent)} alert-worthy event(s) in 24h; latest: "
                                                     f"{last.get('source')}" + (f" {last.get('id')}" if last.get("id") else ""))
+            if c["key"] == "security" and level == agentlib.CRIT and self._ack_time(h, "security") >= received:
+                # A failed-logon burst in this report was acknowledged: green until a later report has another.
+                level, detail = agentlib.OK, "Failed logons acknowledged"
             if c["key"] == "security" and level == agentlib.OK:
                 recent = self._recent(h, "security", received)
                 if recent:

@@ -762,7 +762,7 @@ The Security tab (admins only, agent 1.0.17 or later) lists every direct member 
 - **Ignore** appears next to anything that's flagged: stopped services (role or otherwise), stopped IIS app pools and sites, printers, VMs in a critical state, busy DHCP scopes, event IDs, whole disks and backup jobs. It applies to that server straight away and clears the alert.
 - **Ignored on this server** (at the bottom of Details) lists everything ignored there. **Apply to all servers** makes an item global; **Stop ignoring** undoes it, and anything still wrong goes red again immediately.
 - **Disks → Change** sets that disk's own amber and red levels (% free), e.g. amber below 8% and red below 3% for a large data volume. Leave a box blank to use the default, or enter 0 to turn that level off. **Use defaults** removes the override.
-- **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything. The items stay listed, greyed out, and anything new turns the check amber again. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
+- **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything. The items stay listed, greyed out, and anything new turns the check amber again. On the Security tab it also covers a burst of failed logons, which turns Security red: acknowledging it turns the check green until a later report has another burst. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
 
 - **Security filters**: for security events that are expected and low-risk, so they stop alerting. See below.
 
@@ -909,7 +909,7 @@ The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-a
 Some amber states clear themselves after a while. **Acknowledge** clears them now. A new occurrence still alerts.
 
 - **Syslog alerts**: in the Logs tab or on the Overview.
-- **Agent Events and Security**: on the check's card or at the top of its tab. **Undo** puts it back. For security events that are expected every time, use a [security filter](#security-filters) instead.
+- **Agent Events and Security**: on the check's card or at the top of its tab, including Security's red for a burst of failed logons. **Undo** puts it back. For security events that are expected every time, use a [security filter](#security-filters) instead.
 - **An SNMP device's restart**: in the SNMP tab or on the Overview.
 
 Problems that clear themselves once fixed, such as a reading over its limit or a SIP line not registered, can't be acknowledged; they turn green when they're resolved. To stop something alerting at all, use **Ignore** (agents), a [security filter](#security-filters) (security events) or **Never alert on these words** (syslog).

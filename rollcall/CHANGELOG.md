@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.61.2 - 2026-11-11
+
+### Fixed
+- **Acknowledge on the Security tab now covers failed-logon bursts.** A burst of failed logons turns Security red and notifies, but Acknowledge only counted security events. So after a burst the tab could say "Acknowledged … Undo" while the check was red, and after Undo there was no Acknowledge button at all.
+  - Bursts now count as new security alerts. Acknowledging turns the check green until a later report has another burst, and **Undo** brings it back.
+  - The Security check's card on the Overview offers Acknowledge when it's red for this reason too.
+
 ## 1.61.1 - 2026-11-11
 
 ### Fixed
