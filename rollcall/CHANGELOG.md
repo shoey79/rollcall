@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.61.4 - 2026-11-11
+
+### Fixed
+- **Backup copy jobs shown as overdue.** A copy job that copies several source jobs only logs its own result now and then, so it could show "no successful run for 62 h" while its copies ran normally.
+  - Its **Last success** is now the latest successful copy.
+  - It no longer has an overdue check of its own. Each `<copy job>\<source job>` copy keeps its own, so a copy that stops still goes amber.
+
 ## 1.61.3 - 2026-11-11
 
 ### Fixed

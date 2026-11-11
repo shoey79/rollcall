@@ -2275,7 +2275,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map(x => {
       const bad = x._level ? x._level !== "ok" : /failed|warning|stopped|disconnected/i.test(x.result || "");
       return `<tr class="${rowCls(bad, "backup", x.name)}"><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.source === "Microsoft 365" ? "Microsoft 365 · " : "")}${esc(x.type || "")}${x.source === "Microsoft 365" && x.enabled === false ? " · disabled" : ""}</small></td>
-        <td>${res(x)}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}</td>
+        <td>${res(x)}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
         <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
         <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
         <td>${ignBtn("backup", x.name, "job " + x.name)}</td></tr>`;

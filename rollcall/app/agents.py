@@ -1082,10 +1082,20 @@ def backup_jobs_view(jobs: list) -> list:
         out.append(j)
     for j in out:
         name, res = str(j.get("name") or ""), str(j.get("result") or "").lower()
-        if not name or "\\" in name or res not in ("failed", "warning", "stopped", "disconnected"):
+        if not name or "\\" in name:
             continue
-        since = [c for c in out if str(c.get("name") or "").lower().startswith(name.lower() + "\\")
-                 and _ts(c.get("finished")) and _ts(j.get("finished")) and _ts(c.get("finished")) > _ts(j.get("finished"))]
+        kids = [c for c in out if str(c.get("name") or "").lower().startswith(name.lower() + "\\")]
+        if kids:
+            # Its copies are each checked for being overdue; the copy job itself only logs now and
+            # then, so judge it by them: last success is the latest successful copy, and no overdue of its own.
+            j["copies"] = len(kids)
+            ok = [c.get("last_success") for c in kids if _ts(c.get("last_success"))]
+            best = max(ok + [j.get("last_success")] if _ts(j.get("last_success")) else ok, key=_ts, default=None)
+            if best:
+                j["last_success"] = best
+        if res not in ("failed", "warning", "stopped", "disconnected"):
+            continue
+        since = [c for c in kids if _ts(c.get("finished")) and _ts(j.get("finished")) and _ts(c.get("finished")) > _ts(j.get("finished"))]
         if since and all(str(c.get("result") or "").lower() in ("success", "warning") for c in since):
             j["superseded"] = {"result": j.get("result"), "finished": j.get("finished")}
             j["result"], j["detail"] = "Success", f"Last run {res}; {len(since)} copy session(s) have succeeded since"
@@ -1106,7 +1116,7 @@ def backup_job_state(j: dict, now: float) -> tuple[str, str]:
         nxt = _ts(j.get("next_run"))
         if nxt and now > nxt + 2 * 3600 and res not in ("running", "queued"):
             return WARN, "missed its scheduled run"
-    else:
+    elif not j.get("copies"):  # a copy job with per-source copies is judged by them (backup_jobs_view)
         last = _ts(j.get("last_success")) or _ts(j.get("finished"))
         runs = sorted(t for t in (_ts(x) for x in j.get("runs") or []) if t)
         gaps = sorted(b - a for a, b in zip(runs, runs[1:]) if b - a > 600)
