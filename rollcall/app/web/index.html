@@ -1926,6 +1926,36 @@ function renderDetails(d) {
     })));
   }
 
+  if (c.nics && (c.nics.adapters || []).length) {
+    // Network adapters: tick Alert for the ones that should always be connected, like the SNMP ports.
+    flush("network");
+    const nw = st.nic_watch || {}, rates = st.nic_rates || {}, ads = c.nics.adapters, canEdit = data && data.can_edit === true;
+    const fmtBps = b => b == null ? "—" : b >= 1e9 ? (b / 1e9).toFixed(1) + " Gb/s" : b >= 1e6 ? (b / 1e6).toFixed(1) + " Mb/s" : b >= 1e3 ? Math.round(b / 1e3) + " kb/s" : b + " b/s";
+    const spd = m => m >= 1000 ? m / 1000 + " Gb/s" : m + " Mb/s";
+    const upN = ads.filter(a => a.status === "up").length;
+    const missing = Object.entries(nw).filter(([k]) => !ads.some(a => a.name.toLowerCase() === k));
+    const row = a => {
+      const k = a.name.toLowerCase(), w = nw[k], rt = rates[k] || {};
+      const slow = w && w.speed && a.speed_mbps && a.speed_mbps < w.speed;
+      const bad = w && (a.status === "down" || a.status === "notpresent"), warn = w && (a.status === "disabled" || slow);
+      const stTxt = {up: "Connected", down: "Disconnected", disabled: "Disabled", notpresent: "Not present"}[a.status] || a.status;
+      const dot = a.status === "up" ? (slow ? "degraded" : "green") : bad ? "red" : warn ? "degraded" : "unknown";
+      const err = (a.rx_errors ?? null) === null ? "—" : `${a.rx_errors} / ${a.tx_errors}${rt.new_errors ? ` <b class="old">+${rt.new_errors}</b>` : ""}`;
+      return `<tr class="${bad ? "bad" : warn ? "warn" : ""}"><td><b>${esc(a.name)}</b>${a.virtual ? ` <small class="pill">virtual</small>` : ""}<br><small class="muted">${esc(a.desc || "")}${a.mac ? " · " + esc(a.mac) : ""}</small></td>
+        <td><span class="dot ${dot}"></span> ${stTxt}${a.status === "up" && a.speed_mbps ? ` · ${spd(a.speed_mbps)}` : ""}${slow ? `<br><small class="old">was ${spd(w.speed)} when ticked</small>` : ""}</td>
+        <td>${(a.ips || []).map(esc).join("<br>") || `<span class="muted">—</span>`}</td>
+        <td class="num">${a.status === "up" ? `↓ ${fmtBps(rt.rx_bps)}<br>↑ ${fmtBps(rt.tx_bps)}` : "—"}</td><td class="num">${err}</td>
+        <td><input type="checkbox" data-nicwatch="${esc(a.name)}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when ${esc(a.name)} disconnects"></td></tr>`;
+    };
+    const order = a => (nw[a.name.toLowerCase()] ? 0 : 2) + (a.virtual ? 1 : 0);
+    html += sect(`Network adapters (${upN} of ${ads.length} connected)`,
+      `<p class="hint" style="margin:0 0 6px">Tick <b>Alert</b> for adapters that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. They go red if they disconnect or disappear, and amber if they're disabled or the link drops below the speed it had when ticked. Other adapters are just shown.</p>` +
+      tbl(["Adapter", "Status", "Addresses", "Traffic", "Errors in / out", "Alert"], ads.slice().sort((x, y) => order(x) - order(y) || collator.compare(x.name, y.name)).map(row)
+        .concat(missing.map(([k, w]) => `<tr class="bad"><td><b>${esc(w.name || k)}</b></td><td><span class="dot red"></span> Missing: not in the agent's report</td><td></td><td></td><td></td>
+          <td><input type="checkbox" data-nicwatch="${esc(w.name || k)}" checked ${canEdit ? "" : "disabled"} aria-label="Stop alerting for ${esc(w.name || k)}"></td></tr>`))) +
+      `<p class="hint">Traffic is the average since the agent's previous report; errors are totals since the adapter started, with any new since the previous report.</p>`);
+  }
+
   const sv = r.services || {};
   flush("services");
   html += sect(linux ? "Watched services and containers" : "Role services", tbl(["Service", "Role", "State", ""], (sv.watched || []).filter(x => !(c.containers && c.containers.some(k => k.name === x.name))).map(x =>
@@ -2236,7 +2266,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   if ((r.errors || []).length) html += sect("Agent warnings", `<ul class="steps">${r.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`);
   flush(null);
   // Tabs, with a badge for checks needing attention that belong to each.
-  const names = {overview: "Overview", storage: "Storage", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
+  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
   const order = Object.keys(names).filter(k => T[k]);
@@ -2766,6 +2796,15 @@ function renderSnmp(x) {
   body.scrollTop = top;
 }
 document.getElementById("detBody").addEventListener("change", async e => {
+  const n = e.target.closest("input[data-nicwatch]");
+  if (n) {
+    n.disabled = true;
+    const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/agent/nic", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: n.dataset.nicwatch, watch: n.checked})});
+    if (!r.ok) alert("That didn't work (" + r.status + ")");
+    await openDetails(detKey, ["network"]); setTimeout(load, 1500);
+    return;
+  }
   const c = e.target.closest("input[data-watch]");
   if (!c || detMode !== "snmp") return;
   c.disabled = true;
@@ -2895,7 +2934,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 });
 
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
-const JUMP = {agent: ["agent", "Agent run"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
+const JUMP = {agent: ["agent", "Agent run"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
   security: ["security"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"]};

@@ -287,6 +287,16 @@ def normalize_report(r) -> dict:
             c["bitlocker"]["tpm"] = {"present": tpm.get("present") if isinstance(tpm.get("present"), bool) else None,
                                      **{k: tpm.get(k) if isinstance(tpm.get(k), bool) else None for k in ("enabled", "activated")},
                                      **{k: str(tpm.get(k) or "")[:20] for k in ("version", "maker")}}
+    if "nics" in c:
+        def n(v):
+            return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+        c["nics"] = {"adapters": [
+            {"name": str(a.get("name") or "")[:80], "desc": str(a.get("desc") or "")[:120],
+             "status": a.get("status") if a.get("status") in NIC_STATUS else "down",
+             "speed_mbps": n(a.get("speed_mbps")) or 0, "mac": str(a.get("mac") or "")[:40], "virtual": a.get("virtual") is True,
+             "media": str(a.get("media") or "")[:40], "ips": [str(x)[:50] for x in _as_list(a.get("ips"))][:8],
+             **{k: n(a.get(k)) for k in NIC_COUNTERS if n(a.get(k)) is not None}}
+            for a in _as_list(_as_dict(c["nics"]).get("adapters")) if isinstance(a, dict) and a.get("name")][:40]}
     if "certs" in c:
         c["certs"] = {"certs": [
             {"thumbprint": str(x.get("thumbprint") or "").lower()[:40], "store": str(x.get("store") or "")[:30],
@@ -511,6 +521,43 @@ def _watch_match(entries, source: str, event_id: int) -> bool:
 # --------------------------------------------------------------------------
 # Evaluation
 # --------------------------------------------------------------------------
+NIC_STATUS = ("up", "down", "disabled", "notpresent")
+NIC_COUNTERS = ("rx_bytes", "tx_bytes", "rx_errors", "tx_errors", "rx_drops", "tx_drops")
+
+
+def nic_key(name: str) -> str:
+    return str(name or "").strip().lower()[:80]
+
+
+def nic_state(nics: dict, watch: dict) -> tuple[str, str, list] | None:
+    """Ticked network adapters: red when disconnected or gone, amber when disabled or the link
+    is slower than it was when ticked (e.g. 1 Gb/s down to 100 Mb/s). Unticked ones never alert."""
+    if not watch:
+        return None
+    have = {nic_key(a["name"]): a for a in nics.get("adapters") or []}
+    crit, warn = [], []
+    for k, w in watch.items():
+        a, nm = have.get(k), (w or {}).get("name") or k
+        if not a or a["status"] == "notpresent":
+            crit.append(f"{nm} missing")
+        elif a["status"] == "down":
+            crit.append(f"{nm} disconnected")
+        elif a["status"] == "disabled":
+            warn.append(f"{nm} disabled")
+        elif (w or {}).get("speed") and a.get("speed_mbps") and a["speed_mbps"] < w["speed"]:
+            warn.append(f"{nm} at {fmt_speed(a['speed_mbps'])} (was {fmt_speed(w['speed'])})")
+    if crit:
+        return CRIT, ", ".join(crit + warn), crit
+    if warn:
+        return WARN, ", ".join(warn), warn
+    n = len(watch)
+    return OK, f"{n} watched adapter{'s' if n != 1 else ''} up", []
+
+
+def fmt_speed(mbps: int) -> str:
+    return f"{mbps / 1000:g} Gb/s" if mbps >= 1000 else f"{mbps} Mb/s"
+
+
 def _check(key, label, level, detail, confirm=False, info=None):
     """confirm: a CRIT only goes red after two reports in a row (like ping)."""
     return {"key": key, "label": label, "level": level, "detail": detail, "confirm": confirm,
@@ -1355,6 +1402,12 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                               report.get("pending_reboot") is True, str(report.get("virtual") or ""))
         if res:
             checks.append(_check("bitlocker", "BitLocker", res[0], res[1]))
+
+    nics = rc.get("nics")
+    if nics:
+        res = nic_state(nics, settings.get("nic_watch") or {})
+        if res:
+            checks.append(_check("nics", "Network", res[0], res[1], confirm=res[0] == CRIT))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 

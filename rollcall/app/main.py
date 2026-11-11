@@ -1328,6 +1328,8 @@ class Host:
     model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
     subtitle: str = ""                 # the line under the name: "" (the default), model, os, address or none
     group: str = ""                    # the Overview group, e.g. "Servers"; "" = from the icon's type
+    nic_prev: tuple | None = None      # (received, {adapter: counters}) from the last agent report, for rates
+    nic_rates: dict = field(default_factory=dict)  # adapter -> {rx_bps, tx_bps, new_errors}
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
     snmp_version: str = "2c"
     snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
@@ -2331,7 +2333,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain", "nics")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2689,6 +2691,7 @@ class Monitor:
         hs = self.agent_settings["hosts"].get(h.key) or {}
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
+                "nic_watch": dict(hs.get("nic_watch") or {}),
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
@@ -2756,6 +2759,41 @@ class Monitor:
         log.info("%s %s disk thresholds: %s", h.name, key, disks.get(key) or "defaults")
         await self.reevaluate(h)
 
+    async def set_nic_watch(self, h: Host, name: str, watch: bool) -> None:
+        """Tick or untick a network adapter. Its link speed now is remembered, so a slower link later shows amber."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        nw, key = hs.setdefault("nic_watch", {}), agentlib.nic_key(name)
+        if watch:
+            a = next((x for x in (((h.agent_report or {}).get("checks") or {}).get("nics") or {}).get("adapters") or []
+                      if agentlib.nic_key(x["name"]) == key), None)
+            nw[key] = {"name": a["name"] if a else name, "speed": (a or {}).get("speed_mbps") or 0}
+        else:
+            nw.pop(key, None)
+        if not nw:
+            hs.pop("nic_watch", None)
+        self._save_agent_settings()
+        log.info("%s: network adapter %s %s", h.name, name, "watched" if watch else "no longer watched")
+        await self.reevaluate(h)
+
+    def _nic_rates(self, h: Host, report: dict, received: float) -> None:
+        """Traffic and new errors per adapter since the previous report (kept in memory only)."""
+        cur = {agentlib.nic_key(a["name"]): a for a in (((report.get("checks") or {}).get("nics") or {}).get("adapters") or [])}
+        prev, rates = h.nic_prev, {}
+        if prev and 0 < received - prev[0] < 3600:
+            secs = received - prev[0]
+            for k, a in cur.items():
+                b = prev[1].get(k)
+                if not b:
+                    continue
+                r = {}
+                for f in ("rx_bytes", "tx_bytes"):
+                    if a.get(f) is not None and b.get(f) is not None and a[f] >= b[f]:
+                        r[f.replace("bytes", "bps")] = round((a[f] - b[f]) * 8 / secs)
+                new_err = sum(max(0, (a.get(f) or 0) - (b.get(f) or 0)) for f in ("rx_errors", "tx_errors") if a.get(f) is not None and b.get(f) is not None)
+                r["new_errors"] = new_err
+                rates[k] = r
+        h.nic_prev, h.nic_rates = (received, cur), rates
+
     async def reevaluate(self, h: Host) -> None:
         """Apply changed settings to the latest report now, without re-alerting events."""
         if h.agent_report and h.agent_id and self.agents and h.agent_id in self.agents.agents:
@@ -2766,6 +2804,8 @@ class Monitor:
                      reeval: bool = False) -> None:
         if not restoring and not reeval:
             self._track_domain(h, report, received)
+        if not reeval:
+            self._nic_rates(h, report, received)
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
         h.agent_report, h.agent_seen = report, received
@@ -3057,6 +3097,7 @@ class Monitor:
                     "sec_filters": (hs.get("sec_filters") or []) if include_security else [],
                     "global_sec_filters": (self.agent_settings.get("global_sec_filters") or []) if include_security else [],
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
+                    "nic_watch": hs.get("nic_watch") or {}, "nic_rates": h.nic_rates,
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
         if include_security and hs.get("domain_seen") is not None:
             dseen = hs["domain_seen"]
@@ -3491,6 +3532,17 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             return web.json_response({"error": "kind must be events or security"}, status=400)
         user = await access.who(req)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
+        return web.json_response({"ok": True})
+
+    async def agent_nic(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        name = str(body.get("name") or "").strip()
+        if not name or len(name) > 80 or not name.isprintable():
+            return web.json_response({"error": "invalid adapter name"}, status=400)
+        await monitor.set_nic_watch(h, name, body.get("watch") is True)
         return web.json_response({"ok": True})
 
     async def agent_disk(req):
@@ -4034,6 +4086,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
+    app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))

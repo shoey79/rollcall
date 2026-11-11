@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.11"
+AGENT_VERSION = "1.0.12"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -349,6 +349,42 @@ def disks():
             except Exception as err:  # noqa: BLE001
                 collector_error("disk %s" % m[1], err)
     return out
+
+
+def network_report():
+    """Every network interface except loopback and container plumbing: state, link speed, addresses, counters."""
+    base, out = "/sys/class/net", []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return None
+    addrs = {}
+    rc, text, _ = run(["ip", "-o", "addr", "show"])
+    for m in re.finditer(r"^\d+:\s+(\S+)\s+inet6? (\S+)", text, re.M):
+        if not m.group(2).startswith(("fe80", "127.", "::1")):
+            addrs.setdefault(m.group(1).split("@")[0], []).append(m.group(2))
+    for n in names:
+        if n == "lo" or re.match(r"(veth|ifb\d|dummy\d|docker\d|br-[0-9a-f]{12}|cni|flannel|cali|vxlan\.calico)", n):
+            continue
+        d = f"{base}/{n}"
+        num = lambda f: int(read(f"{d}/{f}").strip() or -1) if read(f"{d}/{f}").strip().lstrip("-").isdigit() else None  # noqa: E731
+        flags = read(f"{d}/flags").strip()
+        admin_up = bool(int(flags, 16) & 1) if flags.startswith("0x") else True
+        oper, carrier = read(f"{d}/operstate").strip(), num("carrier")
+        status = "disabled" if not admin_up else "up" if oper == "up" or (oper == "unknown" and carrier == 1) else "down"
+        speed = num("speed") if status == "up" else None
+        row = {"name": n[:80], "desc": (read(f"{d}/device/uevent").split("DRIVER=")[-1].split("\n")[0] if os.path.exists(f"{d}/device") else "")[:120],
+               "status": status, "speed_mbps": speed if speed and speed > 0 else 0, "mac": read(f"{d}/address").strip()[:40],
+               "virtual": not os.path.exists(f"{d}/device"), "media": "", "ips": addrs.get(n, [])[:8]}
+        for k, f in (("rx_bytes", "rx_bytes"), ("tx_bytes", "tx_bytes"), ("rx_errors", "rx_errors"), ("tx_errors", "tx_errors"),
+                     ("rx_drops", "rx_dropped"), ("tx_drops", "tx_dropped")):
+            v = num(f"statistics/{f}")
+            if v is not None and v >= 0:
+                row[k] = v
+        out.append(row)
+        if len(out) >= 40:
+            break
+    return {"adapters": out} if out else None
 
 
 def storage_health():
@@ -802,6 +838,10 @@ def build_report(state, conf):
         sh = storage_health()
         if sh["virtual"]:
             r["checks"]["storage"] = sh
+    with step("network"):
+        nics = network_report()
+        if nics:
+            r["checks"]["nics"] = nics
     if conts is not None:
         r["checks"]["containers"] = conts
     with step("immich"):

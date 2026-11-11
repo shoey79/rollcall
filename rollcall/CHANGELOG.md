@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.59.0 - 2026-11-11
+
+### Added
+- **Network adapters** (Windows agent 1.0.31, Linux agent 1.0.12). A new **Network** tab in Details lists each adapter: status, link speed, addresses, MAC, traffic since the previous report, and error counts, with new errors highlighted.
+  - Tick **Alert** for adapters that should always be connected, as with SNMP switch ports. A ticked adapter goes red if it disconnects or disappears (two reports in a row), and amber if it's disabled or its link drops below the speed it had when ticked.
+  - Older Windows versions without `Get-NetAdapter` are read through WMI instead.
+
 ## 1.58.0 - 2026-11-11
 
 ### Added

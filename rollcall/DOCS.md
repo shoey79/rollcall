@@ -594,7 +594,10 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
 | **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
+| **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
+
+**Network adapters:** the **Network** tab in Details lists each adapter with its status, link speed, addresses, MAC address, traffic (the average since the previous report) and error counts. Like the ports on an SNMP switch, nothing alerts until you tick **Alert** for an adapter that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. The link speed when you tick it is remembered, so a cable or switch port that drops to a slower speed shows amber. Virtual adapters (Hyper-V vEthernet and the like) are labelled. This needs Windows agent 1.0.31 or Linux agent 1.0.12; the Linux agent leaves out loopback and Docker's own interfaces.
 
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
 
@@ -839,6 +842,7 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 | **Updates** | Reboot required, security updates waiting with nothing installed for a week, or nothing installed for `agent_patch_days` | |
 | **Immich** | A job queue paused or with failed jobs, or a newer Immich release out | Immich's API not answering (two reports) |
 | **Security** | Notable events in 24 h | `agent_failed_logons` or more failed SSH/sudo logins in one report |
+| **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
 | **Journal** | Alert-worthy errors in 24 h | |
 
 - **Containers:** every container that's running, has a restart policy, or belongs to a Compose stack is watched (Immich's server, machine learning, Postgres and Redis/Valkey included). A one-off container that exited cleanly isn't. Containers can be ignored like services.

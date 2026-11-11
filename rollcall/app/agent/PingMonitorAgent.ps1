@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.30'
+$AgentVersion = '1.0.31'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -727,6 +727,56 @@ function Get-LocalAdmins {
         if ($list.Count -ge 200) { break }
     }
     return $list
+}
+
+function Get-NetworkReport {
+    # Every visible network adapter: status, link speed, addresses and traffic counters.
+    # Get-NetAdapter is Windows 8 / Server 2012 and later; older systems fall back to WMI.
+    $out = New-Object System.Collections.Generic.List[object]
+    $ips = @{}
+    try {
+        foreach ($a in @(Get-NetIPAddress -ErrorAction Stop | Where-Object { $_.IPAddress -notlike 'fe80*' -and $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '::1' })) {
+            $k = [int]$a.InterfaceIndex
+            if (-not $ips.ContainsKey($k)) { $ips[$k] = New-Object System.Collections.Generic.List[string] }
+            if ($ips[$k].Count -lt 8) { $ips[$k].Add(('{0}/{1}' -f $a.IPAddress, $a.PrefixLength)) }
+        }
+    } catch { }
+    $adapters = $null
+    try { $adapters = @(Get-NetAdapter -ErrorAction Stop) } catch { }
+    if ($null -ne $adapters) {
+        $stats = @{}
+        try { foreach ($x in @(Get-NetAdapterStatistics -ErrorAction Stop)) { $stats[[string]$x.Name] = $x } } catch { }
+        foreach ($a in ($adapters | Sort-Object ifIndex | Select-Object -First 40)) {
+            $status = switch ([string]$a.Status) { 'Up' { 'up' } 'Disabled' { 'disabled' } 'Not Present' { 'notpresent' } default { 'down' } }
+            $x = $stats[[string]$a.Name]
+            $speed = 0
+            if ($status -eq 'up' -and $a.Speed -and [double]$a.Speed -lt 1e13) { $speed = [int64][math]::Round([double]$a.Speed / 1e6) }
+            $row = [ordered]@{
+                name = Limit-Text ([string]$a.Name) 80; desc = Limit-Text ([string]$a.InterfaceDescription) 120
+                status = $status; speed_mbps = $speed; mac = ([string]$a.MacAddress).Replace('-', ':')
+                virtual = -not [bool]$a.HardwareInterface; media = [string]$a.MediaType
+                ips = @(if ($ips.ContainsKey([int]$a.ifIndex)) { $ips[[int]$a.ifIndex].ToArray() })
+            }
+            if ($x) {
+                $row.rx_bytes = [int64]$x.ReceivedBytes; $row.tx_bytes = [int64]$x.SentBytes
+                $row.rx_errors = [int64]$x.ReceivedPacketErrors; $row.tx_errors = [int64]$x.OutboundPacketErrors
+                $row.rx_drops = [int64]$x.ReceivedDiscardedPackets; $row.tx_drops = [int64]$x.OutboundDiscardedPackets
+            }
+            $out.Add($row)
+        }
+    } else {
+        foreach ($a in @(Get-CimInstance -ClassName Win32_NetworkAdapter -Filter 'NetConnectionID IS NOT NULL' -ErrorAction Stop | Select-Object -First 40)) {
+            $n = [int]$a.NetConnectionStatus
+            $status = if ($a.NetEnabled -eq $false -and $n -ne 4) { 'disabled' } elseif ($n -eq 2) { 'up' } elseif ($n -eq 4) { 'notpresent' } else { 'down' }
+            $out.Add([ordered]@{
+                name = Limit-Text ([string]$a.NetConnectionID) 80; desc = Limit-Text ([string]$a.Name) 120; status = $status
+                speed_mbps = $(if ($status -eq 'up' -and $a.Speed -and [double]$a.Speed -lt 1e13) { [int64][math]::Round([double]$a.Speed / 1e6) } else { 0 })
+                mac = [string]$a.MACAddress; virtual = -not [bool]$a.PhysicalAdapter; media = ''
+                ips = @(if ($ips.ContainsKey([int]$a.InterfaceIndex)) { $ips[[int]$a.InterfaceIndex].ToArray() })
+            })
+        }
+    }
+    return [ordered]@{ adapters = $out.ToArray() }
 }
 
 function Get-BitLockerStatus {
@@ -1817,6 +1867,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
+    try {
+        $nics = Measure-Step 'network' { Get-NetworkReport }
+        if ($nics -and $nics.adapters.Count) { $report.checks.nics = $nics }
+    } catch { Add-CollectorError 'network' $_ }
     if ($sys -and $sys.part_of_domain) {
         try { $report.checks.gpo = Measure-Step 'group policy' { Get-GroupPolicyStatus } } catch { Add-CollectorError 'group policy' $_ }
     }
