@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.62.0 - 2026-11-11
+
+### Added
+- **Forget a Veeam job.** On the Backups tab, **Forget** removes a job you've retired on purpose from the list and from alerts straight away, so it's tidy while you reorganise jobs.
+  - If a job with the same Veeam ID runs again later, it comes back on its own.
+  - Forgotten jobs are listed under the table with **Bring back**.
+  - Done by the add-on, so no agent update is needed.
+
 ## 1.61.4 - 2026-11-11
 
 ### Fixed

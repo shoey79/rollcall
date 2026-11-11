@@ -1065,7 +1065,17 @@ def sql_state(sql: dict, now: float, backup_hours: float = 36, ign: "Ignore | No
     return OK, "; ".join(parts) or "No databases to check"
 
 
-def backup_jobs_view(jobs: list) -> list:
+def backup_job_key(j: dict) -> str:
+    return str(j.get("id") or j.get("name") or "")[:200]
+
+
+def backup_forgotten(j: dict, forgot: dict) -> bool:
+    """Forgotten from the dashboard, and nothing newer has arrived for it since."""
+    f = (forgot or {}).get(backup_job_key(j))
+    return bool(f) and (_ts(j.get("finished")) or 0) <= (_ts(f.get("finished")) or 0)
+
+
+def backup_jobs_view(jobs: list, forgot: dict | None = None) -> list:
     """Veeam jobs as the checks should judge them.
 
     A backup copy job that copies several source jobs logs each source's copy as its own job,
@@ -1076,6 +1086,8 @@ def backup_jobs_view(jobs: list) -> list:
     "Retry of " is also dropped from the type ("Retry of Backup Copy" -> "Backup Copy")."""
     out = []
     for j in jobs:
+        if backup_forgotten(j, forgot):
+            continue
         j = dict(j)
         if str(j.get("type") or "").startswith("Retry of "):
             j["type"] = j["type"][len("Retry of "):]
@@ -1366,7 +1378,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if bk is not None:
         now_ = now or time.time()
         bad, warn, n = [], [], 0
-        for j in backup_jobs_view(bk.get("jobs") or []):
+        for j in backup_jobs_view(bk.get("jobs") or [], settings.get("backup_forgot")):
             if ign.has("backup", j.get("name")):
                 continue
             n += 1

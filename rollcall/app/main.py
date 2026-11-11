@@ -2642,7 +2642,7 @@ class Monitor:
         ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(hs.get("ignore") or [])
                               + list(self.agent_settings.get("global_ignore") or []))
         now, changed = time.time(), False
-        for j in agentlib.backup_jobs_view(jobs):
+        for j in agentlib.backup_jobs_view(jobs, hs.get("backup_forgot")):
             if ign.has("backup", j.get("name")):
                 continue
             level, why = agentlib.backup_job_state(j, now)
@@ -2723,7 +2723,7 @@ class Monitor:
         hs = self.agent_settings["hosts"].get(h.key) or {}
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
-                "nic_watch": dict(hs.get("nic_watch") or {}),
+                "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
@@ -2790,6 +2790,27 @@ class Monitor:
         self._save_agent_settings()
         log.info("%s %s disk thresholds: %s", h.name, key, disks.get(key) or "defaults")
         await self.reevaluate(h)
+
+    async def forget_backup_job(self, h: Host, key: str, forget: bool) -> bool:
+        """Hide a retired Veeam job until it runs again (a later result brings it back)."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        fg = hs.setdefault("backup_forgot", {})
+        if forget:
+            jobs = (((h.agent_report or {}).get("checks") or {}).get("backups") or {}).get("jobs") or []
+            j = next((x for x in jobs if agentlib.backup_job_key(x) == key), None)
+            if not j:
+                return False
+            fg[key] = {"name": str(j.get("name") or "")[:200], "finished": j.get("finished") or "", "at": int(time.time())}
+            while len(fg) > 200:
+                fg.pop(min(fg, key=lambda k: fg[k].get("at") or 0))
+        elif not fg.pop(key, None):
+            return False
+        if not fg:
+            hs.pop("backup_forgot", None)
+        self._save_agent_settings()
+        log.info("%s: Veeam job %s %s", h.name, key, "forgotten" if forget else "brought back")
+        await self.reevaluate(h)
+        return True
 
     async def set_nic_watch(self, h: Host, name: str, watch: bool) -> None:
         """Tick or untick a network adapter. Its link speed now is remembered, so a slower link later shows amber."""
@@ -3102,9 +3123,9 @@ class Monitor:
         r = dict(h.agent_report or {})
         bk = (r.get("checks") or {}).get("backups")
         if bk:  # each job's state as the check sees it, for the Backups tab
-            now = time.time()
+            now, forgot = time.time(), self._host_settings(h).get("backup_forgot") or {}
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
-                {**j, "_level": lv, "_why": why} for j in agentlib.backup_jobs_view(bk.get("jobs") or [])
+                {**j, "_level": lv, "_why": why} for j in agentlib.backup_jobs_view(bk.get("jobs") or [], forgot)
                 for lv, why in [agentlib.backup_job_state(j, now)]]}}
         sq = (r.get("checks") or {}).get("sql")
         if sq and sq.get("instances"):  # each database's state as the check sees it, for the Roles tab
@@ -3138,7 +3159,7 @@ class Monitor:
                     "sec_filters": (hs.get("sec_filters") or []) if include_security else [],
                     "global_sec_filters": (self.agent_settings.get("global_sec_filters") or []) if include_security else [],
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
-                    "nic_watch": hs.get("nic_watch") or {}, "nic_rates": h.nic_rates,
+                    "nic_watch": hs.get("nic_watch") or {}, "nic_rates": h.nic_rates, "backup_forgot": hs.get("backup_forgot") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
         if include_security and hs.get("domain_seen") is not None:
             dseen = hs["domain_seen"]
@@ -3575,6 +3596,18 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             return web.json_response({"error": "kind must be events or security"}, status=400)
         user = await access.who(req)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
+        return web.json_response({"ok": True})
+
+    async def agent_backup_forget(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        key = str(body.get("id") or "")
+        if not key or len(key) > 200:
+            return web.json_response({"error": "invalid job"}, status=400)
+        if not await monitor.forget_backup_job(h, key, body.get("forget") is not False):
+            return web.json_response({"error": "that job isn't in the last report"}, status=404)
         return web.json_response({"ok": True})
 
     async def agent_nic(req):
@@ -4156,6 +4189,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
+    app.router.add_post("/api/hosts/{key}/agent/backup-forget", editor_only(agent_backup_forget))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))

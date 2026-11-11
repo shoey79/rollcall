@@ -2278,8 +2278,10 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         <td>${res(x)}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
         <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
         <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
-        <td>${ignBtn("backup", x.name, "job " + x.name)}</td></tr>`;
+        <td>${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`;
     })) : `<p class="empty-note">Veeam is installed but no job has finished in the last 30 days.</p>`);
+    const fg = Object.entries(st.backup_forgot || {});
+    if (fg.length) html += `<p class="hint">Forgotten (hidden until they run again): ${fg.map(([k, f]) => `${esc(f.name || k)}${data && data.can_edit ? ` <button type="button" class="mini" data-bkback="${esc(k)}">Bring back</button>` : ""}`).join(" · ")}</p>`;
   }
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
@@ -2866,6 +2868,16 @@ function renderSnmp(x) {
   body.innerHTML = html;
   body.scrollTop = top;
 }
+document.getElementById("detBody").addEventListener("click", async e => {
+  const f = e.target.closest("[data-bkforget], [data-bkback]"); if (!f || detMode === "snmp") return;
+  const forget = !!f.dataset.bkforget;
+  if (forget && !confirm(`Forget "${f.dataset.bkname}"?\n\nIt disappears from the list and stops alerting. If a job with this ID runs again later, it comes back on its own.`)) return;
+  f.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/agent/backup-forget", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({id: forget ? f.dataset.bkforget : f.dataset.bkback, forget})});
+  if (!r.ok) { f.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
+  await openDetails(detKey, ["backups"]); setTimeout(load, 1500);
+});
 document.getElementById("detBody").addEventListener("change", async e => {
   const n = e.target.closest("input[data-nicwatch]");
   if (n) {
