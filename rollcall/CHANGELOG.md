@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.61.0 - 2026-11-11
+
+### Added
+- **Limits for each UPS:** **Change** in a UPS's SNMP details sets its own runtime amber/red and load limits, so a large battery bank and a small cabinet UPS can have different ones. Blank uses the add-on's `ups_runtime_*` / `ups_load_warn` settings, 0 minutes turns a level off, and changes apply straight away without restarting the add-on.
+
+### Fixed
+- The docs listed the UPS "other makes' alarms" note under Printers.
+
 ## 1.60.0 - 2026-11-11
 
 ### Added

@@ -100,6 +100,29 @@ SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
 SECURITY_KEYS = ("agent_security", "agent_domain")
+UPS_LIMIT_KEYS = {"runtime_warn": (0, 600), "runtime_crit": (0, 600), "load_warn": (1, 100)}
+
+
+def clean_ups_limits(raw, strict: bool = False) -> dict:
+    """A UPS's own limits: whole minutes (0 turns that level off) and a load %. Bad values are
+    dropped when loading, or refused when strict (from the dashboard)."""
+    out = {}
+    for k, v in (raw or {}).items() if isinstance(raw, dict) else []:
+        if k not in UPS_LIMIT_KEYS:
+            continue
+        lo, hi = UPS_LIMIT_KEYS[k]
+        try:
+            n = int(float(v))
+            if not lo <= n <= hi or float(v) != n:
+                raise ValueError
+        except (TypeError, ValueError):
+            if strict:
+                raise ValueError(f"{'load' if k == 'load_warn' else 'runtime'} must be a whole number from {lo} to {hi}") from None
+            continue
+        out[k] = n
+    return out
+
+
 SUBTITLES = ("", "auto", "model", "os", "address", "user", "none")  # "" = the add-on's name_line default  # checks whose detail names accounts
 BUCKETS = 48  # 24h strip on the dashboard, 30 min per bucket
 
@@ -1334,6 +1357,7 @@ class Host:
     snmp_version: str = "2c"
     snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
     snmp_watch: list[int] = field(default_factory=list)  # switch ports (ifIndex) that alert when down
+    ups_limits: dict = field(default_factory=dict)  # this UPS's own runtime_warn / runtime_crit / load_warn, over the add-on's
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
@@ -1498,6 +1522,7 @@ class Monitor:
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
+                            **({"ups_limits": h.ups_limits} if h.ups_limits else {}),
                             **({"snmp_restart_ack": h.snmp_restart_ack} if h.snmp_restart_ack else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
@@ -1521,6 +1546,7 @@ class Monitor:
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
+        h.ups_limits = clean_ups_limits(entry.get("ups_limits"))
         h.readings_cfg = clean_readings_cfg(entry.get("readings_cfg"))
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
@@ -2074,7 +2100,11 @@ class Monitor:
         detail = "; ".join(f"{i['what']}: {i['detail']}" if i["detail"] else i["what"] for i in d["items"] if i["level"] == worst)
         return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
 
-    def ups_limits(self) -> dict:
+    def ups_limits(self, h: "Host | None" = None) -> dict:
+        """The add-on's UPS and printer limits, with this device's own UPS limits on top."""
+        return {**self.ups_defaults(), **((h.ups_limits or {}) if h else {})}
+
+    def ups_defaults(self) -> dict:
         o = self.opts
         return {"runtime_warn": int(o.get("ups_runtime_warn_minutes", 15)), "runtime_crit": int(o.get("ups_runtime_crit_minutes", 5)),
                 "load_warn": int(o.get("ups_load_warn", 80)), "supply_warn": int(o.get("printer_supply_warn", 10))}
@@ -2102,7 +2132,7 @@ class Monitor:
         elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         h.snmp_data, h.snmp_polled = d, now
-        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(), h.snmp_restart_ack)
+        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(h), h.snmp_restart_ack)
         h.snmp_items = items
         if worst == "ok":
             bits = []
@@ -3832,8 +3862,33 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             raise web.HTTPNotFound()
         svc = next((s for s in h.services if s.kind == "snmp"), None)
         return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "polled": h.snmp_polled,
-                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch, "ups_limits": monitor.ups_limits(),
+                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch, "ups_limits": monitor.ups_limits(h),
+                                  "ups_defaults": monitor.ups_defaults(), "ups_custom": h.ups_limits,
                                   "status": svc.status if svc else None, "detail": svc.detail if svc else None})
+
+    async def host_ups_limits(req):
+        """Set this UPS's own runtime and load limits; a blank value goes back to the add-on's."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        try:
+            lim = clean_ups_limits({k: body.get(k) for k in UPS_LIMIT_KEYS if body.get(k) not in (None, "")}, strict=True)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        both = {**monitor.ups_defaults(), **lim}
+        if both["runtime_crit"] and both["runtime_warn"] and both["runtime_crit"] > both["runtime_warn"]:
+            return web.json_response({"error": "the red runtime can't be above the amber one"}, status=400)
+        h.ups_limits = lim
+        monitor._save_hosts()
+        log.info("%s: UPS limits %s", h.name, lim or "back to the add-on's")
+        if h.snmp_data:  # re-evaluate straight away
+            svc = next((s for s in h.services if s.kind == "snmp"), None)
+            worst, items = snmplib.evaluate(h.snmp_data, set(h.snmp_watch), None, monitor.ups_limits(h), h.snmp_restart_ack)
+            h.snmp_items = items
+            if svc and svc.status != UNKNOWN:
+                h.next_due = 0
+        return web.json_response({"ups_limits": monitor.ups_limits(h), "ups_custom": h.ups_limits})
 
     async def host_snmp_watch(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -3851,7 +3906,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         log.info("%s: port %s %s", h.name, idx, "watched" if body.get("watch") else "no longer watched")
         if h.snmp_data:  # re-evaluate straight away
             svc = next((s for s in h.services if s.kind == "snmp"), None)
-            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits(), h.snmp_restart_ack)
+            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits(h), h.snmp_restart_ack)
             h.snmp_items = items
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0
@@ -4068,6 +4123,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/discovery/cancel", editor_only(discovery_cancel))
     app.router.add_post("/api/discovery/hide", editor_only(discovery_hide))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
+    app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))

@@ -180,6 +180,7 @@ table.small td.msg{max-width:420px;color:var(--muted)}
 button.mini{font-size:11.5px;padding:3px 8px}
 .ignored{font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
 table.small tr.dim td{opacity:.55}
+.diskset.upsset{margin:10px 0 0}
 .diskset{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 8px 70px;font-size:12px}
 .diskset label{display:inline-flex;align-items:center;gap:4px}
 .diskset input{width:64px;font:inherit;font-size:13px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
@@ -2694,6 +2695,7 @@ document.getElementById("detBody").addEventListener("keydown", e => {
 const fmtUp = s => s == null ? "—" : s < 3600 ? Math.round(s / 60) + " min" : s < 86400 ? Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min" : Math.floor(s / 86400) + " days";
 let snmpInfo = null;
 async function openSnmp(key) {
+  if (key !== detKey || detMode !== "snmp") upsEditing = false;
   if (detMode !== "snmp" || key !== detKey) {
     const h = data && data.hosts.find(x => x.key === key);
     document.getElementById("detTitle").textContent = h ? h.name : "Details";
@@ -2712,6 +2714,34 @@ async function openSnmp(key) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
+// This UPS's runtime and load limits, with Change to set its own (like the per-disk limits on agents).
+let upsEditing = false;
+function upsLimitsHtml(x) {
+  const lim = x.ups_limits || {}, def = x.ups_defaults || {}, own = x.ups_custom || {}, custom = Object.keys(own).length > 0;
+  const canEdit = data && data.can_edit === true;
+  const rt = (v, word) => v ? `${word} under ${v} min` : `no ${word} level`;
+  if (upsEditing && canEdit) return `<div class="diskset upsset">
+    <label>Runtime amber under <input type="number" min="0" max="600" step="1" id="uWarn" value="${own.runtime_warn ?? ""}" placeholder="${def.runtime_warn}"> min</label>
+    <label>red under <input type="number" min="0" max="600" step="1" id="uCrit" value="${own.runtime_crit ?? ""}" placeholder="${def.runtime_crit}"> min</label>
+    <label>Load amber over <input type="number" min="1" max="100" step="1" id="uLoad" value="${own.load_warn ?? ""}" placeholder="${def.load_warn}">%</label>
+    <button type="button" class="mini primary" data-ups-save="1">Save</button>
+    ${custom ? `<button type="button" class="mini" data-ups-reset="1">Use defaults</button>` : ""}
+    <button type="button" class="mini" data-ups-cancel="1">Cancel</button>
+    <small class="muted">Blank uses the add-on's setting (${def.runtime_warn} / ${def.runtime_crit} min, ${def.load_warn}%). 0 minutes turns that level off.</small></div>`;
+  return `<div class="diskset upsset"><small class="${custom ? "" : "muted"}">Alerts: runtime ${rt(lim.runtime_warn, "amber")}, ${rt(lim.runtime_crit, "red")}; load amber over ${lim.load_warn}%${custom ? " (set for this UPS)" : " (the add-on's settings)"}</small>
+    ${canEdit ? `<button type="button" class="mini" data-ups-edit="1">Change</button>` : ""}</div>`;
+}
+document.getElementById("detBody").addEventListener("click", async e => {
+  if (detMode !== "snmp") return;
+  const t = e.target.closest("[data-ups-edit], [data-ups-cancel], [data-ups-save], [data-ups-reset]"); if (!t) return;
+  if (t.dataset.upsEdit || t.dataset.upsCancel) { upsEditing = !!t.dataset.upsEdit; return openSnmp(detKey); }
+  const v = id => document.getElementById(id).value.trim();
+  const body = t.dataset.upsReset ? {} : {runtime_warn: v("uWarn"), runtime_crit: v("uCrit"), load_warn: v("uLoad")};
+  t.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/ups-limits", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) { t.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
+  upsEditing = false; await openSnmp(detKey); setTimeout(load, 1500);
+});
 function renderSnmp(x) {
   const d = x.data, now = Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
   const canEdit = data && data.can_edit === true;
@@ -2781,7 +2811,8 @@ function renderSnmp(x) {
       ${kv("Firmware", esc(u.firmware || ""))}
       ${kv("Made", u.made ? day(u.made) : "")}
       ${(u.alarms || []).length ? kv("Alarms", `<b class="old">${esc(u.alarms.join(", "))}</b>`) : ""}</div>`
-      + `<p class="hint">Goes red on battery, with a low or faulty battery, one that needs replacing, a failed self-test, or under ${lim.runtime_crit ?? 5} min of runtime; amber under ${lim.runtime_warn ?? 15} min of runtime, on bypass, or over ${lim.load_warn ?? 80}% load. The limits are in the add-on's Configuration.</p>`);
+      + upsLimitsHtml(x)
+      + `<p class="hint">Goes red on battery, with a low or faulty battery, one that needs replacing, a failed self-test${lim.runtime_crit ? `, or under ${lim.runtime_crit} min of runtime` : ""}; amber${lim.runtime_warn ? ` under ${lim.runtime_warn} min of runtime,` : ""} on bypass, or over ${lim.load_warn ?? 80}% load.</p>`);
   }
   const nas = d.nas;
   if (nas) {
