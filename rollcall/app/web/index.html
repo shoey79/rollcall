@@ -364,6 +364,8 @@ table.logs td.msg{max-width:none;white-space:pre-wrap;word-break:break-word;colo
 table.logs td:first-child{white-space:nowrap;color:var(--muted)}
 @media (max-width:760px){table.logs td.msg{white-space:normal;min-width:240px}}
 h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radius:7px}
+.tab.quicktab .x{margin-left:6px;padding:0 4px;border-radius:4px;opacity:.7;font-size:15px;line-height:1}
+.tab.quicktab .x:hover{opacity:1;background:color-mix(in srgb,currentColor 15%,transparent)}
 .tabsep{width:1px;align-self:stretch;margin:8px 4px;background:var(--line)}
 .rules{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .rule{display:grid;grid-template-columns:170px 150px 1fr auto;gap:6px;align-items:center}
@@ -1138,11 +1140,11 @@ function renderHome() {
     `<button type="button" class="tile ${cls}" data-hometab="${go}"><span class="lbl">${dot ? `<span class="dot ${dot}"></span>` : ""}${label}</span><b>${value}</b><small>${sub}</small></button>`;
   let html = `<div class="tiles">
     ${tile("", "", "Computers", hosts.length, `${withAgent.length} with an agent`, "all")}
-    ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of computers`, "all")}
-    ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `computer${deg === 1 ? "" : "s"} with alerts` : "none", "problems")}
-    ${tile(down ? "hot" : "", "red", "Down", down, down ? "not responding" : "none", "problems")}
-    ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "all") : ""}
-    ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", "all") : ""}
+    ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of computers`, "q:up")}
+    ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `computer${deg === 1 ? "" : "s"} with alerts` : "none", "q:attention")}
+    ${tile(down ? "hot" : "", "red", "Down", down, down ? "not responding" : "none", "q:down")}
+    ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "q:quiet") : ""}
+    ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", agentBad ? "q:agentbad" : "q:agents") : ""}
   </div>`;
   html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
     (list.length ? list.map((a, i) => {
@@ -1447,7 +1449,17 @@ function ruleMatch(h, r) {
   }
   return true;
 }
+// Quick lists opened from the Overview's summary tiles: shown as a temporary tab with ×.
+const QUICK = {
+  "q:up": {name: "Up", match: h => h.status === "green" && !h.off_schedule, describe: "Up and being monitored"},
+  "q:attention": {name: "Need attention", match: h => h.status !== "red" && alerts().some(a => a.h.key === h.key), describe: "Up, but with alerts (down computers are under Down)"},
+  "q:down": {name: "Down", match: h => h.status === "red", describe: "Not responding"},
+  "q:quiet": {name: "Paused or off", match: h => h.status === "maintenance" || !!h.off_schedule, describe: "Paused, or outside their monitoring schedule, so not being alerted"},
+  "q:agents": {name: "With an agent", match: h => !!h.agent, describe: "Computers with an agent"},
+  "q:agentbad": {name: "Agents not reporting", match: h => !!h.agent && h.services.some(s => s.agent && s.key === "agent_agent" && s.status !== "green"), describe: "Agents that are late, not reporting or reporting errors"},
+};
 function tabMatch(h, t) {
+  if (t && t.quick) return t.quick(h);
   if (!t || !(t.rules || []).length) return true;
   return t.match === "any" ? t.rules.some(r => ruleMatch(h, r)) : t.rules.every(r => ruleMatch(h, r));
 }
@@ -1461,6 +1473,8 @@ function allTabs() {
   return builtins.concat(views);
 }
 function currentTab() {
+  const q = QUICK[tabId];
+  if (q) return {id: tabId, name: q.name, quick: q.match, desc: q.describe, rules: []};
   const tabs = allTabs();
   return tabs.find(t => t.id === tabId) || tabs[0];
 }
@@ -1473,7 +1487,9 @@ function renderTabs() {
     }
     const list = hosts.filter(h => tabMatch(h, t));
     const red = list.filter(h => h.status === "red").length, bad = list.filter(h => PROBLEM.has(h.status)).length;
-    const custom = !t.builtin && t.id !== "all";
+    const custom = !t.builtin && t.id !== "all" && !t.quick;
+    if (t.quick) return `<button type="button" class="tab on quicktab" data-tab="${esc(t.id)}" title="${esc(t.desc)} (from the Overview)">${esc(t.name)}
+      <span class="n">${list.length}</span><span class="x" data-tab="all" title="Show all" aria-label="Show all">×</span></button>`;
     return `<button type="button" class="tab${t.id === cur.id ? " on" : ""}" data-tab="${esc(t.id)}" title="${esc(describe(t))}">${esc(t.name)}
       <span class="n">${list.length}</span>${bad && t.id !== "problems" ? `<span class="bad${red ? " red" : ""}" title="${bad} need attention">${bad}</span>` : ""}
       ${custom && t.id === cur.id ? `<span class="pen edit-only" data-tabedit="${esc(t.id)}" title="Edit this tab">✎</span>` : ""}</button>`;
@@ -1481,6 +1497,7 @@ function renderTabs() {
   const tabs = allTabs();
   const b = tabs.filter(t => t.id === "all" || t.builtin), c = tabs.filter(t => !t.builtin && t.id !== "all");
   document.getElementById("tabs").innerHTML = b.map(one).join("") + (c.length ? `<span class="tabsep"></span>` + c.map(one).join("") : "") +
+    (cur.quick ? `<span class="tabsep"></span>` + one(cur) : "") +
     `<button type="button" class="tab add edit-only" id="tabNew" title="Create a tab from your own filters">+ New tab</button>`;
 }
 function describe(t) {
@@ -1497,10 +1514,10 @@ document.getElementById("tabs").addEventListener("click", e => {
   if (e.target.closest("#tabNew")) return openTab(null);
   const pen = e.target.closest("[data-tabedit]");
   if (pen) { e.stopPropagation(); return openTab(views.find(v => v.id === pen.dataset.tabedit)); }
-  const t = e.target.closest("[data-tab]");
+  const t = e.target.closest(".x[data-tab]") || e.target.closest("[data-tab]");
   if (!t) return;
   tabId = t.dataset.tab;
-  try { localStorage.setItem("pm_tab", tabId); } catch (err) {}
+  if (!QUICK[tabId]) try { localStorage.setItem("pm_tab", tabId); } catch (err) {}
   render();
 });
 

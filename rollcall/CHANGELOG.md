@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.62.2 - 2026-11-11
+
+### Fixed
+- **Overview summary tiles now open matching lists.** Clicking Up, Paused or off, or Agents just opened All, and Need attention opened a list that included down computers too.
+  - Each tile now opens a list of exactly the computers it counts, as a temporary tab with **×** to go back to All.
+  - Agents opens the agents that aren't reporting properly, if there are any.
+- A custom tab can no longer end up with the same internal ID as a built-in one, which made the two hard to tell apart.
+
 ## 1.62.1 - 2026-11-11
 
 ### Fixed

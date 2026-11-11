@@ -62,6 +62,7 @@ Rollcall opens on the **Overview**:
 
 - **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open the matching list.
 - **Alerts** lists everything that isn't green, worst and newest first. That includes computers not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the computer's Details on the right tab.
+- **The summary tiles** at the top (Up, Need attention, Down, Paused or off, Agents) open a list of just those computers, as a temporary tab with **×** to go back to All.
 - **At a glance** shows every computer as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
   - **Group** (the default): one section per group. A computer's group is the one typed in its Edit form, or else its icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
   - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A computer in two tabs appears in both.

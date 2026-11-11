@@ -4260,7 +4260,7 @@ def clean_views(raw) -> list[dict]:
         if not name or len(name) > 40:
             raise ValueError("each tab needs a name of up to 40 characters")
         vid = str(v.get("id") or "").strip() or secrets.token_hex(4)
-        if not re.match(r"^[a-z0-9]{1,16}$", vid) or vid in ids:
+        if not re.match(r"^[a-z0-9]{1,16}$", vid) or vid in ids or vid in ("home", "all", "problems", "windows", "linux", "noagent"):
             vid = secrets.token_hex(4)
         ids.add(vid)
         rules = v.get("rules") or []
