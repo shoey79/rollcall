@@ -1891,7 +1891,8 @@ class Monitor:
                 late, stale = 11 * 60, max(int(self.opts["agent_stale_minutes"]) * 60, 12 * 60)
                 if os.environ.get("PM_AGENT_LATE"):  # for testing
                     late, stale = (int(x) for x in os.environ["PM_AGENT_LATE"].split(","))
-                ok, latency, ip = age is not None and age <= late, None, h.ip
+                ok, latency, ip = age is not None and age <= late, None, await self._agent_host_ip(h)
+                h.ip = ip or h.ip
                 h.via_agent = ok
                 h.last_check = now
                 h.latency = None
@@ -2811,6 +2812,26 @@ class Monitor:
         log.info("%s: Veeam job %s %s", h.name, key, "forgotten" if forget else "brought back")
         await self.reevaluate(h)
         return True
+
+    async def _agent_host_ip(self, h: Host) -> str:
+        """The IP column for a computer checked by its agent (it isn't pinged): the address if
+        it's already an IP, else a DNS lookup of it, else the first address the agent reports."""
+        try:
+            return str(ipaddress.ip_address(h.host))
+        except ValueError:
+            pass
+        async with self.sem:
+            ip = await resolve(h.host)
+        if ip:
+            return ip
+        for x in (h.agent_report or {}).get("ips") or []:
+            try:
+                a = ipaddress.ip_address(str(x).split("/")[0])
+            except ValueError:
+                continue
+            if a.version == 4 and not a.is_loopback and not a.is_link_local:
+                return str(a)
+        return ""
 
     async def set_nic_watch(self, h: Host, name: str, watch: bool) -> None:
         """Tick or untick a network adapter. Its link speed now is remembered, so a slower link later shows amber."""

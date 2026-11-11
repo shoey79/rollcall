@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.62.1 - 2026-11-11
+
+### Fixed
+- **IP address column empty for computers checked by their agent.** These aren't pinged, so their address was never looked up. The IP column showed "—", and an IP address entered as the address was repeated under the name instead.
+  - The IP column now shows the address if it's an IP, or else what it resolves to in DNS, or else the first IPv4 address the agent reports.
+
 ## 1.62.0 - 2026-11-11
 
 ### Added
