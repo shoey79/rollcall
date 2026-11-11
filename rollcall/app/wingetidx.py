@@ -260,8 +260,15 @@ class Index:
 
     @staticmethod
     def _map(con, table: str, col: str) -> dict:
+        """value -> package rowids. Schema 2.0 keeps (value, package) pairs in one table; allow for a
+        separate {table}_map join table too."""
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if f"{table}_map" in tables:
+            sql = f"SELECT t.{col}, m.package FROM {table} t JOIN {table}_map m ON m.{col} = t.rowid"
+        else:
+            sql = f"SELECT {col}, package FROM {table}"
         out: dict = {}
-        for value, pkg in con.execute(f"SELECT t.{col}, m.package FROM {table} t JOIN {table}_map m ON m.{col} = t.rowid"):
+        for value, pkg in con.execute(sql):
             out.setdefault(str(value).casefold(), set()).add(pkg)
         return out
 

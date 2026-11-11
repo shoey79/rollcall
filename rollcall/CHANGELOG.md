@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.64.1 - 2026-11-11
+
+### Fixed
+- **Newer versions:** the winget catalogue couldn't be read ("no such table: productcodes2_map"). Its lookup tables hold the package directly, rather than through a separate join table. Both layouts are now read, and the catalogue already downloaded is used straight away.
+
 ## 1.64.0 - 2026-11-11
 
 ### Added
