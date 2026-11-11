@@ -1,0 +1,45 @@
+name: Device or icon support
+description: Ask for a device to be recognised, read over SNMP, or given its own icon.
+title: "[Device]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for things like "my UPS isn't read over SNMP", "this printer's toner levels don't show" or "smart plugs should get the plug icon".
+
+        **Please remove serial numbers, MAC addresses, real host names and public IP addresses** from anything you paste. This repository is public.
+  - type: input
+    id: device
+    attributes:
+      label: Make and model
+      placeholder: e.g. Eaton 5PX 1500 with a Network-M2 card, or TP-Link Tapo P110
+    validations:
+      required: true
+  - type: dropdown
+    id: what
+    attributes:
+      label: What would you like?
+      options:
+        - Read it over SNMP (status, levels, alarms)
+        - Recognise it automatically (discovery, presets)
+        - An icon for it, or pick its icon automatically
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: What does Rollcall show for it today?
+      description: A screenshot of its row or Details is ideal.
+  - type: textarea
+    id: snmp
+    attributes:
+      label: SNMP details (if it's an SNMP device)
+      description: |
+        The output of `snmpwalk -v2c -c <community> <address> system` helps, and a full walk of the maker's section helps even more, e.g. `snmpwalk -v2c -c <community> <address> .1.3.6.1.4.1` (attach it as a file if it's long). Remove serial numbers and MAC addresses first.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else

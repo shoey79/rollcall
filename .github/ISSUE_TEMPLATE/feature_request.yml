@@ -1,0 +1,47 @@
+name: Feature request
+description: An idea for something Rollcall could monitor, show or do.
+title: "[Request]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Requests that explain the problem behind them are the easiest to get right, so tell us what you're trying to do, not just the feature.
+
+        This repository is public, so please use stand-ins (`CONTOSO`, `SRV01`, `192.168.1.10`) rather than your real names and addresses.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like Rollcall to do?
+      placeholder: e.g. Alert when a Windows server's network adapter disconnects.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why would it help?
+      description: The situation you're in, or what you're doing about it today.
+      placeholder: e.g. Our file server has a second NIC for iSCSI and we only notice when it drops when users complain.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is it about?
+      options:
+        - Dashboard / Overview
+        - Ping or service checks
+        - Windows agent
+        - Linux agent
+        - SNMP (switches, UPSs, NAS, printers)
+        - Icons
+        - Syslog
+        - SIP / VoIP
+        - Home Assistant sensors, entities or notifications
+        - Network discovery
+        - Something else
+  - type: textarea
+    id: example
+    attributes:
+      label: How do you picture it?
+      description: Optional. A sketch, a screenshot of something similar, or how another tool does it.

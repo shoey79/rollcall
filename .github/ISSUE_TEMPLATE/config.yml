@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/shoey79/rollcall/blob/main/rollcall/DOCS.md
+    about: Setup, every check, the agents and all the options. Worth a look before opening an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/shoey79/rollcall/security/policy
+    about: Please don't open a public issue for security problems; see the security policy instead.

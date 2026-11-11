@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in Rollcall isn't working as it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Before posting, please remove anything that identifies your network** from logs, screenshots and text: domain names, computer and account names, public IP addresses, serial numbers and phone or SIP providers. Stand-ins like `CONTOSO`, `SRV01`, `jsmith` or `192.168.1.10` are fine. This repository is public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and where (Overview, a computer's Details, a notification…).
+      placeholder: e.g. SRV01's Backups check stays amber after a successful Veeam run.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can it be reproduced?
+      description: Steps, settings or the kind of device involved, if you know them.
+      placeholder: |
+        1. Add a computer with the … preset
+        2. …
+  - type: input
+    id: addon-version
+    attributes:
+      label: Rollcall add-on version
+      description: Settings → Add-ons → Rollcall, or the bottom of the dashboard.
+      placeholder: e.g. 1.61.1
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is it about?
+      options:
+        - Dashboard / Overview
+        - Ping or service checks
+        - Windows agent
+        - Linux agent
+        - SNMP (switches, UPSs, NAS, printers)
+        - Syslog
+        - SIP / VoIP
+        - Home Assistant sensors, entities or notifications
+        - Network discovery
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent version and operating system (if an agent is involved)
+      description: Shown in the computer's Details under Agent.
+      placeholder: e.g. Windows agent 1.0.32 on Windows Server 2022
+  - type: input
+    id: device
+    attributes:
+      label: Device make and model (if a device is involved)
+      placeholder: e.g. APC Smart-UPS 3000 with an AP9631 card
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: From the add-on's Log tab, or the agent's log. Please remove any real names, addresses and serials first.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or anything else
+      description: Screenshots help a lot. Check them for names, addresses and serials before attaching.
