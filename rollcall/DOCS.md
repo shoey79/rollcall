@@ -932,6 +932,8 @@ By default every computer is monitored all the time. For one that's only meant t
 - **Outside its windows** the computer shows as **Off schedule** (grey), with when monitoring resumes. It's still pinged: if it's on anyway, the dot turns half green, half grey and it shows **On · off schedule**. Nothing alerts either way, and off-schedule time doesn't count against uptime.
 - **When a window opens** it shows **Starting up** until it replies, for up to the allowance you set (15 minutes by default, 0–240). If it hasn't replied by then, you get the usual down alert.
 - **When a window closes**, it goes back to Off schedule without an alert.
+- **Problems its agent reported stay on the Overview.** A failed backup, a full disk or a stopped service from the last report is still listed outside the window, marked *off schedule; from the report …*, and the tile says how many checks need attention. They clear when a later report says they're fixed.
+- **Backup results still notify.** A failed or overdue Veeam job is sent even if the report arrives outside the window (e.g. a backup server that's only on overnight). Only a manual **Pause** holds them back.
 
 Times are in Home Assistant's time zone (Settings → System → General) and follow daylight saving. The schedule shows under the computer's name, and its sensor has `off_schedule` and `schedule` attributes. A manual **Pause** still works on a scheduled computer and takes priority while it lasts.
 

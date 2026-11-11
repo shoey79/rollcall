@@ -2655,7 +2655,9 @@ class Monitor:
             seen.append(token)
             del seen[:-100]
             changed = True
-            if h.maint_until or h.off_schedule:
+            # A backup result is a fact about a run that happened, so it's sent even outside the
+            # computer's schedule (a backup server that's only on overnight); only a pause holds it back.
+            if h.maint_until:
                 continue
             kind = "Microsoft 365 " if j.get("source") == "Microsoft 365" else ""
             job = f"Veeam {kind}{(j.get('type') or 'backup').lower()} job '{j.get('name')}'"

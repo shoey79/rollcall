@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.61.1 - 2026-11-11
+
+### Fixed
+- **Off-schedule computers no longer hide their problems.** When a computer's monitoring window closed, its failed backup (or any other agent check that was red or amber) vanished from the Overview, even though nothing had changed. These now stay listed, marked as from the last report outside the schedule, and the tile and group summary count them.
+- **Backup alerts outside the schedule:** a failed or overdue Veeam job reported after a computer's window had closed was marked as seen without being sent, so it never alerted. Backup results are now sent whatever the schedule; only a manual pause holds them back.
+
 ## 1.61.0 - 2026-11-11
 
 ### Added

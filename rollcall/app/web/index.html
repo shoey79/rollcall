@@ -1090,11 +1090,22 @@ for (const id of ["fName", "fModel"]) document.getElementById(id).addEventListen
 
 // ---- Overview: status at a glance, and every alert one click from its details ----
 const checkKey = s => s.key.replace(/^agent_/, "");
+// An off-schedule computer's agent checks that were red or amber in its last report (not "agent not reporting").
+const offScheduleProblems = h => h.off_schedule && !h.maint_until
+  ? h.services.filter(s => s.agent && s.key !== "agent_agent" && (s.status === "red" || s.status === "amber")) : [];
 function alerts() {
   if (!data) return [];
   const out = [];
   for (const h of data.hosts) {
-    if (h.maint_until || h.off_schedule || h.status === "maintenance") continue;
+    if (h.maint_until) continue;
+    if (h.off_schedule || h.status === "maintenance") {
+      // Outside its schedule it isn't expected to answer, but what its agent last reported (a failed
+      // backup, a full disk) is still true until a later report says otherwise, so keep showing it.
+      if (h.off_schedule) for (const s of offScheduleProblems(h))
+        out.push({h, sev: s.status === "red" ? 1 : 3, dot: s.status === "red" ? "degraded" : "amber", check: s,
+          title: s.label, detail: (s.detail || "") + ` (off schedule; from the report ${h.agent && h.agent.last_seen ? ago(h.agent.last_seen, data.now) : "before it"})`, since: s.last_change});
+      continue;
+    }
     if (h.status === "red" || h.status === "amber") {
       out.push({h, sev: h.status === "red" ? 0 : 2, dot: h.status, check: null,
         title: h.check_by === "agent" ? (h.status === "red" ? "Agent not reporting" : "Agent report late") : h.status === "red" ? "Not responding" : "Missed a check",
@@ -1153,8 +1164,10 @@ function renderHome() {
     const sub = h.status === "green" && bad ? `${bad} check${bad === 1 ? "" : "s"} amber`
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
-    const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
-    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
+    const offBad = offScheduleProblems(h).length;
+    const dot = offBad ? "amber" : h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
+    const sub2 = offBad ? `${statusLabel(h)} · ${offBad} check${offBad === 1 ? "" : "s"} need${offBad === 1 ? "s" : ""} attention` : sub;
+    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub2)}</small></span></button>`;
   };
   const sel = (id, label, opts, cur) => `<label class="gsort">${label} <select id="${id}" aria-label="${label} at a glance">${Object.entries(opts).map(([k, [n]]) => `<option value="${k}"${k === cur ? " selected" : ""}>${n}</option>`).join("")}</select></label>`;
   html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"} · ${sel("glanceGroup", "group by", groupOpts, gb)} ${sel("glanceSort", "sort by", GLANCE_SORT, gs)}</small></h2>`;
@@ -1170,8 +1183,8 @@ function renderHome() {
     const order = GLANCE_GROUP[gb][2];
     html += (gb === "tab" ? [...groups.entries()] : [...groups.entries()].sort(([a], [b]) => order(a) - order(b) || collator.compare(a, b))).map(([g, list]) => {
       const c = st => list.filter(st).length;
-      const down = c(h => h.status === "red"), att = c(h => !h.off_schedule && (h.status === "degraded" || h.status === "amber" || (h.status === "green" && h.services.some(s => s.status === "red" || s.status === "amber"))));
-      const up = c(h => h.status === "green" && !h.off_schedule && !h.services.some(s => s.status === "red" || s.status === "amber")), quiet = c(h => h.status === "maintenance" || h.off_schedule);
+      const down = c(h => h.status === "red"), att = c(h => offScheduleProblems(h).length > 0 || !h.off_schedule && (h.status === "degraded" || h.status === "amber" || (h.status === "green" && h.services.some(s => s.status === "red" || s.status === "amber"))));
+      const up = c(h => h.status === "green" && !h.off_schedule && !h.services.some(s => s.status === "red" || s.status === "amber")), quiet = c(h => (h.status === "maintenance" || h.off_schedule) && !offScheduleProblems(h).length);
       const shut = glanceShut.has(gb + ":" + g);
       const sum = [down && `<span class="gs red"><span class="dot red"></span>${down} down</span>`, att && `<span class="gs amber"><span class="dot degraded"></span>${att} need${att === 1 ? "s" : ""} attention</span>`,
         quiet && `<span class="gs"><span class="dot maintenance"></span>${quiet} paused or off</span>`, up && `<span class="gs"><span class="dot green"></span>${up === list.length ? "all up" : up + " up"}</span>`].filter(Boolean).join("");
