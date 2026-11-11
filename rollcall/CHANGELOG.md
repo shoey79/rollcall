@@ -19,7 +19,7 @@
 ## 1.58.0 - 2026-11-11
 
 ### Added
-- **Groups on the Overview** (issue #4). "At a glance" is now split into sections, with a **group by** choice:
+- **Groups on the Overview** ([#4](https://github.com/shoey79/rollcall/issues/4), thanks to [The-Flude](https://github.com/The-Flude) for the request). "At a glance" is now split into sections, with a **group by** choice:
   - **Group:** each computer's new **Group** field in Edit (e.g. Servers, Network equipment, Home automation). Computers without one are grouped by their icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, and so on), so it's organised without any setup.
   - **Your tabs:** one section per custom tab.
   - **Monitoring schedule:** one section per schedule.
@@ -33,7 +33,7 @@
 ## 1.57.0 - 2026-11-11
 
 ### Added
-- **About 50 more icons** (77 in all), grouped in the picker with a search box (issue #3):
+- **About 50 more icons** (77 in all), grouped in the picker with a search box ([#3](https://github.com/shoey79/rollcall/issues/3), thanks to [The-Flude](https://github.com/The-Flude) for the request):
   - Lighting: bulb, ceiling light, spotlight, lamp, wall/porch light, floodlight, garden light, LED strip, light switch, remote.
   - Smart home: home automation server, temperature, leak, motion and door/window sensors, blinds, robot vacuum, sprinkler, weather station.
   - Heating and climate: thermostat, TRV, radiator, underfloor heating, boiler, fan, air conditioning, air purifier.
@@ -81,19 +81,19 @@
 ## 1.53.3 - 2026-11-10
 
 ### Changed
-- **Automatic icons** recognise TP-Link model codes in the name or make and model ([#2](https://github.com/shoey79/rollcall/issues/2)):
+- **Automatic icons** recognise TP-Link model codes in the name or make and model ([#2](https://github.com/shoey79/rollcall/issues/2), thanks to [The-Flude](https://github.com/The-Flude) for the request):
   - Tapo plugs and strips (P100–P125, P300, P304M) and Kasa plugs (HS100–HS110, KP105–KP303, EP10, EP25) get the smart plug icon.
   - Tapo cameras (C100, C200, C310…) get the camera icon.
 
 ## 1.53.2 - 2026-11-10
 
 ### Added
-- **Smart plug icon** ([#2](https://github.com/shoey79/rollcall/issues/2)). It's chosen automatically for names like "Kitchen plug", "Plug 3", "socket", or smart-plug makes (Shelly Plug, Sonoff, Tasmota, Kasa, Meross), and can be picked in the icon picker.
+- **Smart plug icon** ([#2](https://github.com/shoey79/rollcall/issues/2), thanks to [The-Flude](https://github.com/The-Flude) for the request). It's chosen automatically for names like "Kitchen plug", "Plug 3", "socket", or smart-plug makes (Shelly Plug, Sonoff, Tasmota, Kasa, Meross), and can be picked in the icon picker.
 
 ## 1.53.1 - 2026-11-10
 
 ### Changed
-- **Automatic icons:** a computer with the *IP camera / NVR (RTSP)* preset, or any check on port 554, gets the CCTV camera icon. Names like `NVR01` or `CAM02`, and camera makes (Hikvision, Dahua, Reolink, Swann, Axis), do too ([#1](https://github.com/shoey79/rollcall/issues/1)).
+- **Automatic icons:** a computer with the *IP camera / NVR (RTSP)* preset, or any check on port 554, gets the CCTV camera icon. Names like `NVR01` or `CAM02`, and camera makes (Hikvision, Dahua, Reolink, Swann, Axis), do too ([#1](https://github.com/shoey79/rollcall/issues/1), thanks to [The-Flude](https://github.com/The-Flude) for the request).
 - In the Add and Edit form, *Automatic* now follows the checks you tick, so the icon updates as you choose them.
 
 ## 1.53.0 - 2026-11-10

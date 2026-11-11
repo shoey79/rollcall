@@ -10,3 +10,10 @@ docs, changelogs, commit messages or test data:
   or `10.0.1.x`, hosts `server.example.local`, providers `sip.provider.example`.
 - When a fix comes from a user's real log line, rewrite the example before it goes in
   the changelog or docs.
+
+## Changelog entries for GitHub issues
+
+- When a change comes from a GitHub issue or request, link the issue in its changelog entry and thank
+  the person who raised it, e.g. `([#4](https://github.com/shoey79/rollcall/issues/4), thanks to
+  [name](https://github.com/name) for the request)`. Their GitHub username is public, so it's fine to use.
+- Don't write a bare `@name` in commit messages (it notifies them); link the profile in the changelog instead.
