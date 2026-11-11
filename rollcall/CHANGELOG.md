@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.57.0 - 2026-11-11
+
+### Added
+- **About 50 more icons** (77 in all), grouped in the picker with a search box (issue #3):
+  - Lighting: bulb, ceiling light, spotlight, lamp, wall/porch light, floodlight, garden light, LED strip, light switch, remote.
+  - Smart home: home automation server, temperature, leak, motion and door/window sensors, blinds, robot vacuum, sprinkler, weather station.
+  - Heating and climate: thermostat, TRV, radiator, underfloor heating, boiler, fan, air conditioning, air purifier.
+  - Security: video doorbell, smart lock, alarm panel, siren, smoke/CO alarm, garage door.
+  - Also mesh Wi-Fi, modem, DNS/ad blocker, server rack, tablet, smart speaker and display, projector, games console, washing machine, fridge, kitchen appliance, 3D printer, car, battery, inverter, solar, EV charger and energy meter.
+- **Automatic icons** for these from common names and models, e.g. "Landing light", "Tapo L530" and other Tapo/Kasa bulbs, strips and spots, Hue, "Hall thermostat", Nest, Hive, "Tapo KE100", "Tapo T100/T110/T300/T315", Sonos, Echo, Roborock, Zappi, Solis and Home Assistant. A "Lamp plug" stays a plug, and a "Nest Cam" stays a camera.
+
+### Fixed
+- Automatic icons for access points and NAS boxes stopped working in 1.54.1. They're back, and "NAS01" and "UPS01" now match too.
+
 ## 1.56.0 - 2026-11-10
 
 ### Added

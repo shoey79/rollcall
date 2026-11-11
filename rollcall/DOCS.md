@@ -156,9 +156,23 @@ The add-on runs in Home Assistant's container network, so it can't read MAC addr
 
 ### Icons and make/model
 
-Each computer has an icon, in the list and on the Overview. By default it's picked from the computer's name or make (e.g. "AP1", "NAS", "SQL01", "NVR01", "Hikvision", "Kitchen plug", "Shelly Plug", "Tapo P110", "Tapo C200"), its agent (Windows Server or desktop, Linux) or its checks (printer, RTSP camera, SNMP, SIP). In the form, *Automatic* shows which icon that gives, and follows the checks as you tick them.
+Each computer has an icon, in the list and on the Overview. By default it's picked from the computer's name or make (e.g. "AP1", "NAS01", "SQL01", "NVR01", "Kitchen plug", "Tapo P110", "Landing light", "Tapo L530", "Hall thermostat", "Back door sensor", "Zappi", "Solis inverter"), its agent (Windows Server or desktop, Linux) or its checks (printer, RTSP camera, SNMP, SIP, Home Assistant, Pi-hole). In the form, *Automatic* shows which icon that gives, and follows the checks as you tick them.
 
-To choose one yourself, choose **Icon** in Edit. There are 25 device types: rack, storage and tower servers, desktop, laptop, VM, database, NAS, switch, router, firewall, access point, smart home hub, smart plug, CCTV and dome cameras, printer, UPS, TV, phone, VoIP phone/ATA, single-board computer, web service, cloud and other. They're generic and drawn for Rollcall, with no company logos.
+To choose one yourself, choose **Icon** in Edit. The picker has about 75 icons in groups, with a search box (try "light" or "sensor"):
+
+| Group | Icons |
+|---|---|
+| Computers and servers | Rack, storage and tower servers, NAS, server rack, desktop, laptop, VM, database, single-board computer, web service, cloud |
+| Network | Switch, router, firewall, access point, mesh Wi-Fi, modem/ONT, DNS/ad blocker |
+| Lighting | Light bulb, ceiling light, spotlight/downlight, lamp, wall/porch light, floodlight, garden/path light, LED strip, light switch/dimmer, remote/button |
+| Smart home | Smart home hub, home automation, smart plug, temperature, water leak, motion and door/window sensors, blinds, robot vacuum, sprinkler, weather station |
+| Heating and climate | Thermostat, radiator valve (TRV), radiator/heater, underfloor heating, boiler, fan, air conditioning/heat pump, air purifier |
+| Security and access | CCTV and dome cameras, video doorbell, smart lock, alarm panel, siren, smoke/CO alarm, garage door |
+| Phones and entertainment | VoIP phone/ATA, mobile phone, tablet, TV, smart speaker, smart display, projector, games console |
+| Appliances | Washing machine, fridge/freezer, kitchen appliance, printer, 3D printer, car |
+| Power and energy | UPS, battery storage, inverter, solar panels, EV charger, energy meter |
+
+They're generic and drawn for Rollcall, with no company logos.
 
 For a manufacturer's logo or a photo of the hardware, choose **Upload image** in the icon picker:
 
