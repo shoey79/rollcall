@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.12"
+AGENT_VERSION = "1.0.13"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -348,6 +348,33 @@ def disks():
                             "size_gb": round(size / 1024 ** 3, 1), "free_gb": round(free / 1024 ** 3, 1)})
             except Exception as err:  # noqa: BLE001
                 collector_error("disk %s" % m[1], err)
+    return out
+
+
+def signed_in_users(text=None):
+    """Who is signed in, from `who -u`: user, terminal, sign-in time, idle, and where from (SSH)."""
+    if text is None:
+        rc, text, _ = run(["who", "-u"])
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"^(\S+)\s+(\S+)\s+(\d{4}-\d\d-\d\d \d\d:\d\d)\s+(\S+)\s+(?:\d+\s*)?(?:\((.*)\))?", line)
+        if not m:
+            continue
+        user, tty, since, idle, frm = m.groups()
+        mins = 0
+        if re.match(r"^\d+:\d+$", idle):
+            h, mm = idle.split(":"); mins = int(h) * 60 + int(mm)
+        elif idle == "old":
+            mins = 1440
+        try:
+            since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.mktime(time.strptime(since, "%Y-%m-%d %H:%M"))))
+        except ValueError:
+            since = ""
+        frm = (frm or "").strip()
+        out.append({"user": user[:80], "session": "ssh" if frm and not frm.startswith(":") else "console", "state": "active",
+                    "idle_min": mins, "since": since, "from": frm[:80], "tty": tty[:20]})
+        if len(out) >= 50:
+            break
     return out
 
 
@@ -833,6 +860,9 @@ def build_report(state, conf):
         r["security"] = security_report(state)
     with step("administrators"):
         r["security"]["admins"] = local_admins()
+    r["sessions"] = []
+    with step("signed-in users"):
+        r["sessions"] = signed_in_users()
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()

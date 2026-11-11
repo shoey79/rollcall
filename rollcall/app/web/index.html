@@ -519,7 +519,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <label class="field">Make and model<input id="fModel" maxlength="64" placeholder="Optional, e.g. Dell PowerEdge R720xd" autocomplete="off"></label>
         <label class="field">Line under the name<select id="fSubtitle">
           <option value="">Add-on default</option><option value="auto">Automatic</option><option value="model">Make and model</option>
-          <option value="os">Operating system</option><option value="address">Address</option><option value="none">Nothing</option></select></label>
+          <option value="os">Operating system</option><option value="address">Address</option><option value="user">Signed-in user</option><option value="none">Nothing</option></select></label>
       </div>
       <div id="iconGrid" class="icongrid" hidden></div>
       <div class="fields" style="margin:12px 0 0">
@@ -1310,6 +1310,7 @@ const FIELDS = {
   hardware: {label: "Physical or virtual", ops: {is: "is", not: "is not"}, values: {physical: "Physical", virtual: "Virtual (any)",
     hyperv: "Hyper-V VM", vmware: "VMware VM", kvm: "KVM / QEMU / Proxmox VM", container: "Container (LXC, Docker)", unknown: "Not known"}},
   group:   {label: "Group", ops: {is: "is", not: "is not"}, ph: "Lighting, Office PCs", list: "groupList"},
+  user:    {label: "Signed-in user (agent)", ops: {contains: "includes", notcontains: "doesn't include"}, ph: "jsmith"},
 };
 // Physical or virtual: from the agent's hardware report, a Hyper-V host's VM list, or the make/model typed in.
 function virtOf(h) {
@@ -1342,6 +1343,12 @@ function osText(h) {
   const os = h.agent && h.agent.os || "";
   return os.replace(/^Microsoft\s+/i, "").replace(/\s*\([\d.]+\)\s*$/, "").trim();
 }
+// Who is signed in, for the line under the name: "CONTOSO\jsmith", "jsmith + 2 others", or "Nobody signed in"
+function userText(h) {
+  const a = h.agent; if (!a || a.users == null || a.users_hidden) return "";
+  const u = a.users.map(x => x.replace(/^[^\\]*\\/, ""));
+  return !u.length ? "Nobody signed in" : u.length === 1 ? a.users[0] : `${u[0]} + ${u.length - 1} other${u.length > 2 ? "s" : ""}`;
+}
 function addrText(h) { return h.ip && h.ip !== h.host ? `${h.host} · ${h.ip}` : (h.host || h.ip || ""); }
 // The line under a computer's name: [text, tooltip], from its own choice or the add-on's name_line default
 function subLine(h) {
@@ -1350,6 +1357,7 @@ function subLine(h) {
   const tip = hw + (h.agent && h.agent.hw_board ? " (motherboard: the computer has no make or model set)" : "");
   if (mode === "none") return ["", ""];
   if (mode === "address") return [addrText(h), ""];
+  if (mode === "user" && userText(h)) return [userText(h), h.agent.users.length > 1 ? "Signed in: " + h.agent.users.join(", ") : ""];
   if ((mode === "os" || (mode === "auto" && !model)) && osText(h)) return [osText(h), h.agent.os];
   return [model, tip];  // "os" for a device without an agent falls back to its make and model
 }
@@ -1419,6 +1427,8 @@ function ruleMatch(h, r) {
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "uptime": return h.uptime_24h != null && (r.op === "below" ? h.uptime_24h < +v : h.uptime_24h > +v);
     case "hardware": return hwMatch(h, v) === (r.op === "is");
+    case "user": { const us = ((h.agent && h.agent.users) || []).join(" | ").toLowerCase();
+      const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => us.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "group": { const g = groupOf(h).toLowerCase(); return v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).includes(g) === (r.op === "is"); }
   }
   return true;
@@ -1870,6 +1880,11 @@ function renderDetails(d) {
     <div><span>Operating system</span>${esc(r.os || "—")}</div>
     <div><span>Name</span>${esc(r.fqdn || r.hostname || "—")}</div>
     <div><span>IP address</span>${esc((r.ips || []).join(", ") || "—")}</div>
+    ${r.sessions ? `<div><span>Signed in</span>${!r.sessions.length ? `<span class="muted">Nobody</span>` : (() => {
+      const act = r.sessions.filter(x => x.state === "active"), names = [...new Set(r.sessions.map(x => x.user))];
+      return r.sessions.length === 1 ? esc(names[0]) + (r.sessions[0].session === "rdp" ? ` <small class="muted">(Remote Desktop)</small>` : r.sessions[0].session === "ssh" ? ` <small class="muted">(SSH)</small>` : "")
+        : `${names.length} ${names.length === 1 ? "person" : "people"}, ${r.sessions.length} sessions${act.length < r.sessions.length ? ` <small class="muted">(${r.sessions.length - act.length} disconnected)</small>` : ""}`;
+    })()}</div>` : !d.security_visible && r.agent_version ? `<div><span>Signed in</span><span class="muted">Visible to Home Assistant admins</span></div>` : ""}
     <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
     <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""}</div>
     <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
@@ -1877,6 +1892,16 @@ function renderDetails(d) {
     <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
     ${r.updates_pending != null ? `<div><span>Updates available</span>${r.updates_pending}${r.security_updates ? ` <b class='old'>(${r.security_updates} security)</b>` : ""}</div>` : ""}
     <div><span>Reboot pending</span>${r.pending_reboot ? "<b class='old'>Yes</b>" + ((r.reboot_packages || []).length ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>` : "") : "No"}</div></div>`);
+  if ((r.sessions || []).length > 1 || (r.sessions || []).some(x => x.session !== "console")) {
+    const idle = m => !m ? "—" : m < 60 ? m + " min" : m < 1440 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " d " + Math.floor(m % 1440 / 60) + " h";
+    const kind = x => ({console: "Console", rdp: "Remote Desktop", ssh: "SSH"})[x.session] || x.session || "—";
+    html += sect(`Signed-in users (${r.sessions.length})`, tbl(["User", "Session", "State", "Idle", "Signed in", ...(r.sessions.some(x => x.from && !x.from.startsWith(":")) ? ["From"] : [])],
+      r.sessions.slice().sort((a, b) => (a.state === "active" ? 0 : 1) - (b.state === "active" ? 0 : 1) || a.idle_min - b.idle_min).map(x =>
+        `<tr><td><b>${esc(x.user)}</b></td><td>${esc(kind(x))}${x.tty && x.session !== "rdp" ? ` <small class="muted">${esc(x.tty)}</small>` : ""}</td>
+          <td><span class="dot ${x.state === "active" ? "green" : "unknown"}"></span> ${x.state === "active" ? "Active" : "Disconnected"}</td><td>${idle(x.idle_min)}</td>
+          <td>${x.since ? when(x.since) : "—"}</td>${r.sessions.some(y => y.from && !y.from.startsWith(":")) ? `<td>${x.from && !x.from.startsWith(":") ? esc(x.from) : ""}</td>` : ""}</tr>`)) +
+      `<p class="hint">From the agent's last report. Disconnected Remote Desktop sessions are still signed in and keep their programs running.</p>`);
+  }
   if ((r.roles || []).length) html += sect("Roles found", `<div class="pills">${r.roles.map(x => `<span class="pill">${esc(x)}</span>`).join("")}</div>`);
 
   // Disks, each with its own thresholds.

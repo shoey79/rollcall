@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.60.0 - 2026-11-11
+
+### Added
+- **Signed-in users** (Windows agent 1.0.32, Linux agent 1.0.13). Details shows who is signed in. With more than one session, or a Remote Desktop or SSH session, a table lists each with its state (active or disconnected), idle time and sign-in time.
+  - On Windows it comes from `quser` (console plus Remote Desktop sessions), falling back to the console user on Home editions. On Linux it comes from `who`.
+- **Signed-in user** as a choice for the line under the name, e.g. "CONTOSO\jsmith" or "jsmith + 2 others".
+- **Signed-in user** condition for custom tabs, to find which computer someone is on.
+- Like security details, user names are only shown to Home Assistant admins.
+
 ## 1.59.0 - 2026-11-11
 
 ### Added

@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.31'
+$AgentVersion = '1.0.32'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -727,6 +727,44 @@ function Get-LocalAdmins {
         if ($list.Count -ge 200) { break }
     }
     return $list
+}
+
+function ConvertTo-IdleMinutes([string]$Idle) {
+    # quser's idle time: "none" or ".", minutes, h:mm, or d+h:mm
+    if ($Idle -match '^(\d+)\+(\d+):(\d+)$') { return [int]$Matches[1] * 1440 + [int]$Matches[2] * 60 + [int]$Matches[3] }
+    if ($Idle -match '^(\d+):(\d+)$') { return [int]$Matches[1] * 60 + [int]$Matches[2] }
+    if ($Idle -match '^\d+$') { return [int]$Idle }
+    return 0
+}
+
+function Get-SignedInUsers {
+    # Who is signed in: the console and every Remote Desktop session (quser), disconnected ones included.
+    # Windows Home has no quser, so fall back to the console user.
+    $out = New-Object System.Collections.Generic.List[object]
+    $console = ''
+    try { $console = [string](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).UserName } catch { }
+    $quser = Join-Path $env:SystemRoot 'System32\quser.exe'
+    $lines = @()
+    if (Test-Path $quser) { try { $lines = @(& $quser 2>$null) } catch { } }
+    foreach ($l in ($lines | Select-Object -Skip 1)) {
+        # USERNAME  SESSIONNAME  ID  STATE  IDLE TIME  LOGON TIME; disconnected sessions have no session name
+        if ($l -notmatch '^.(\S+)\s+(?:(\S+)\s+)?(\d+)\s+(\S+)\s+(\S+)\s+(.+?)\s*$') { continue }
+        $user, $sess, $state, $idle, $logon = $Matches[1], [string]$Matches[2], $Matches[4], $Matches[5], $Matches[6]
+        if ($console -and $console.Split('\')[-1] -ieq $user) { $user = $console }
+        $since = ''
+        try { $since = ConvertTo-UtcString ([datetime]::Parse($logon, [Globalization.CultureInfo]::CurrentCulture)) } catch { }
+        $out.Add([ordered]@{
+            user = Limit-Text $user 80
+            session = $(if ($sess -match '^console$') { 'console' } elseif ($sess -match '^rdp') { 'rdp' } elseif ($sess) { Limit-Text $sess.ToLower() 30 } else { '' })
+            state = $(if ($state -match '^(Active|Aktiv|Actif|Activo|Attivo|Actief|Ativo|Aktywny)') { 'active' } else { 'disconnected' })
+            idle_min = ConvertTo-IdleMinutes $idle; since = $since; from = ''
+        })
+        if ($out.Count -ge 50) { break }
+    }
+    if (-not $out.Count -and $console) {
+        $out.Add([ordered]@{ user = Limit-Text $console 80; session = 'console'; state = 'active'; idle_min = 0; since = ''; from = '' })
+    }
+    return $out.ToArray()
 }
 
 function Get-NetworkReport {
@@ -1845,6 +1883,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
 
     # @() keeps a single disk as a list: PowerShell unwraps one-item arrays returned from functions
     try { $report.disks = @(Measure-Step 'disks' { Get-Disks }) } catch { Add-CollectorError 'disks' $_ }
+    try { $report.sessions = @(Measure-Step 'signed-in users' { Get-SignedInUsers }) } catch { Add-CollectorError 'signed-in users' $_ }
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }

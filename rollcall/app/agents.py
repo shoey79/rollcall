@@ -230,6 +230,13 @@ def normalize_report(r) -> dict:
     for k in ("hw_vendor", "hw_model", "serial"):
         if k in r:
             r[k] = clean_hw(r[k])
+    if "sessions" in r:
+        r["sessions"] = [
+            {"user": str(x.get("user") or "")[:80], "session": str(x.get("session") or "")[:30],
+             "state": "disconnected" if x.get("state") == "disconnected" else "active",
+             "idle_min": x["idle_min"] if isinstance(x.get("idle_min"), int) and x["idle_min"] >= 0 else 0,
+             "since": str(x.get("since") or "")[:30], "from": str(x.get("from") or "")[:80], "tty": str(x.get("tty") or "")[:20]}
+            for x in _as_list(r["sessions"]) if isinstance(x, dict) and x.get("user")][:50]
     for k in ("roles", "ips", "disks", "errors"):
         r[k] = _as_list(r.get(k))
     r["disks"] = [d for d in r["disks"] if isinstance(d, dict)]

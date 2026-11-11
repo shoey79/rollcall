@@ -100,7 +100,7 @@ SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
 SECURITY_KEYS = ("agent_security", "agent_domain")
-SUBTITLES = ("", "auto", "model", "os", "address", "none")  # "" = the add-on's name_line default  # checks whose detail names accounts
+SUBTITLES = ("", "auto", "model", "os", "address", "user", "none")  # "" = the add-on's name_line default  # checks whose detail names accounts
 BUCKETS = 48  # 24h strip on the dashboard, 30 min per bucket
 
 log = logging.getLogger("ping_monitor")
@@ -3017,6 +3017,10 @@ class Monitor:
                 "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot"),
                 "hw_vendor": agentlib.clean_hw(r.get("hw_vendor"))[:80], "hw_model": agentlib.clean_hw(r.get("hw_model"))[:80],
                 "serial": agentlib.clean_hw(r.get("serial"))[:60], "hw_board": r.get("hw_board") is True,
+                # who is signed in: active sessions first, one entry per person (None: an agent too old to say)
+                "users": None if "sessions" not in r else list(dict.fromkeys(
+                    x["user"] for x in sorted(r["sessions"], key=lambda x: (x["state"] != "active", x["session"] != "console")))),
+                "users_active": None if "sessions" not in r else len({x["user"] for x in r["sessions"] if x["state"] == "active"}),
                 # None: an agent too old to say; "": physical; else what it runs on
                 "virtual": None if "virtual" not in r else str(r.get("virtual") or "")[:40]}
 
@@ -3089,6 +3093,7 @@ class Monitor:
                                                                     for c in cs["certs"]]}}
         if not include_security:
             r.pop("security", None)
+            r.pop("sessions", None)
         hist = {k: [{**{kk: vv for kk, vv in i.items() if kk != "_rx"}, "received": i.get("_rx")} for i in v[-100:]]
                 for k, v in h.agent_history.items() if include_security or k in ("events", "detections")}
         hs = self.agent_settings["hosts"].get(h.key) or {}
@@ -3325,6 +3330,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
             snap["agents_pending"] = len(monitor.agents.pending)
         if not user["can_edit"]:
             for h in snap["hosts"]:
+                if h.get("agent") and h["agent"].get("users") is not None:
+                    h["agent"] = {**h["agent"], "users": [], "users_hidden": True}
                 for sv in h["services"]:
                     if sv["key"] in SECURITY_KEYS:
                         sv["detail"] = SECURITY_HIDDEN
@@ -4116,6 +4123,7 @@ VIEW_FIELDS = {
     "uptime": {"below", "above"},
     "hardware": {"is", "not"},
     "group": {"is", "not"},
+    "user": {"contains", "notcontains"},
 }
 VIEW_HARDWARE = {"physical", "virtual", "hyperv", "vmware", "kvm", "container", "unknown"}
 VIEW_OS = {"windows", "linux", "none"}

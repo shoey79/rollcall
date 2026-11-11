@@ -88,6 +88,7 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as compu
 | Server role (agent) | includes, doesn't include | `Domain controller`, `IIS`, `Immich` (comma-separated means any of them) |
 | Service check | includes, doesn't include | `SQL`, `HTTPS`, `32400` |
 | Physical or virtual | is | Physical, Virtual (any), Hyper-V VM, VMware VM, KVM / QEMU / Proxmox VM, Container, Not known |
+| Signed-in user (agent) | includes, doesn't include | One or more user names, separated by commas, e.g. `jsmith`. Handy for finding which computer someone is on |
 | Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
@@ -200,6 +201,7 @@ For a manufacturer's logo or a photo of the hardware, choose **Upload image** in
 | Automatic | The make and model you typed, or what the agent reports. With neither, the operating system |
 | Make and model | Only the make and model |
 | Operating system | The operating system from the agent, e.g. *Windows 11 Pro*. Devices without an agent show their make and model |
+| Signed-in user | Who is signed in, from the agent, e.g. *CONTOSO\\jsmith*, *jsmith + 2 others* or *Nobody signed in* (hover for the full list). Shown to Home Assistant admins only |
 | Address | The address, plus the IP when the address is a name |
 | Nothing | A blank line |
 
@@ -596,6 +598,8 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
 | **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
+
+**Signed-in users:** the Details Overview shows who is signed in. Where there's more than one session, or a Remote Desktop or SSH session, a table lists each one: user, session (console, Remote Desktop or SSH), active or disconnected, idle time and when they signed in. On Windows this comes from `quser`, so disconnected Remote Desktop sessions are included; Windows Home editions only show the console user. On Linux it comes from `who`. Like security events, user names are only shown to Home Assistant admins. This needs Windows agent 1.0.32 or Linux agent 1.0.13.
 
 **Network adapters:** the **Network** tab in Details lists each adapter with its status, link speed, addresses, MAC address, traffic (the average since the previous report) and error counts. Like the ports on an SNMP switch, nothing alerts until you tick **Alert** for an adapter that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. The link speed when you tick it is remembered, so a cable or switch port that drops to a slower speed shows amber. Virtual adapters (Hyper-V vEthernet and the like) are labelled. This needs Windows agent 1.0.31 or Linux agent 1.0.12; the Linux agent leaves out loopback and Docker's own interfaces.
 
