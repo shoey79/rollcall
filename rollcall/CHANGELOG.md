@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.64.0 - 2026-11-11
+
+### Added
+- **Newer versions of installed software** (Windows agent 1.0.34, Linux agent 1.0.15). These are highlighted, not alerted: the Software tab shows "Newer: …" under the installed version, with a filter for just those programs, and Find software shows them too.
+  - **Windows:** the add-on downloads Microsoft's winget catalogue once a day and matches programs as winget does, by Uninstall key (MSI product code), then by normalised name and publisher.
+    - The name matching is a port of winget's own, checked against its 1,137 test cases.
+    - Nothing extra runs on the servers, so it works on Server 2016 and 2019 too.
+  - **Linux:** the agent reads the newer versions the package manager already knows about, from its local cache.
+  - New option `software_updates` (on) to turn it off.
+
 ## 1.63.1 - 2026-11-11
 
 ### Fixed

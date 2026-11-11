@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.14"
+AGENT_VERSION = "1.0.15"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -377,8 +377,27 @@ def installed_apps():
     return out[:5000]
 
 
+def upgradable(state):
+    """Newer package versions the package manager already knows about (its local cache: nothing is
+    downloaded here). Re-read at most hourly. {package: version}"""
+    c = state.get("upgradable") or {}
+    if c.get("at") and time.time() - c["at"] < 3600:
+        return c.get("pkgs") or {}
+    pkgs = {}
+    if shutil.which("apt"):
+        rc, out, _ = run(["apt", "list", "--upgradable"], timeout=60)
+        for m in re.finditer(r"^([^/\s]+)/\S+\s+(\S+)", out, re.M):
+            pkgs[m.group(1)] = m.group(2)
+    elif shutil.which("dnf") or shutil.which("yum"):
+        rc, out, _ = run([shutil.which("dnf") or shutil.which("yum"), "-C", "-q", "check-update"], timeout=60)
+        for m in re.finditer(r"^(\S+?)\.(?:x86_64|aarch64|noarch|i686|armv7hl)\s+(\S+)\s+\S+", out, re.M):
+            pkgs[m.group(1)] = m.group(2)
+    state["upgradable"] = {"at": time.time(), "pkgs": pkgs}
+    return pkgs
+
+
 def apps_hash(apps):
-    text = "\n".join("|".join(str(a.get(k, "")) for k in ("name", "version", "publisher", "arch", "scope")) for a in apps)
+    text = "\n".join("|".join(str(a.get(k, "")) for k in ("name", "version", "publisher", "arch", "scope", "available")) for a in apps)
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
@@ -896,6 +915,11 @@ def build_report(state, conf):
         r["sessions"] = signed_in_users()
     with step("installed software"):
         apps = installed_apps()
+        if apps:
+            newer = upgradable(state)
+            for a in apps:
+                if a["name"] in newer:
+                    a["available"] = newer[a["name"]][:60]
         if apps is not None:
             r["apps_hash"] = apps_hash(apps)
             if state.get("apps_sent") != r["apps_hash"]:  # only when it changed, or Rollcall asked

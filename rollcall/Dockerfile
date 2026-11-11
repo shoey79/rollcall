@@ -3,7 +3,7 @@ FROM ${BUILD_FROM}
 ARG BUILD_VERSION
 ENV PM_VERSION=${BUILD_VERSION}
 
-RUN apk add --no-cache python3 py3-aiohttp py3-cryptography iputils tzdata msitools
+RUN apk add --no-cache python3 py3-aiohttp py3-cryptography py3-regex iputils tzdata msitools
 
 COPY app /app
 COPY run.sh /run.sh

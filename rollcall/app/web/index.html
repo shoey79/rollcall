@@ -188,6 +188,9 @@ table.small tr.dim td{opacity:.55}
 .swch.updated{color:var(--accent, var(--text));background:color-mix(in srgb,var(--accent, var(--muted)) 14%,transparent)}
 .swfilter,#swQ{font:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%;max-width:360px}
 .swsearch{display:flex;gap:8px;margin-bottom:10px}
+.swtools{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.swnewonly{font-size:13px;gap:6px}
+.newer{display:inline-block;margin-top:2px;font-size:11.5px;font-weight:600;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);padding:0 7px;border-radius:9px;white-space:nowrap}
 .linkish{background:none;border:0;padding:0;color:var(--accent, inherit);font:inherit;font-weight:600;cursor:pointer;text-align:left}
 .linkish:hover{text-decoration:underline}
 .diskset{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:0 0 8px 70px;font-size:12px}
@@ -2329,11 +2332,18 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         `<tr><td>${when(new Date(x.at * 1000).toISOString())}</td><td><span class="swch ${x.change}">${verb[x.change] || esc(x.change)}</span></td><td>${esc(x.name)}</td>
           <td>${x.was ? `${esc(x.was)} → <b>${esc(x.version)}</b>` : esc(x.version)}</td></tr>`))
         : `<p class="empty-note">Nothing installed, removed or updated since ${sw.first ? when(new Date(sw.first * 1000).toISOString()) : "the first list"}${sw.first && sw.first > Date.now() / 1000 - 30 * 86400 ? ", when Rollcall started keeping track" : ""}.</p>`);
-      const user = sw.apps.some(a => a.scope === "user");
-      html += sect(`Installed software (${sw.apps.length})`, `<input type="search" class="swfilter" placeholder="Filter by name or publisher" aria-label="Filter installed software">
-        <p class="hint" style="margin:6px 0">${linux ? "Packages from the package manager" : "As listed in Apps &amp; features"}; the list was last updated ${sw.updated ? when(new Date(sw.updated * 1000).toISOString()) : "?"} (the agent sends it when something changes).</p>` +
+      const user = sw.apps.some(a => a.scope === "user"), nNew = sw.apps.filter(a => a.newer).length;
+      const wg = sw.winget || {};
+      const src = linux ? "Newer versions come from the package manager's own list of updates."
+        : sw.updates_from === "winget" ? `Newer versions come from the winget catalogue (${wg.packages ? wg.packages.toLocaleString() + " packages, " : ""}checked daily); programs it doesn't list aren't checked.`
+        : wg.off ? "Checking for newer versions is turned off (the <code>software_updates</code> option)."
+        : wg.error ? `Newer versions can't be checked at the moment: the winget catalogue couldn't be downloaded (${esc(wg.error)}).`
+        : "Newer versions will show once the winget catalogue has downloaded (a minute or so after the add-on starts).";
+      html += sect(`Installed software (${sw.apps.length})`, `<div class="swtools"><input type="search" class="swfilter" placeholder="Filter by name or publisher" aria-label="Filter installed software">
+        ${nNew ? `<label class="row-inline swnewonly"><input type="checkbox" class="swnew"> Only the <b>${nNew}</b> with a newer version</label>` : ""}</div>
+        <p class="hint" style="margin:6px 0">${linux ? "Packages from the package manager" : "As listed in Apps &amp; features"}; the list was last updated ${sw.updated ? when(new Date(sw.updated * 1000).toISOString()) : "?"} (the agent sends it when something changes). ${src}</p>` +
         tbl(["Program", "Version", "Publisher", "Installed", "Size", ...(user ? ["For"] : [])], sw.apps.map(a =>
-          `<tr data-sw="${esc((a.name + " " + a.publisher).toLowerCase())}"><td>${esc(a.name)}${a.arch === "x86" && !linux ? ` <small class="muted">32-bit</small>` : ""}</td><td>${esc(a.version)}</td><td>${esc(a.publisher)}</td>
+          `<tr data-sw="${esc((a.name + " " + a.publisher).toLowerCase())}"${a.newer ? " data-newer" : ""}><td>${esc(a.name)}${a.arch === "x86" && !linux ? ` <small class="muted">32-bit</small>` : ""}</td><td>${esc(a.version)}${a.newer ? `<br><span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}</td><td>${esc(a.publisher)}</td>
             <td>${a.installed ? esc(a.installed) : ""}</td><td class="num">${a.size_mb ? (a.size_mb >= 1024 ? (a.size_mb / 1024).toFixed(1) + " GB" : Math.round(a.size_mb) + " MB") : ""}</td>${user ? `<td>${a.scope === "user" ? "A user" : "Everyone"}</td>` : ""}</tr>`)));
     }
   }
@@ -2932,10 +2942,12 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { f.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
   await openDetails(detKey, ["backups"]); setTimeout(load, 1500);
 });
+function filterSoftware(sect) {
+  const q = sect.querySelector(".swfilter").value.trim().toLowerCase(), only = sect.querySelector(".swnew") && sect.querySelector(".swnew").checked;
+  for (const tr of sect.querySelectorAll("tr[data-sw]")) tr.hidden = (!!q && !tr.dataset.sw.includes(q)) || (only && !tr.hasAttribute("data-newer"));
+}
 document.getElementById("detBody").addEventListener("input", e => {
-  if (!e.target.matches(".swfilter")) return;
-  const q = e.target.value.trim().toLowerCase();
-  for (const tr of e.target.closest(".sect").querySelectorAll("tr[data-sw]")) tr.hidden = !!q && !tr.dataset.sw.includes(q);
+  if (e.target.matches(".swfilter, .swnew")) filterSoftware(e.target.closest(".sect"));
 });
 document.getElementById("detBody").addEventListener("change", async e => {
   const n = e.target.closest("input[data-nicwatch]");
@@ -3408,7 +3420,7 @@ async function findSoftware() {
   if (!res.length) { out.innerHTML = `<p class="empty-note">No computer with an agent has anything matching "${esc(q)}".</p>`; return; }
   out.innerHTML = `<p class="hint">${res.length} of ${withAgents} computer${withAgents === 1 ? "" : "s"} with an agent.</p>` +
     tbl(["Computer", "Program", "Version"], res.flatMap(c => c.apps.map((a, i) =>
-      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}</td></tr>`)));
+      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}${a.newer ? ` <span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}</td></tr>`)));
 }
 document.getElementById("swGo").addEventListener("click", findSoftware);
 document.getElementById("swQ").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findSoftware(); } });

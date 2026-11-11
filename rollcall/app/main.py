@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 
 import agents as agentlib
+import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
 import certcheck
@@ -94,6 +95,7 @@ SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the contai
 SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
+WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
@@ -158,6 +160,7 @@ DEFAULTS = {
     "agent_bitlocker_require": "workstations",
     "agent_sql_backup_hours": 36,
     "printer_supply_warn": 10,
+    "software_updates": True,
     "name_line": "auto",
     "agent_exchange_queue_warn": 250,
     "agent_patch_days": 60,
@@ -1403,6 +1406,9 @@ def svc_entity(h: Host, s: Service) -> str:
 class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
         self._sw: dict = {}          # agent id -> its software list, loaded when first needed
+        self.winget = None           # the winget catalogue (wingetidx.Index), for newer versions of Windows programs
+        self.winget_info: dict = {}
+        self._newer: dict = {}       # (agent id, list hash, catalogue) -> {program index: newer version}
         self.want_apps: set = set()  # agents whose software list Rollcall is missing
         self.opts = opts
         self.store = store
@@ -2510,7 +2516,9 @@ class Monitor:
             clean.append({"name": str(a["name"]).strip()[:150], "version": str(a.get("version") or "")[:60],
                           "publisher": str(a.get("publisher") or "")[:100], "installed": str(a.get("installed") or "")[:10],
                           "size_mb": a["size_mb"] if isinstance(a.get("size_mb"), (int, float)) and a["size_mb"] >= 0 else 0,
-                          "arch": str(a.get("arch") or "")[:12], "scope": "user" if a.get("scope") == "user" else "machine"})
+                          "arch": str(a.get("arch") or "")[:12], "scope": "user" if a.get("scope") == "user" else "machine",
+                          **({"code": str(a["code"])[:100]} if a.get("code") else {}),
+                          **({"available": str(a["available"])[:60]} if a.get("available") else {})})
             if len(clean) >= 5000:
                 break
         old = self.software(agent["id"])
@@ -2551,12 +2559,79 @@ class Monitor:
         log.info("%s: software list %s (%d programs%s)", agent.get("hostname"), "updated" if old else "received", len(clean),
                  f", {n} change{'s' if n != 1 else ''}" if old and n > 0 else "")
 
+    def software_newer(self, agent_id: str | None) -> dict:
+        """{index into the agent's list: {"version", "id"?}} for programs with a newer version available:
+        from the package manager on Linux, from the winget catalogue on Windows. Only highlighted, never alerted."""
+        sw = self.software(agent_id)
+        apps = sw.get("apps") or []
+        key = (agent_id, sw.get("hash"), sw.get("updated"), id(self.winget))
+        if key in self._newer:
+            return self._newer[key]
+        linux = (self.agents.agents.get(agent_id) or {}).get("os_family") == "linux" if self.agents else False
+        out = {}
+        for i, a in enumerate(apps):
+            if a.get("available") and a["available"] != a.get("version"):
+                out[i] = {"version": a["available"]}
+            elif self.winget and not linux:
+                try:
+                    n = self.winget.newer(a)
+                except Exception:  # noqa: BLE001 - one odd name mustn't stop the rest
+                    n = None
+                if n:
+                    out[i] = n
+        self._newer = {k: v for k, v in self._newer.items() if k[0] != agent_id}
+        self._newer[key] = out
+        return out
+
+    async def winget_loop(self) -> None:
+        """Keep the winget catalogue about a day old: download it when Microsoft has a newer copy."""
+        await asyncio.sleep(20)
+        meta_path, loaded = WINGET_PATH.with_suffix(".json"), None
+        while True:
+            try:
+                if not self.opts.get("software_updates", True) or wingetidx.re is None:
+                    self.winget, self.winget_info = None, {"off": True}
+                    await asyncio.sleep(3600)
+                    continue
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except (OSError, ValueError):
+                    meta = {}
+                if not WINGET_PATH.exists() or time.time() - (meta.get("fetched") or 0) > 20 * 3600:
+                    hdrs = {"If-None-Match": meta["etag"]} if WINGET_PATH.exists() and meta.get("etag") else {}
+                    async with ClientSession(timeout=ClientTimeout(total=900)) as session:
+                        async with session.get(wingetidx.INDEX_URL, headers=hdrs) as r:
+                            if r.status == 200:
+                                data = await r.read()
+                                tmp = WINGET_PATH.with_suffix(".tmp")
+                                tmp.write_bytes(data)
+                                tmp.replace(WINGET_PATH)
+                                meta = {"etag": r.headers.get("ETag"), "size": len(data)}
+                                log.info("Software updates: downloaded the winget catalogue (%.1f MB)", len(data) / 1e6)
+                            elif r.status != 304:
+                                raise RuntimeError(f"HTTP {r.status}")
+                    meta["fetched"] = int(time.time())
+                    meta_path.write_text(json.dumps(meta))
+                stamp = WINGET_PATH.stat().st_mtime
+                if self.winget is None or loaded != stamp:
+                    idx = await asyncio.get_running_loop().run_in_executor(None, lambda: wingetidx.Index.from_msix(WINGET_PATH.read_bytes()))
+                    self.winget, loaded = idx, stamp
+                    self._newer.clear()
+                    log.info("Software updates: the winget catalogue has %d packages", len(idx.packages))
+                self.winget_info = {"fetched": meta.get("fetched"), "packages": len(self.winget.packages)}
+            except Exception as err:  # noqa: BLE001
+                log.warning("Software updates: couldn't get the winget catalogue (%s); trying again in an hour", err)
+                self.winget_info = {**self.winget_info, "error": str(err)[:200]}
+            await asyncio.sleep(3600)
+
     def software_search(self, q: str) -> list:
         """Every computer with software whose name or publisher contains q."""
         q, out = q.strip().lower(), []
         for h in self.hosts.values():
             sw = self.software(h.agent_id) if h.agent_id else {}
-            hits = [a for a in sw.get("apps") or [] if q in a["name"].lower() or q in a["publisher"].lower()]
+            newer = self.software_newer(h.agent_id) if sw else {}
+            hits = [{**a, "newer": (newer.get(i) or {}).get("version")} for i, a in enumerate(sw.get("apps") or [])
+                    if q in a["name"].lower() or q in a["publisher"].lower()]
             if hits:
                 out.append({"key": h.key, "name": h.name, "updated": sw.get("updated"), "apps": hits[:50]})
         return sorted(out, key=lambda x: x["name"].lower())
@@ -3283,8 +3358,13 @@ class Monitor:
                                                    for a in sec["admins"]]}
             settings["admin_changes"] = hs.get("admins_changes") or []
         sw = self.software(h.agent_id)
+        if sw:
+            newer = self.software_newer(h.agent_id)
+            sw = {**sw, "apps": [{**a, "newer": newer[i]["version"]} if i in newer else a for i, a in enumerate(sw.get("apps") or [])],
+                  "updates_from": "package manager" if (self.agents.agents.get(h.agent_id) or {}).get("os_family") == "linux"
+                  else ("winget" if self.winget else None), "winget": self.winget_info}
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
-                "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
+                "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first", "updates_from", "winget")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
                 "received": h.agent_seen, "security_visible": include_security,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN}
@@ -4745,6 +4825,7 @@ async def main() -> None:
             TZ = ZoneInfo("UTC")
         log.info("Schedules use the %s time zone", TZ)
         await monitor.attach_agents(AgentStore(AGENTS_PATH, AGENT_REPORTS))
+        monitor._winget_task = asyncio.create_task(monitor.winget_loop())
         access = Access(opts, ha)
         if access.enabled:
             log.info("Changes allowed for HA admins%s", f" and {', '.join(sorted(access.editors))}"

@@ -605,6 +605,10 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 - On Windows the list matches **Apps & features**: the machine's Uninstall entries (64- and 32-bit) and those of signed-in users. Windows updates and hidden system components are left out. It doesn't use `Win32_Product`, which is slow and can make MSI packages repair themselves.
 - On Linux it's the package list from `dpkg` or `rpm`.
 - The agent checks every run but only sends the list when something has changed, so reports stay small. If the add-on hasn't got a computer's list (e.g. after a restore), it asks for it.
+- **Newer versions** are highlighted (never alerted) with *Newer: …* under the installed version, and **Only the N with a newer version** filters to them. Find software shows them too.
+  - **Windows:** the add-on downloads Microsoft's winget catalogue once a day (a few MB from `cdn.winget.microsoft.com`) and matches programs the way winget does: by their Uninstall key (MSI product code), then by name and publisher. Nothing runs on the servers, so it works on every Windows version, including Server 2016 and 2019. Programs that aren't in the catalogue (most line-of-business software) aren't checked.
+  - **Linux:** the newer versions the package manager already knows about (`apt list --upgradable` or `dnf check-update` from its cache).
+  - Turn it off with the `software_updates` option. Newer versions need Windows agent 1.0.34 or Linux agent 1.0.15.
 - **Manage → Find software** searches every computer's list by program or publisher, e.g. *TeamViewer*, and shows which computers have it and which versions. Click a computer to open its Software tab.
 - This needs Windows agent 1.0.33 or Linux agent 1.0.14.
 
@@ -1033,6 +1037,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
+| `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
 | `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |

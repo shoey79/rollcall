@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.33'
+$AgentVersion = '1.0.34'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -796,6 +796,7 @@ function Get-InstalledApps {
             $out.Add([ordered]@{
                 name = Limit-Text $name 150; version = Limit-Text $ver 60; publisher = Limit-Text ([string]$k.Publisher).Trim() 100
                 installed = $date; size_mb = $size; arch = $src.arch; scope = $src.scope
+                code = Limit-Text ([string]$k.PSChildName) 100  # the Uninstall key name: an MSI product code, or what winget matches on
             })
             if ($out.Count -ge 2000) { break }
         }
@@ -805,7 +806,7 @@ function Get-InstalledApps {
 
 function Get-AppsHash($Apps) {
     # A fingerprint of the list, so it's only sent when something changes
-    $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope }) -join "`n")
+    $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope, $_.code }) -join "`n")
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))) -replace '-', '').Substring(0, 32).ToLower() } finally { $sha.Dispose() }
 }
