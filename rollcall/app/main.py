@@ -94,6 +94,7 @@ SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the contai
 SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
+SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
@@ -1401,6 +1402,8 @@ def svc_entity(h: Host, s: Service) -> str:
 
 class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
+        self._sw: dict = {}          # agent id -> its software list, loaded when first needed
+        self.want_apps: set = set()  # agents whose software list Rollcall is missing
         self.opts = opts
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
@@ -2470,6 +2473,11 @@ class Monitor:
                      os=str(report.get("os") or "")[:120], os_family=report.get("os_family"),
                      ips=[str(i) for i in (report.get("ips") or [])][:8] or agent.get("ips"),
                      roles=[str(r) for r in (report.get("roles") or [])][:30])
+        apps, ahash = report.pop("apps", None), str(report.pop("apps_hash", "") or "")[:64]
+        if apps is not None:
+            self._store_apps(agent, apps, ahash, now)
+        elif ahash and self.software(agent["id"]).get("hash") != ahash:
+            self.want_apps.add(agent["id"])  # Rollcall hasn't got this list: the reply asks for it
         h = await self._link(agent, create=True)
         self.agents.save()
         if not h:
@@ -2477,6 +2485,81 @@ class Monitor:
             return
         await self._apply(h, agent, report, now)
         self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history})
+
+    # -- installed software ----------------------------------------------
+    def _sw_path(self, agent_id: str) -> Path:
+        return SOFTWARE_DIR / (re.sub(r"[^A-Za-z0-9_-]", "", str(agent_id))[:64] + ".json")
+
+    def software(self, agent_id: str | None) -> dict:
+        """An agent's last software list: {hash, updated, apps, changes} ({} if none yet). Cached in memory."""
+        if not agent_id:
+            return {}
+        if agent_id not in self._sw:
+            try:
+                self._sw[agent_id] = json.loads(self._sw_path(agent_id).read_text())
+            except (OSError, ValueError):
+                self._sw[agent_id] = {}
+        return self._sw[agent_id]
+
+    def _store_apps(self, agent: dict, apps, ahash: str, now: float) -> None:
+        """Keep the new list, and log what was installed, removed or updated since the last one."""
+        clean = []
+        for a in apps if isinstance(apps, list) else []:
+            if not isinstance(a, dict) or not str(a.get("name") or "").strip():
+                continue
+            clean.append({"name": str(a["name"]).strip()[:150], "version": str(a.get("version") or "")[:60],
+                          "publisher": str(a.get("publisher") or "")[:100], "installed": str(a.get("installed") or "")[:10],
+                          "size_mb": a["size_mb"] if isinstance(a.get("size_mb"), (int, float)) and a["size_mb"] >= 0 else 0,
+                          "arch": str(a.get("arch") or "")[:12], "scope": "user" if a.get("scope") == "user" else "machine"})
+            if len(clean) >= 5000:
+                break
+        old = self.software(agent["id"])
+        changes = list(old.get("changes") or [])
+        if old.get("apps") is not None:
+            key = lambda a: (a["name"].lower(), a["arch"], a["scope"])  # noqa: E731
+            before, after = {}, {}
+            for a in old["apps"]:
+                before.setdefault(key(a), []).append(a["version"])
+            for a in clean:
+                after.setdefault(key(a), []).append(a["version"])
+            at = int(now)
+            for k in after.keys() - before.keys():
+                changes.append({"at": at, "change": "installed", "name": next(a["name"] for a in clean if key(a) == k), "version": ", ".join(after[k])})
+            for k in before.keys() - after.keys():
+                changes.append({"at": at, "change": "removed", "name": next(a["name"] for a in old["apps"] if key(a) == k), "version": ", ".join(before[k])})
+            for k in after.keys() & before.keys():
+                if sorted(after[k]) != sorted(before[k]):
+                    vk = lambda v: [int(x) if x.isdigit() else x for x in re.split(r"[.\-+_ ]", v)]  # noqa: E731
+                    try:
+                        down = max(map(vk, after[k])) < max(map(vk, before[k]))
+                    except TypeError:  # versions that don't compare (mixed text and numbers)
+                        down = False
+                    changes.append({"at": at, "change": "downgraded" if down else "updated", "name": next(a["name"] for a in clean if key(a) == k),
+                                    "version": ", ".join(after[k]), "was": ", ".join(before[k])})
+        changes = [c for c in changes if c.get("at", 0) >= now - 180 * DAY][-500:]
+        sw = {"hash": ahash, "updated": int(now), "apps": clean, "changes": changes, "first": old.get("first") or int(now)}
+        self._sw[agent["id"]] = sw
+        self.want_apps.discard(agent["id"])
+        try:
+            SOFTWARE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self._sw_path(agent["id"]).with_suffix(".tmp")
+            tmp.write_text(json.dumps(sw, separators=(",", ":")))
+            tmp.replace(self._sw_path(agent["id"]))
+        except OSError as err:
+            log.warning("Couldn't save the software list for %s: %s", agent.get("hostname"), err)
+        n = len(changes) - len(old.get("changes") or [])
+        log.info("%s: software list %s (%d programs%s)", agent.get("hostname"), "updated" if old else "received", len(clean),
+                 f", {n} change{'s' if n != 1 else ''}" if old and n > 0 else "")
+
+    def software_search(self, q: str) -> list:
+        """Every computer with software whose name or publisher contains q."""
+        q, out = q.strip().lower(), []
+        for h in self.hosts.values():
+            sw = self.software(h.agent_id) if h.agent_id else {}
+            hits = [a for a in sw.get("apps") or [] if q in a["name"].lower() or q in a["publisher"].lower()]
+            if hits:
+                out.append({"key": h.key, "name": h.name, "updated": sw.get("updated"), "apps": hits[:50]})
+        return sorted(out, key=lambda x: x["name"].lower())
 
     def _history_add(self, h: Host, kind: str, items: list, received: float) -> None:
         cutoff = received - DAY
@@ -3199,8 +3282,9 @@ class Monitor:
                 r["security"] = {**sec, "admins": [{**a, "_since": (seen.get(agentlib.admin_key(a)) or {}).get("since")}
                                                    for a in sec["admins"]]}
             settings["admin_changes"] = hs.get("admins_changes") or []
+        sw = self.software(h.agent_id)
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
-                "settings": settings,
+                "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
                 "received": h.agent_seen, "security_visible": include_security,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN}
@@ -3630,6 +3714,12 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         if not await monitor.forget_backup_job(h, key, body.get("forget") is not False):
             return web.json_response({"error": "that job isn't in the last report"}, status=404)
         return web.json_response({"ok": True})
+
+    async def software_search(req):
+        q = (req.query.get("q") or "").strip()
+        if len(q) < 2 or len(q) > 100:
+            return web.json_response({"error": "search for at least 2 characters"}, status=400)
+        return web.json_response({"results": monitor.software_search(q)})
 
     async def agent_nic(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -4210,6 +4300,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
+    app.router.add_get("/api/software", software_search)
     app.router.add_post("/api/hosts/{key}/agent/backup-forget", editor_only(agent_backup_forget))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
@@ -4573,6 +4664,8 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         servers = monitor.agent_servers()
         if servers:
             resp["servers"] = servers  # agents use these from now on (plus the address they were installed with)
+        if agent["id"] in monitor.want_apps:
+            resp["send_apps"] = True
         offer = monitor.agent_update_offer(agent, body)
         if offer:
             resp["agent_update"] = offer

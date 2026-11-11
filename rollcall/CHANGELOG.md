@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.63.0 - 2026-11-11
+
+### Added
+- **Installed software** (Windows agent 1.0.33, Linux agent 1.0.14).
+  - A new **Software** tab in Details lists each program with its version, publisher, install date and size, with a filter box.
+  - **Recent changes** shows what was installed, removed, updated or downgraded.
+  - On Windows the list matches Apps & features: machine-wide and signed-in users' programs, without Windows updates or hidden components. It doesn't use `Win32_Product`. On Linux it comes from dpkg or rpm.
+  - The list is only sent when it changes, and the add-on asks for it again if it's missing.
+- **Manage → Find software:** search every computer for a program or publisher, and see which computers have it and which versions.
+
 ## 1.62.2 - 2026-11-11
 
 ### Fixed

@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.13"
+AGENT_VERSION = "1.0.14"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -349,6 +349,37 @@ def disks():
             except Exception as err:  # noqa: BLE001
                 collector_error("disk %s" % m[1], err)
     return out
+
+
+def installed_apps():
+    """Installed packages from dpkg (Debian, Ubuntu) or rpm (RHEL, Fedora, SUSE): name, version, publisher, size."""
+    out = []
+    if shutil.which("dpkg-query"):
+        rc, text, _ = run(["dpkg-query", "-W", "-f", "${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Maintainer}\\t${Installed-Size}\\t${Architecture}\\n"])
+        for line in text.splitlines():
+            f = line.split("\t")
+            if len(f) < 6 or not f[0].startswith("ii"):
+                continue
+            out.append({"name": f[1][:150], "version": f[2][:60], "publisher": re.sub(r"\s*<[^>]*>", "", f[3])[:100], "installed": "",
+                        "size_mb": round(int(f[4]) / 1024, 1) if f[4].isdigit() else 0, "arch": f[5][:12], "scope": "machine"})
+    elif shutil.which("rpm"):
+        rc, text, _ = run(["rpm", "-qa", "--qf", "%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{VENDOR}\\t%{SIZE}\\t%{ARCH}\\t%{INSTALLTIME}\\n"])
+        for line in text.splitlines():
+            f = line.split("\t")
+            if len(f) < 6 or f[0].startswith("gpg-pubkey"):
+                continue
+            when = time.strftime("%Y-%m-%d", time.gmtime(int(f[5]))) if f[5].isdigit() else ""
+            out.append({"name": f[0][:150], "version": f[1][:60], "publisher": ("" if f[2] == "(none)" else f[2])[:100], "installed": when,
+                        "size_mb": round(int(f[3]) / 1048576, 1) if f[3].isdigit() else 0, "arch": f[4][:12], "scope": "machine"})
+    else:
+        return None
+    out.sort(key=lambda a: (a["name"].lower(), a["version"]))
+    return out[:5000]
+
+
+def apps_hash(apps):
+    text = "\n".join("|".join(str(a.get(k, "")) for k in ("name", "version", "publisher", "arch", "scope")) for a in apps)
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
 def signed_in_users(text=None):
@@ -863,6 +894,12 @@ def build_report(state, conf):
     r["sessions"] = []
     with step("signed-in users"):
         r["sessions"] = signed_in_users()
+    with step("installed software"):
+        apps = installed_apps()
+        if apps is not None:
+            r["apps_hash"] = apps_hash(apps)
+            if state.get("apps_sent") != r["apps_hash"]:  # only when it changed, or Rollcall asked
+                r["apps"] = apps
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()
@@ -1031,6 +1068,10 @@ def agent_run(conf, report_only=False):
     if status != 200:
         raise SystemExit("Report rejected (HTTP %s)" % status)
     state["watch"] = (body or {}).get("watch_services") or []
+    if "apps" in report:
+        state["apps_sent"] = report["apps_hash"]
+    if (body or {}).get("send_apps"):
+        state["apps_sent"] = None  # Rollcall hasn't got this list: send it next time
     state["last_run"] = utc(time.time())
     if ACTIVE["server"]:
         state["last_server"] = ACTIVE["server"]

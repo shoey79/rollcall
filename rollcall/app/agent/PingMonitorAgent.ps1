@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.32'
+$AgentVersion = '1.0.33'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -121,7 +121,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -137,6 +137,7 @@ function Read-State {
             if ($raw.veeam) { $state.veeam = [string]$raw.veeam }
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
+            if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
             if ($raw.exch_dbs) { $state.exch_dbs = [string]$raw.exch_dbs }
             if ($raw.exch_checked) { try { $state.exch_checked = [int64]$raw.exch_checked } catch { } }
@@ -765,6 +766,48 @@ function Get-SignedInUsers {
         $out.Add([ordered]@{ user = Limit-Text $console 80; session = 'console'; state = 'active'; idle_min = 0; since = ''; from = '' })
     }
     return $out.ToArray()
+}
+
+function Get-InstalledApps {
+    # Installed programs as "Apps & features" lists them: the Uninstall keys for the machine (64- and 32-bit)
+    # and for each signed-in user. Not Win32_Product, which is slow and can make MSI packages repair themselves.
+    $sources = New-Object System.Collections.Generic.List[object]
+    $sources.Add(@{ path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; arch = $(if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }); scope = 'machine' })
+    if ([Environment]::Is64BitOperatingSystem) { $sources.Add(@{ path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; arch = 'x86'; scope = 'machine' }) }
+    try {
+        foreach ($u in @(Get-ChildItem -Path 'Registry::HKEY_USERS' -ErrorAction Stop | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' })) {
+            $sources.Add(@{ path = "Registry::HKEY_USERS\$($u.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"; arch = ''; scope = 'user' })
+        }
+    } catch { }
+    $seen = @{}
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($src in $sources) {
+        foreach ($k in @(Get-ItemProperty -Path $src.path -ErrorAction SilentlyContinue)) {
+            $name = ([string]$k.DisplayName).Trim()
+            if (-not $name -or $k.SystemComponent -eq 1 -or $k.ParentKeyName -or [string]$k.ReleaseType -match 'Update|Hotfix') { continue }
+            $ver = ([string]$k.DisplayVersion).Trim()
+            $id = ('{0}|{1}|{2}' -f $name, $ver, $src.arch).ToLowerInvariant()
+            if ($seen.ContainsKey($id)) { continue }
+            $seen[$id] = $true
+            $date = ''
+            if ([string]$k.InstallDate -match '^(\d{4})(\d\d)(\d\d)$') { $date = '{0}-{1}-{2}' -f $Matches[1], $Matches[2], $Matches[3] }
+            $size = 0
+            try { if ($k.EstimatedSize) { $size = [math]::Round([double]$k.EstimatedSize / 1024, 1) } } catch { }
+            $out.Add([ordered]@{
+                name = Limit-Text $name 150; version = Limit-Text $ver 60; publisher = Limit-Text ([string]$k.Publisher).Trim() 100
+                installed = $date; size_mb = $size; arch = $src.arch; scope = $src.scope
+            })
+            if ($out.Count -ge 2000) { break }
+        }
+    }
+    return @($out.ToArray() | Sort-Object { $_.name }, { $_.version })
+}
+
+function Get-AppsHash($Apps) {
+    # A fingerprint of the list, so it's only sent when something changes
+    $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope }) -join "`n")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))) -replace '-', '').Substring(0, 32).ToLower() } finally { $sha.Dispose() }
 }
 
 function Get-NetworkReport {
@@ -1884,6 +1927,11 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     # @() keeps a single disk as a list: PowerShell unwraps one-item arrays returned from functions
     try { $report.disks = @(Measure-Step 'disks' { Get-Disks }) } catch { Add-CollectorError 'disks' $_ }
     try { $report.sessions = @(Measure-Step 'signed-in users' { Get-SignedInUsers }) } catch { Add-CollectorError 'signed-in users' $_ }
+    try {
+        $apps = @(Measure-Step 'installed software' { Get-InstalledApps })
+        $report.apps_hash = Get-AppsHash $apps
+        if ($State.apps_sent -ne $report.apps_hash) { $report.apps = $apps }  # only when it changed, or Rollcall asked
+    } catch { Add-CollectorError 'installed software' $_ }
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
@@ -2092,6 +2140,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($res.status -ne 200) { throw "Report rejected (HTTP $($res.status))" }
 
     if ($res.body -and $res.body.watch_services) { $state.watch = @($res.body.watch_services) } else { $state.watch = @() }
+    if ($report.Contains('apps')) { $state.apps_sent = $report.apps_hash }
+    if ($res.body -and $res.body.send_apps) { $state.apps_sent = $null }  # Rollcall hasn't got this list: send it next time
     $state.last_run = ConvertTo-UtcString (Get-Date)
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
     if ($res.body -and $res.body.servers) {

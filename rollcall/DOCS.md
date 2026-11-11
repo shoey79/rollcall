@@ -601,6 +601,13 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
 
+**Installed software:** the **Software** tab in Details lists every installed program with its version, publisher, install date and size, plus a filter box. **Recent changes** shows what was installed, removed, updated or downgraded in the last 30 days (the add-on keeps 180 days).
+- On Windows the list matches **Apps & features**: the machine's Uninstall entries (64- and 32-bit) and those of signed-in users. Windows updates and hidden system components are left out. It doesn't use `Win32_Product`, which is slow and can make MSI packages repair themselves.
+- On Linux it's the package list from `dpkg` or `rpm`.
+- The agent checks every run but only sends the list when something has changed, so reports stay small. If the add-on hasn't got a computer's list (e.g. after a restore), it asks for it.
+- **Manage → Find software** searches every computer's list by program or publisher, e.g. *TeamViewer*, and shows which computers have it and which versions. Click a computer to open its Software tab.
+- This needs Windows agent 1.0.33 or Linux agent 1.0.14.
+
 **Signed-in users:** the Details Overview shows who is signed in. Where there's more than one session, or a Remote Desktop or SSH session, a table lists each one: user, session (console, Remote Desktop or SSH), active or disconnected, idle time and when they signed in. On Windows this comes from `quser`, so disconnected Remote Desktop sessions are included; Windows Home editions only show the console user. On Linux it comes from `who`. Like security events, user names are only shown to Home Assistant admins. This needs Windows agent 1.0.32 or Linux agent 1.0.13.
 
 **Network adapters:** the **Network** tab in Details lists each adapter with its status, link speed, addresses, MAC address, traffic (the average since the previous report) and error counts. Like the ports on an SNMP switch, nothing alerts until you tick **Alert** for an adapter that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. The link speed when you tick it is remembered, so a cable or switch port that drops to a slower speed shows amber. Virtual adapters (Hyper-V vEthernet and the like) are labelled. This needs Windows agent 1.0.31 or Linux agent 1.0.12; the Linux agent leaves out loopback and Docker's own interfaces.
