@@ -1065,6 +1065,34 @@ def sql_state(sql: dict, now: float, backup_hours: float = 36, ign: "Ignore | No
     return OK, "; ".join(parts) or "No databases to check"
 
 
+def backup_jobs_view(jobs: list) -> list:
+    """Veeam jobs as the checks should judge them.
+
+    A backup copy job that copies several source jobs logs each source's copy as its own job,
+    "<copy job>\\<source job>", and the copy job itself only logs a result when one of its own
+    sessions ends (e.g. "Retry of Backup Copy job 'X' finished with Failed"). That can be hours
+    or days later, so its failure would otherwise stick after every copy since has succeeded.
+    It counts as superseded once copies have finished since it, and none of those failed.
+    "Retry of " is also dropped from the type ("Retry of Backup Copy" -> "Backup Copy")."""
+    out = []
+    for j in jobs:
+        j = dict(j)
+        if str(j.get("type") or "").startswith("Retry of "):
+            j["type"] = j["type"][len("Retry of "):]
+        out.append(j)
+    for j in out:
+        name, res = str(j.get("name") or ""), str(j.get("result") or "").lower()
+        if not name or "\\" in name or res not in ("failed", "warning", "stopped", "disconnected"):
+            continue
+        since = [c for c in out if str(c.get("name") or "").lower().startswith(name.lower() + "\\")
+                 and _ts(c.get("finished")) and _ts(j.get("finished")) and _ts(c.get("finished")) > _ts(j.get("finished"))]
+        if since and all(str(c.get("result") or "").lower() in ("success", "warning") for c in since):
+            j["superseded"] = {"result": j.get("result"), "finished": j.get("finished")}
+            j["result"], j["detail"] = "Success", f"Last run {res}; {len(since)} copy session(s) have succeeded since"
+            j["last_success"] = max((c.get("finished") for c in since), key=_ts)
+    return out
+
+
 def backup_job_state(j: dict, now: float) -> tuple[str, str]:
     """(level, why) for one Veeam job: its last result, and whether it's overdue."""
     res = (j.get("result") or "").lower()
@@ -1328,7 +1356,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if bk is not None:
         now_ = now or time.time()
         bad, warn, n = [], [], 0
-        for j in bk.get("jobs") or []:
+        for j in backup_jobs_view(bk.get("jobs") or []):
             if ign.has("backup", j.get("name")):
                 continue
             n += 1

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.61.3 - 2026-11-11
+
+### Fixed
+- **Backup copy jobs stuck on Failed.** A backup copy job that copies several source jobs logs each copy as `<copy job>\<source job>`, but the copy job itself only logs a result when one of its own sessions ends. A failed retry of the copy job (`Retry of Backup Copy job '…' finished with Failed`) therefore stayed red even after every copy since had succeeded.
+  - It now counts as superseded once copies have finished since it, and none of them failed. Its row shows "Last run failed; N copy sessions have succeeded since".
+  - This is worked out by the add-on, so it applies to existing agents straight away.
+- "Retry of" no longer appears in the job type on the Backups tab (e.g. "Retry of Replication" shows as "Replication").
+
 ## 1.61.2 - 2026-11-11
 
 ### Fixed

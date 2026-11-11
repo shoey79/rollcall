@@ -619,6 +619,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 - **Backup & Replication** (v12/13): every job's result is read from the *Veeam Backup* event log (backup, replication, backup copy, agent jobs and others).
   - A failed job is red, with one notification per failed run giving Veeam's reason. A failure Veeam will retry, or a warning, is amber.
+  - **Backup copy jobs** that copy several source jobs log each copy as `<copy job>\<source job>`, and the copy job itself only logs when one of its own sessions ends. So a failed result for the copy job itself (e.g. a failed retry) counts as superseded once copies have finished since it and none of them failed. Its row then shows *Last run failed; N copy sessions have succeeded since*.
   - Rollcall learns how often each job runs. A job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or silently stopped.
   - Jobs with no run for 60 days are dropped.
 - **Backup for Microsoft 365:** each job's last status, from its PowerShell module, every 30 minutes (loading the module is slow). Failed is red; Warning, Stopped or Disconnected is amber; an enabled job more than 2 hours past its next scheduled run is amber ("missed"). Disabled jobs are listed but not checked.

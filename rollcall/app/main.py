@@ -2642,7 +2642,7 @@ class Monitor:
         ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(hs.get("ignore") or [])
                               + list(self.agent_settings.get("global_ignore") or []))
         now, changed = time.time(), False
-        for j in jobs:
+        for j in agentlib.backup_jobs_view(jobs):
             if ign.has("backup", j.get("name")):
                 continue
             level, why = agentlib.backup_job_state(j, now)
@@ -3104,7 +3104,8 @@ class Monitor:
         if bk:  # each job's state as the check sees it, for the Backups tab
             now = time.time()
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
-                {**j, "_level": lv, "_why": why} for j in bk.get("jobs") or [] for lv, why in [agentlib.backup_job_state(j, now)]]}}
+                {**j, "_level": lv, "_why": why} for j in agentlib.backup_jobs_view(bk.get("jobs") or [])
+                for lv, why in [agentlib.backup_job_state(j, now)]]}}
         sq = (r.get("checks") or {}).get("sql")
         if sq and sq.get("instances"):  # each database's state as the check sees it, for the Roles tab
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
