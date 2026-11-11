@@ -62,7 +62,13 @@ Rollcall opens on the **Overview**:
 
 - **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open the matching list.
 - **Alerts** lists everything that isn't green, worst and newest first. That includes computers not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the computer's Details on the right tab.
-- **At a glance** shows every computer as a tile. Click one for its Details. The list can be sorted.
+- **At a glance** shows every computer as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
+  - **Group** (the default): one section per group. A computer's group is the one typed in its Edit form, or else its icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
+  - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A computer in two tabs appears in both.
+  - **Monitoring schedule**: one section per schedule, plus "Always monitored".
+  - **Nothing**: all the tiles together.
+
+  Each section shows how many are down, need attention, paused or up. Click its heading to collapse it. Your choices are remembered in this browser.
 - **Syslog from unknown devices** appears when something sends syslog that isn't set up in Rollcall (see [Syslog](#syslog)).
 
 ### Tabs
@@ -82,6 +88,7 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as compu
 | Server role (agent) | includes, doesn't include | `Domain controller`, `IIS`, `Immich` (comma-separated means any of them) |
 | Service check | includes, doesn't include | `SQL`, `HTTPS`, `32400` |
 | Physical or virtual | is | Physical, Virtual (any), Hyper-V VM, VMware VM, KVM / QEMU / Proxmox VM, Container, Not known |
+| Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
 The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab.
@@ -182,6 +189,8 @@ For a manufacturer's logo or a photo of the hardware, choose **Upload image** in
 - Only use images you have the right to use.
 
 **Make and model** (optional) is shown under the name, e.g. "Dell PowerEdge R720xd", and helps choose the automatic icon.
+
+**Group** (optional) puts the computer in a section of the Overview, e.g. *Servers* or *Home automation*. Leave it blank to group it by its icon's type; the field shows which group that is.
 
 **Line under the name** chooses what the list shows under the computer's name:
 

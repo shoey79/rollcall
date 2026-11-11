@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.58.0 - 2026-11-11
+
+### Added
+- **Groups on the Overview** (issue #4). "At a glance" is now split into sections, with a **group by** choice:
+  - **Group:** each computer's new **Group** field in Edit (e.g. Servers, Network equipment, Home automation). Computers without one are grouped by their icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, and so on), so it's organised without any setup.
+  - **Your tabs:** one section per custom tab.
+  - **Monitoring schedule:** one section per schedule.
+  - **Nothing:** the previous single list.
+  - Each section shows down / needs attention / paused / up counts and can be collapsed.
+- **Group** condition for custom tabs, e.g. a "Home" tab for `Lighting, Smart home, Heating and climate`. The tab editor suggests existing groups.
+
+### Changed
+- On phones, Overview tiles are two to a row.
+
 ## 1.57.0 - 2026-11-11
 
 ### Added

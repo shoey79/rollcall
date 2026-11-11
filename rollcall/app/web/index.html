@@ -286,6 +286,16 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 .allok{padding:22px 14px;text-align:center;color:var(--muted)}
 .allok b{display:block;color:var(--green);font-size:15px;margin-bottom:2px}
 .glance{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;padding:12px}
+.ggroup{border-top:1px solid var(--line)}
+.ggroup .ghead{display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px 4px;border:0;background:none;color:var(--text);font-size:13px;text-align:left;cursor:pointer;flex-wrap:wrap}
+.ggroup .ghead:hover b{text-decoration:underline}
+.ggroup .caret{color:var(--muted);width:10px}
+.ggroup .gcount{color:var(--muted);font-size:12px;background:color-mix(in srgb,var(--muted) 14%,transparent);border-radius:10px;padding:0 7px}
+.ggroup .gsum{display:flex;gap:12px;margin-left:auto;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.ggroup .gs{display:inline-flex;align-items:center;gap:5px}
+.ggroup .gs.red{color:var(--red);font-weight:600}
+.ggroup .gs.amber{color:var(--orange)}
+.ggroup .glance{padding-top:6px}
 .gl{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);text-align:left;font-size:13px;min-width:0}
 .gl .dot{margin-top:4px}
 .gl span{min-width:0}
@@ -340,6 +350,7 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 .gsort{display:inline-flex;align-items:center;gap:6px}
 .gsort select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 @media (max-width:760px){.iconrow{grid-template-columns:1fr}}
+@media (max-width:560px){.glance{grid-template-columns:1fr 1fr;gap:6px;padding:8px 10px}.gl{padding:7px 8px;gap:6px}.gl .dicon{width:18px;height:18px}.ggroup .ghead{padding:10px 10px 2px}.ggroup .gsum{margin-left:0;width:100%;padding-left:18px}.panel h2{flex-wrap:wrap}}
 .snmpbox{margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:8px}
 .snmpbox .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 12px;margin-bottom:6px}
 .snmpbox select,.snmpbox input{font:inherit;font-size:13px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-width:0;width:100%}
@@ -511,6 +522,11 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           <option value="os">Operating system</option><option value="address">Address</option><option value="none">Nothing</option></select></label>
       </div>
       <div id="iconGrid" class="icongrid" hidden></div>
+      <div class="fields" style="margin:12px 0 0">
+        <label class="field">Group<input id="fGroup" maxlength="40" list="groupList" autocomplete="off" placeholder="Automatic"></label>
+        <p class="hint" style="margin:0;align-self:end">Groups the Overview, e.g. Servers, Network, Home automation. Leave blank to group by the icon's type.</p>
+      </div>
+      <datalist id="groupList"></datalist>
       <details class="addrs" id="addrBox">
         <summary>Other addresses <span id="addrCount" class="muted"></span></summary>
         <p class="hint" style="margin:6px 0 8px">For devices with more than one network address, e.g. a firewall's WAN and internal IPs. Each one is pinged while the main address answers, and goes red if it stops; add ports to check them there too. Syslog from any of these addresses is matched to this device.</p>
@@ -903,6 +919,14 @@ const ICON_GROUPS = [
   ["Power and energy", "ups battery inverter solar ev meter"],
 ];
 let uploadedIcons = [], iconQuery = "";
+// The icon a computer shows (built-in key), and the Overview group it falls in
+function iconKeyOf(h) { const ic = h.icon || ""; return ic.startsWith("b:") ? ic.slice(2) : ic.startsWith("u:") ? "" : autoIcon(h); }
+function typeGroup(h) { const k = iconKeyOf(h); const g = ICON_GROUPS.find(([, ks]) => ks.split(" ").includes(k)); return g ? g[0] : "Other"; }
+const groupOf = h => h.group || typeGroup(h);
+function fillGroupList() {
+  document.getElementById("groupList").innerHTML = [...new Set([...(data ? data.hosts : []).map(x => x.group).filter(Boolean), ...ICON_GROUPS.map(g => g[0])])]
+    .sort(collator.compare).map(g => `<option value="${esc(g)}">`).join("");
+}
 const svgIcon = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${(ICONS[k] || ICONS.device)[1]}</svg>`;
 function autoIcon(h) {
   const n = (h.name + " " + (h.model || "")).toLowerCase(), checks = (h.checks || []).join(" ").toLowerCase();
@@ -1004,6 +1028,7 @@ function showPicked(h) {
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean));
   const fake = {...(h || {}), checks: ticked, icon: pickIcon, name: fName.value || (h && h.name) || "", model: document.getElementById("fModel").value};
   document.getElementById("fIconShow").innerHTML = iconHtml(fake);
+  document.getElementById("fGroup").placeholder = `Automatic: ${typeGroup(fake)}`;
   const u = uploadedIcons.find(x => x.id === pickIcon);
   document.getElementById("fIconName").textContent = !pickIcon ? `Automatic (${(ICONS[autoIcon(fake)] || ICONS.device)[0]})`
     : pickIcon.startsWith("b:") ? (ICONS[pickIcon.slice(2)] || ICONS.device)[0] : u ? u.name : "Uploaded";
@@ -1119,16 +1144,42 @@ function renderHome() {
         <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" data-sysack="${esc(a.h.key)}" title="Acknowledge this device's syslog alerts">Acknowledge</button></div>` : ""}`;
     }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + `</div>`;
   const gs = GLANCE_SORT[glanceSort] ? glanceSort : "status";
+  const groupOpts = Object.fromEntries(Object.entries(GLANCE_GROUP).filter(([k]) => k !== "tab" || views.length));
+  const gb = groupOpts[glanceGroup] ? glanceGroup : "group";
   const sorted = hosts.slice().sort((a, b) => GLANCE_SORT[gs][1](a, b) || collator.compare(a.name, b.name));
-  html += `<div class="panel"><h2>At a glance<small><label class="gsort">${hosts.length} computer${hosts.length === 1 ? "" : "s"} · sort by
-    <select id="glanceSort" aria-label="Sort at a glance by">${Object.entries(GLANCE_SORT).map(([k, [n]]) => `<option value="${k}"${k === gs ? " selected" : ""}>${n}</option>`).join("")}</select></label></small></h2><div class="glance">${sorted.map(h => {
+  const glTile = h => {
     const bad = h.services.filter(s => s.status === "red" || s.status === "amber").length;
     const sub = h.status === "green" && bad ? `${bad} check${bad === 1 ? "" : "s"} amber`
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
     const dot = h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
     return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub)}</small></span></button>`;
-  }).join("")}</div></div>`;
+  };
+  const sel = (id, label, opts, cur) => `<label class="gsort">${label} <select id="${id}" aria-label="${label} at a glance">${Object.entries(opts).map(([k, [n]]) => `<option value="${k}"${k === cur ? " selected" : ""}>${n}</option>`).join("")}</select></label>`;
+  html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"} · ${sel("glanceGroup", "group by", groupOpts, gb)} ${sel("glanceSort", "sort by", GLANCE_SORT, gs)}</small></h2>`;
+  if (gb === "none") html += `<div class="glance">${sorted.map(glTile).join("")}</div>`;
+  else {
+    const groups = new Map();
+    if (gb === "tab") {
+      for (const t of views) groups.set(t.name, sorted.filter(h => tabMatch(h, t)));
+      const rest = sorted.filter(h => !views.some(t => tabMatch(h, t)));
+      if (rest.length) groups.set("Not in a tab", rest);
+      for (const [g, l] of groups) if (!l.length) groups.delete(g);
+    } else for (const h of sorted) { const g = GLANCE_GROUP[gb][1](h); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(h); }
+    const order = GLANCE_GROUP[gb][2];
+    html += (gb === "tab" ? [...groups.entries()] : [...groups.entries()].sort(([a], [b]) => order(a) - order(b) || collator.compare(a, b))).map(([g, list]) => {
+      const c = st => list.filter(st).length;
+      const down = c(h => h.status === "red"), att = c(h => !h.off_schedule && (h.status === "degraded" || h.status === "amber" || (h.status === "green" && h.services.some(s => s.status === "red" || s.status === "amber"))));
+      const up = c(h => h.status === "green" && !h.off_schedule && !h.services.some(s => s.status === "red" || s.status === "amber")), quiet = c(h => h.status === "maintenance" || h.off_schedule);
+      const shut = glanceShut.has(gb + ":" + g);
+      const sum = [down && `<span class="gs red"><span class="dot red"></span>${down} down</span>`, att && `<span class="gs amber"><span class="dot degraded"></span>${att} need${att === 1 ? "s" : ""} attention</span>`,
+        quiet && `<span class="gs"><span class="dot maintenance"></span>${quiet} paused or off</span>`, up && `<span class="gs"><span class="dot green"></span>${up === list.length ? "all up" : up + " up"}</span>`].filter(Boolean).join("");
+      return `<section class="ggroup${down ? " hot" : att ? " warm" : ""}"><button type="button" class="ghead" data-gtoggle="${esc(gb + ":" + g)}" aria-expanded="${!shut}">
+        <span class="caret">${shut ? "▸" : "▾"}</span><b>${esc(g)}</b><span class="gcount">${list.length}</span><span class="gsum">${sum}</span></button>
+        ${shut ? "" : `<div class="glance">${list.map(glTile).join("")}</div>`}</section>`;
+    }).join("");
+  }
+  html += `</div>`;
   const unk = data.syslog_unknown || [];
   if (unk.length) {
     html += `<div class="panel"><h2>Syslog from unknown devices<small>Only the last hour's messages from these addresses are held until you add them</small></h2>` +
@@ -1153,12 +1204,26 @@ const GLANCE_SORT = {
   changed: ["Recently changed", (a, b) => num(b.last_change, 0) - num(a.last_change, 0)],
   ip: ["IP address", (a, b) => num(ipNum(a.ip), Infinity) - num(ipNum(b.ip), Infinity) || 0],
 };
-let glanceSort = "status";
+let glanceSort = "status", glanceGroup = "group", glanceShut = new Set();
+const GLANCE_GROUP = {
+  group: ["Group", groupOf, g => { const i = ICON_GROUPS.findIndex(x => x[0] === g); return i < 0 ? (g === "Other" ? 99 : -1) : i; }],  // your own groups first, then types
+  tab: ["Your tabs", null, () => 0],  // one section per custom tab, in tab order; a computer can be in several
+  schedule: ["Monitoring schedule", h => h.schedule_text ? h.schedule_text : "Always monitored", g => g === "Always monitored" ? 0 : 1],
+  none: ["Nothing", () => "", () => 0],
+};
+try { glanceGroup = localStorage.getItem("pm_glance_group") || "group"; glanceShut = new Set(JSON.parse(localStorage.getItem("pm_glance_shut") || "[]")); } catch (e) {}
 try { glanceSort = localStorage.getItem("pm_glance_sort") || "status"; } catch (e) {}
 document.getElementById("home").addEventListener("change", e => {
+  if (e.target.id === "glanceGroup") { glanceGroup = e.target.value; try { localStorage.setItem("pm_glance_group", glanceGroup); } catch (err) {} renderHome(); return; }
   if (e.target.id !== "glanceSort") return;
   glanceSort = e.target.value;
   try { localStorage.setItem("pm_glance_sort", glanceSort); } catch (err) {}
+  renderHome();
+});
+document.getElementById("home").addEventListener("click", e => {
+  const t = e.target.closest("[data-gtoggle]"); if (!t) return;
+  const k = t.dataset.gtoggle; glanceShut.has(k) ? glanceShut.delete(k) : glanceShut.add(k);
+  try { localStorage.setItem("pm_glance_shut", JSON.stringify([...glanceShut])); } catch (err) {}
   renderHome();
 });
 document.getElementById("pauseTab").addEventListener("click", async e => {
@@ -1244,6 +1309,7 @@ const FIELDS = {
   uptime:  {label: "Uptime (24 h)", ops: {below: "is below %", above: "is above %"}, ph: "99.5"},
   hardware: {label: "Physical or virtual", ops: {is: "is", not: "is not"}, values: {physical: "Physical", virtual: "Virtual (any)",
     hyperv: "Hyper-V VM", vmware: "VMware VM", kvm: "KVM / QEMU / Proxmox VM", container: "Container (LXC, Docker)", unknown: "Not known"}},
+  group:   {label: "Group", ops: {is: "is", not: "is not"}, ph: "Lighting, Office PCs", list: "groupList"},
 };
 // Physical or virtual: from the agent's hardware report, a Hyper-V host's VM list, or the make/model typed in.
 function virtOf(h) {
@@ -1353,6 +1419,7 @@ function ruleMatch(h, r) {
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => hay.includes(x)); return r.op === "contains" ? hit : !hit; }
     case "uptime": return h.uptime_24h != null && (r.op === "below" ? h.uptime_24h < +v : h.uptime_24h > +v);
     case "hardware": return hwMatch(h, v) === (r.op === "is");
+    case "group": { const g = groupOf(h).toLowerCase(); return v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).includes(g) === (r.op === "is"); }
   }
   return true;
 }
@@ -1434,7 +1501,7 @@ function ruleRow(r) {
   const opSel = `<select data-r="op">${Object.entries(f.ops).map(([k, x]) => `<option value="${k}"${k === r.op ? " selected" : ""}>${x}</option>`).join("")}</select>`;
   const val = f.values
     ? `<select data-r="value" class="vsel">${Object.entries(f.values).map(([k, x]) => `<option value="${k}"${k === r.value ? " selected" : ""}>${x}</option>`).join("")}</select>`
-    : `<input data-r="value" value="${esc(r.value || "")}" placeholder="${esc(f.ph || "")}" ${r.field === "uptime" ? 'inputmode="decimal"' : ""} spellcheck="false" autocomplete="off">`;
+    : `<input data-r="value" value="${esc(r.value || "")}" placeholder="${esc(f.ph || "")}"${f.list ? ` list="${f.list}"` : ""} ${r.field === "uptime" ? 'inputmode="decimal"' : ""} spellcheck="false" autocomplete="off">`;
   return `<div class="rule">${fieldSel}${opSel}${val}<button type="button" class="danger mini" data-rdel title="Remove this condition">✕</button></div>`;
 }
 function readRules() {
@@ -1454,6 +1521,7 @@ function preview() {
     (list.length ? ": " + list.slice(0, 25).map(h => esc(h.name)).join(", ") + (list.length > 25 ? ` and ${list.length - 25} more` : "") : ".");
 }
 function openTab(v) {
+  fillGroupList();
   editingTab = v || null;
   document.getElementById("tabTitle").textContent = v ? `Edit tab: ${v.name}` : "New tab";
   document.getElementById("tName").value = v ? v.name : "";
@@ -3402,6 +3470,8 @@ async function openDialog(h) {
   fHost.value = h ? h.host : "";
   document.getElementById("fModel").value = h ? (h.model || "") : "";
   document.getElementById("fSubtitle").value = h ? (h.subtitle || "") : "";
+  document.getElementById("fGroup").value = h ? (h.group || "") : "";
+  fillGroupList();
   pickIcon = h ? (h.icon || "") : ""; iconQuery = "";
   document.getElementById("iconGrid").hidden = true;
   document.getElementById("fIconBtn").setAttribute("aria-expanded", "false");
@@ -3466,7 +3536,7 @@ form.addEventListener("submit", async e => {
   const checks = [...form.querySelectorAll(".preset input:checked")].map(cb => cb.value)
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean), addrChecks);
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
-    icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value,
+    icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value, group: document.getElementById("fGroup").value.trim(),
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     no_alerts: document.getElementById("fNoAlerts").checked};

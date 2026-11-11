@@ -641,6 +641,11 @@ def validate_entry(raw: dict) -> dict:
             raise ValueError("Unknown Home Assistant device")
         entry["ha_device"] = dev
         entry["ha_device_name"] = str(raw.get("ha_device_name") or "").strip()[:100] if dev else ""
+    if "group" in raw:
+        group = " ".join(str(raw.get("group") or "").split())
+        if len(group) > 40 or not group.isprintable():
+            raise ValueError("Group must be up to 40 ordinary characters")
+        entry["group"] = group
     if "subtitle" in raw:
         sub = str(raw.get("subtitle") or "")
         if sub not in SUBTITLES:
@@ -1322,6 +1327,7 @@ class Host:
     icon: str = ""                     # "b:<built-in>" or "u:<uploaded file>"; blank = pick from what it is
     model: str = ""                    # make and model, e.g. "Dell PowerEdge R720xd"
     subtitle: str = ""                 # the line under the name: "" (the default), model, os, address or none
+    group: str = ""                    # the Overview group, e.g. "Servers"; "" = from the icon's type
     snmp_community: str | None = None  # SNMP v2c community (None: "public")
     snmp_version: str = "2c"
     snmp_v3: dict = field(default_factory=dict)  # user, auth, auth_pass, priv, priv_pass
@@ -1484,6 +1490,7 @@ class Monitor:
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
                             **({"subtitle": h.subtitle} if h.subtitle else {}),
+                            **({"group": h.group} if h.group else {}),
                             **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
                             **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                             **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
@@ -1506,6 +1513,7 @@ class Monitor:
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
         h.model = str(entry.get("model") or "")[:64]
         h.subtitle = entry.get("subtitle") if entry.get("subtitle") in SUBTITLES else ""
+        h.group = str(entry.get("group") or "")[:40]
         h.ha_device = str(entry.get("ha_device") or "")[:64]
         h.ha_device_name = str(entry.get("ha_device_name") or "")[:100]
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
@@ -1554,6 +1562,8 @@ class Monitor:
             h.model = entry["model"]
         if "subtitle" in entry:
             h.subtitle = entry["subtitle"]
+        if "group" in entry:
+            h.group = entry["group"]
         if "ha_device" in entry:
             if entry["ha_device"] != h.ha_device:
                 h.ha_data = None
@@ -3154,7 +3164,7 @@ class Monitor:
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
-                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "check_by": h.check_by, "via_agent": h.via_agent,
+                "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
@@ -4052,6 +4062,7 @@ VIEW_FIELDS = {
     "check": {"contains", "notcontains"},
     "uptime": {"below", "above"},
     "hardware": {"is", "not"},
+    "group": {"is", "not"},
 }
 VIEW_HARDWARE = {"physical", "virtual", "hyperv", "vmware", "kvm", "container", "unknown"}
 VIEW_OS = {"windows", "linux", "none"}
