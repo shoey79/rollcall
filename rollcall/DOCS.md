@@ -103,7 +103,7 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are
 **Details** on a row, or the computer's name, opens everything Rollcall knows about that computer, in tabs:
 
 - **Overview** (computers without an agent). The whole device on one page:
-  - tiles for status, 24-hour uptime with its history bar, and ping time;
+  - tiles for status, 24-hour uptime with its history bar (hover over a segment to see which half hour it covers and how it went), and ping time;
   - device tiles: a UPS's power, battery, runtime and load; a NAS's disks and how full each array is; a switch's ports and PoE; readings from its logs; a linked Pi-hole's figures;
   - a **Needs attention** list of failing checks, SNMP problems, log alerts and readings over their limits. Click an item to jump to its detail;
   - every check with its uptime, the latest warnings and errors from its logs, and the device's model, serial, firmware and location.

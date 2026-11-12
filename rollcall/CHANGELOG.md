@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.65.3 - 2026-11-12
+
+### Added
+- **Uptime bar segments say when they are.** Hovering over a segment of the 24-hour uptime bar, in a computer's or device's details or on the dashboard, shows the half hour it covers and how it went, e.g. *Yesterday 17:07 – 17:37: Up* or *14:07 – now: Down*.
+
 ## 1.65.2 - 2026-11-12
 
 ### Fixed

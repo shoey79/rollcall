@@ -53,6 +53,7 @@ tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
 .up-g{color:var(--green)}.up-a{color:var(--amber)}.up-r{color:var(--red)}
 .strip{display:flex;gap:1px;height:18px;width:144px;margin-top:3px}
 .strip span{flex:1;border-radius:1px;background:var(--grey);opacity:.25}
+.strip span:hover{outline:1px solid var(--text);outline-offset:1px}
 .strip .g{background:var(--green);opacity:1}.strip .a{background:var(--amber);opacity:1}.strip .r{background:var(--red);opacity:1}.strip .m{background:var(--blue);opacity:.7}
 .muted{color:var(--muted)}
 button{font:inherit;font-size:12px;padding:5px 10px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--accent);cursor:pointer}
@@ -833,7 +834,7 @@ function render() {
   document.getElementById("emptyTab").textContent = q ? "Nothing in this tab matches the search." : "Nothing in this tab right now.";
   document.getElementById("rows").innerHTML = hosts.map(h => {
     const up = h.uptime_24h;
-    const strip = h.history.map(c => `<span class="${c}"></span>`).join("");
+    const strip = stripSegs(h.history);
     const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
     return `<tr class="${h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
@@ -2730,7 +2731,7 @@ function renderOverview(h, sn, lg, ha) {
   const tiles = [];
   tiles.push(tile(`<span class="dot ${dotClass(h)}"></span>Status`, esc(statusLabel(h)), h.last_change ? "since " + ago(h.last_change, now) : "", lvl(h.status)));
   const up = h.uptime_24h;
-  tiles.push(tile("Uptime (24 h)", up == null ? "—" : up.toFixed(up === 100 ? 0 : 1) + "%", `<span class="strip" style="width:100%">${(h.history || []).map(c => `<span class="${c}"></span>`).join("")}</span>`));
+  tiles.push(tile("Uptime (24 h)", up == null ? "—" : up.toFixed(up === 100 ? 0 : 1) + "%", `<span class="strip" style="width:100%">${stripSegs(h.history)}</span>`));
   if (h.latency_ms != null) tiles.push(tile("Ping", h.latency_ms + " ms", h.last_check ? "checked " + ago(h.last_check, now) : ""));
   if (u) {
     const lim = sn.ups_limits || {};
@@ -3001,6 +3002,19 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { b.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
   await openDetails(detKey, ["security", "Passwords left in files"]);
 });
+// The 24-hour uptime strip: each segment is an equal slice of the last 24 hours, ending now.
+// Hovering one shows its time span and how it went.
+const SEG_WORD = {g: "Up", a: "Partly down", r: "Down", m: "Paused", n: "No data"};
+function stripSegs(hist) {
+  hist = hist || [];
+  const n = hist.length, size = 86400000 / Math.max(n, 1), now = Date.now(), today = new Date().toDateString();
+  const hm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  return hist.map((c, i) => {
+    const a = new Date(now - 86400000 + i * size), b = new Date(now - 86400000 + (i + 1) * size);
+    const day = a.toDateString() === today ? "" : "Yesterday ";
+    return `<span class="${c}" title="${day}${hm(a)} – ${i === n - 1 ? "now" : hm(b)}: ${SEG_WORD[c] || c}"></span>`;
+  }).join("");
+}
 function filterSoftware(sect) {
   const q = sect.querySelector(".swfilter").value.trim().toLowerCase(), only = sect.querySelector(".swnew") && sect.querySelector(".swnew").checked;
   for (const tr of sect.querySelectorAll("tr[data-sw]")) tr.hidden = (!!q && !tr.dataset.sw.includes(q)) || (only && !tr.hasAttribute("data-newer"));
