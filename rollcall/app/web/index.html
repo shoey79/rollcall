@@ -2291,11 +2291,20 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       inner += `<p class="empty-note" style="margin:0 0 8px">${ss.scanning ? `Scanning now (started ${fdate(ss.pass_start)}), a little each run.` : ""}${ss.done_at ? ` Last full scan finished ${fdate(ss.done_at)}, ${(ss.files || 0).toLocaleString()} file${ss.files === 1 ? "" : "s"} checked; it runs again every ${cf.hours || 24} hours, re-reading only changed files.` : ""}${ss.errors ? ` ${ss.errors} file${ss.errors === 1 ? "" : "s"} couldn't be read.` : ""}${ss.truncated ? " <b>Only the first 500 are listed.</b>" : ""}</p>`;
       const rows = (sx.findings || []).slice().sort((a, b) => collator.compare(a.path, b.path) || (a.line || 0) - (b.line || 0));
       const ikey = f => `${f.path}|${f.rule}|${f.key || ""}`;
+      // "Ignore all": everything found up to then is accepted; anything found later counts again.
+      const ack = (st.ack || {}).secrets, ackAt = (ack && ack.at) || 0;
+      const accepted = f => ackAt && (f.first || 0) <= ackAt;
+      const live = rows.filter(f => !findIgnore("secret", ikey(f)) && !accepted(f));
+      const nAcc = rows.filter(f => !findIgnore("secret", ikey(f)) && accepted(f)).length;
+      if (live.length) inner += `<div class="ackbar"><span><b>${live.length}</b> ${ackAt ? "new " : ""}finding${live.length === 1 ? "" : "s"}${ackAt ? " since " + when(new Date(ackAt * 1000).toISOString()) : ""}. Checked them and they're fine?</span>
+        <button type="button" class="mini primary edit-only" data-ack="secrets" title="Accept everything found so far. Anything found later turns this computer amber again.">Ignore all</button></div>`;
+      if (ackAt) inner += `<div class="ackbar ok"><span>Ignored all found up to ${when(new Date(ackAt * 1000).toISOString())}${ack.by ? " by " + esc(ack.by) : ""}${nAcc ? ` (${nAcc} still there)` : ""}. Anything found later turns it amber again.</span>
+        <button type="button" class="mini edit-only" data-unack="secrets">Undo</button></div>`;
       if (rows.length) inner += tbl(["File", "Line", "What was found", "Length", "Found", ""], rows.map(f =>
-        `<tr class="${rowCls(true, "secret", ikey(f))}"><td class="secpath">${esc(f.path)}</td><td class="num">${f.line ?? "—"}</td>
+        `<tr class="${accepted(f) ? "dim" : rowCls(true, "secret", ikey(f))}"><td class="secpath">${esc(f.path)}${ackAt && !accepted(f) && !findIgnore("secret", ikey(f)) ? ` <span class="newer">New</span>` : ""}</td><td class="num">${f.line ?? "—"}</td>
           <td>${esc((sx.rules || {})[f.rule] || f.rule)}${f.key ? `<br><small class="muted">Setting: <code>${esc(f.key)}</code></small>` : ""}</td>
           <td>${f.len != null ? `${f.len} character${f.len === 1 ? "" : "s"}` : ""}</td><td>${f.first ? ago(f.first, Date.now() / 1000) : ""}</td>
-          <td>${ignBtn("secret", ikey(f), f.path)}</td></tr>`));
+          <td>${accepted(f) && !findIgnore("secret", ikey(f)) ? `<span class="ignored" title="Ignored with Ignore all">Ignored (all)</span>` : ignBtn("secret", ikey(f), f.path)}</td></tr>`));
     }
     if (data && data.can_edit) inner += `<details class="secsetup"${!sx.on ? " open" : ""}><summary><b>Scan settings for this computer</b></summary><div class="secset">
       <label><span>Scan this computer</span><select class="secmode">

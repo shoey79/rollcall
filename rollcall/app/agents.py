@@ -624,14 +624,16 @@ def secret_key(f: dict) -> str:
     return f"{f.get('path') or ''}|{f.get('rule') or ''}|{f.get('key') or ''}"[:600]
 
 
-def secrets_state(status: dict, findings: list, ign: "Ignore") -> tuple[str, str]:
-    """Amber at most: a password in a file is worth fixing, not worth waking anyone for."""
-    live = [f for f in findings if not ign.has("secret", secret_key(f))]
+def secrets_state(status: dict, findings: list, ign: "Ignore", ack_at: float = 0) -> tuple[str, str]:
+    """Amber at most: a password in a file is worth fixing, not worth waking anyone for.
+    ack_at: "Ignore all" was pressed then; findings first found by then don't count."""
+    live = [f for f in findings if not ign.has("secret", secret_key(f)) and not (ack_at and (f.get("first") or 0) <= ack_at)]
     if live:
         files = sorted({f["path"] for f in live})
         names = ", ".join(re.split(r"[\\/]", p)[-1] for p in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
         n = len(live)
-        return WARN, f"{n} possible password{'s' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}: {names}"
+        new = " new" if ack_at and any(not ign.has("secret", secret_key(f)) and (f.get("first") or 0) <= ack_at for f in findings) else ""
+        return WARN, f"{n}{new} possible password{'s' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}: {names}"
     if not status.get("done_at"):
         return OK, "First scan under way" if status.get("scanning") or not status.get("files") else "Scanning"
     ignored = len(findings)
@@ -1546,7 +1548,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
 
     rs = report.get("secrets")
     if rs and rs.get("on"):
-        res = secrets_state(rs, settings.get("secret_findings") or [], ign)
+        res = secrets_state(rs, settings.get("secret_findings") or [], ign, float(settings.get("secret_ack") or 0))
         checks.append(_check("secrets", "Passwords in files", res[0], res[1]))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}

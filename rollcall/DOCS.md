@@ -872,6 +872,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **The check is amber at most** (*Passwords in files*) and never sends a notification.
 - **Fix:** move the password into a password manager or the program's protected store, then remove it from the file. The finding clears after the next scan.
 - **Ignore:** use **Ignore** on a row for a finding you've accepted (e.g. a test password). It stays ignored until that file, setting or kind of finding changes.
+- **Ignore all:** accepts everything found so far on that computer, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
 - **Turning it off** removes the agent's scan files and Rollcall's findings for that computer.
 - To try it on a folder without sending anything:
   - Windows: `PingMonitorAgent.ps1 -SecretTest D:\Shares`

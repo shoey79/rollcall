@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.65.1 - 2026-11-12
+
+### Added
+- **Ignore all** for passwords left in files: accepts everything found so far on a computer, e.g. after checking a first scan's false positives. Anything found later turns it amber again and is marked **New**, and **Ignore all** accepts those too. **Undo** brings them back.
+  - A finding that only moves because lines were added or removed above it keeps its date, so it isn't counted as new.
+
 ## 1.65.0 - 2026-11-12
 
 ### Added

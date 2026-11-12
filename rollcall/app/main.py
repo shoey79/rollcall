@@ -2529,15 +2529,32 @@ class Monitor:
         return self._sec[agent_id]
 
     def _store_secrets(self, agent: dict, findings, fhash: str, now: float) -> None:
-        old = {agentlib.secret_key(f) + f"|{f.get('line')}": f.get("first") for f in self.secret_findings(agent["id"]).get("findings") or []}
         clean = []
         for f in findings if isinstance(findings, list) else []:
             c = agentlib.clean_secret_finding(f)
             if c:
-                c["first"] = old.get(agentlib.secret_key(c) + f"|{c['line']}") or int(now)
                 clean.append(c)
             if len(clean) >= 500:
                 break
+        # When each was first found (what "Ignore all" goes by). A finding keeps its date if it's on the
+        # same line as before, or if it has only moved because lines were added or removed above it.
+        prev = list(self.secret_findings(agent["id"]).get("findings") or [])
+        exact = {}
+        for i, f in enumerate(prev):
+            exact.setdefault((agentlib.secret_key(f), f.get("line")), []).append(i)
+        used, rest = set(), []
+        for c in clean:
+            hit = next((i for i in exact.get((agentlib.secret_key(c), c["line"]), []) if i not in used), None)
+            if hit is None:
+                rest.append(c)
+            else:
+                used.add(hit)
+                c["first"] = prev[hit].get("first") or int(now)
+        for c in rest:
+            hit = next((i for i, f in enumerate(prev) if i not in used and agentlib.secret_key(f) == agentlib.secret_key(c)), None)
+            if hit is not None:
+                used.add(hit)
+            c["first"] = (prev[hit].get("first") if hit is not None else None) or int(now)
         before = len(self.secret_findings(agent["id"]).get("findings") or [])
         self._sec[agent["id"]] = {"hash": fhash, "updated": int(now), "findings": clean}
         self.want_secrets.discard(agent["id"])
@@ -2978,6 +2995,7 @@ class Monitor:
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
+                "secret_ack": self._ack_time(h, "secrets"),
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
@@ -3893,8 +3911,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         except (json.JSONDecodeError, ValueError):
             body = {}
         kind = body.get("kind")
-        if kind not in ("events", "security"):
-            return web.json_response({"error": "kind must be events or security"}, status=400)
+        if kind not in ("events", "security", "secrets"):
+            return web.json_response({"error": "kind must be events, security or secrets"}, status=400)
         user = await access.who(req)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
         return web.json_response({"ok": True})
