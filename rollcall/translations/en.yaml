@@ -86,6 +86,9 @@ configuration:
   software_updates:
     name: Highlight newer software versions
     description: Mark installed programs that have a newer version. Windows uses the winget catalogue, downloaded once a day; Linux uses the package manager. Never alerts.
+  agent_secret_scan:
+    name: Scan for passwords left in files
+    description: Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details.
   name_line:
     name: Line under each name
     description: What the dashboard shows under each computer's name, unless the computer has its own choice. "auto" shows the make and model, or else the operating system.

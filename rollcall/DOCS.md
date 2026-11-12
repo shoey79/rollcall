@@ -817,8 +817,71 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 
 Pausing a computer silences its agent alerts too.
 
+### Passwords left in files
+
+The agents can look for passwords saved in plain text: in scripts, configuration files, notes, spreadsheets, setup answer files and command histories. It's off unless you turn it on.
+
+> **Passwords never leave the computer.** The agent reads the files on the computer itself. For each password it finds, it sends Rollcall only:
+> - the file's path
+> - the line number (for Word files, the paragraph number)
+> - what kind of thing it is, e.g. *Password in a database connection string*
+> - the name of the setting, e.g. `DbPassword` (letters, digits and `._-` only)
+> - how many characters the password has
+>
+> It never sends the password, any part of it, a hash of it, or the text around it. The agent measures the value and then drops it; nothing it stores between runs holds it either. Rollcall keeps only those five details, whatever an agent sends, and only Home Assistant admins and Rollcall editors can see them. File and folder names are sent as they are, so you can find the file.
+
+**Turning it on**
+
+- The `agent_secret_scan` option picks which computers scan by default: `off` (the default), `servers`, `workstations` (Windows 10 and 11) or `all`.
+- To change one computer, open its Details → **Security** → **Passwords left in files** → **Scan settings for this computer**. Choose **On** or **Off**, add extra folders (one per line, e.g. `D:\Shares\IT` or `/etc/myapp`), and choose how often a full scan runs (every 24 hours by default).
+- It needs Windows agent 1.0.36 or Linux agent 1.0.17.
+
+**Where it looks**
+
+- **Windows:**
+  - users' folders (Desktop, Documents, Downloads, OneDrive and so on, but not AppData);
+  - PowerShell command histories;
+  - Windows setup answer files (`unattend.xml`);
+  - `C:\inetpub`, `C:\Scripts`, `C:\Temp`, `C:\Install` and `C:\Deploy`;
+  - SYSVOL on domain controllers;
+  - the automatic sign-in password (`DefaultPassword`) in the registry.
+- **Linux:** `/home`, `/root`, `/opt`, `/srv` and `/var/www`, including shell histories, `.env`, `.netrc`, `.pgpass` and SSH keys.
+- Plus any extra folders you add.
+- It reads text files up to 2 MB (scripts, configuration, notes, CSV) and Word and Excel files (`.docx`, `.xlsx`) up to 10 MB. Older `.doc` and `.xls` files and PDFs are only checked by name.
+- It skips program and system folders, `node_modules`, `.git`, the recycle bin, links and junctions, and cloud-only OneDrive files, so it never downloads anything.
+
+**What it finds**
+
+- Group Policy Preferences passwords (`cpassword`), which any domain user can decrypt.
+- Passwords in setup answer files, the automatic sign-in password, and `ConvertTo-SecureString ... -AsPlainText`.
+- Passwords on command lines: `-Password "..."`, `net use`, `net user ... /add`, `mysql -p...`, `sshpass -p`, `curl -u user:...`.
+- Connection strings, `<add key="...Password" value="...">` settings, XML elements, and settings such as `password=`, `api_key:` or `client_secret`.
+- User names and passwords in web addresses (`https://user:password@...`).
+- AWS access keys, GitHub and Slack tokens, and Azure storage keys.
+- Private keys with no passphrase (PEM, OpenSSH and PuTTY).
+- "password: ..." written in notes and documents.
+- Spreadsheets and CSV files with a password column (such as a browser's password export), and files with names like *Passwords.xlsx*.
+
+Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`, `*****`, `null`, empty values and settings like `PasswordExpiryDays`. In program code (Python, JavaScript, C# and so on) only quoted text counts, so `password = get_password()` isn't flagged.
+
+**How it runs and alerts**
+
+- **It runs after each report**, so reports aren't slowed down. It spends up to 45 seconds per agent run at low priority and carries on where it left off. A full pass can take several runs on a big file server.
+- After the first pass, only changed files are re-read.
+- Findings go to Rollcall with the next report, and only when they've changed.
+- **The check is amber at most** (*Passwords in files*) and never sends a notification.
+- **Fix:** move the password into a password manager or the program's protected store, then remove it from the file. The finding clears after the next scan.
+- **Ignore:** use **Ignore** on a row for a finding you've accepted (e.g. a test password). It stays ignored until that file, setting or kind of finding changes.
+- **Turning it off** removes the agent's scan files and Rollcall's findings for that computer.
+- To try it on a folder without sending anything:
+  - Windows: `PingMonitorAgent.ps1 -SecretTest D:\Shares`
+  - Linux: `python3 pingmonitor-agent.py --secret-test /srv`
+
+  Each prints what would be reported.
+
 ### Agent security
 
+- **The password scan never sends passwords**, only where each one is (see [Passwords left in files](#passwords-left-in-files)).
 - **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, which is signed (see [Updating agents automatically](#updating-agents-automatically)).
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
@@ -1039,6 +1102,7 @@ Set these in the add-on's **Configuration** tab.
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
+| `agent_secret_scan` | off | Which computers look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
 | `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
@@ -1119,6 +1183,7 @@ In the add-on's data folder (included in Home Assistant backups):
 | `views.json` | Tabs |
 | `agents.json` | Agent approvals, token hashes and the enrolment key |
 | `agent_settings.json` | Ignores, thresholds, acknowledgements, agent addresses |
+| `secrets/` | Where each agent's password scan found passwords: path, line, kind, setting name and length (never the passwords) |
 | `icons/` | Uploaded icons |
 | SQLite database | Uptime history and syslog messages |
 

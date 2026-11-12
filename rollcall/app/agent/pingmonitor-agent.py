@@ -15,6 +15,8 @@ timer) it reports:
   - security: failed SSH logins, sudo failures, users created or deleted,
     users added to groups
   - updates: pending and security packages, last apt run, reboot required
+  - if turned on in the dashboard: files with passwords left in them. Only where they
+    are is sent (file, line, setting name, length), never the passwords themselves.
 
 It only ever sends reports; it never runs anything it's told to.
 
@@ -45,7 +47,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.16"
+AGENT_VERSION = "1.0.17"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -926,6 +928,8 @@ def build_report(state, conf):
             r["apps_hash"] = apps_hash(apps)
             if state.get("apps_sent") != r["apps_hash"]:  # only when it changed, or Rollcall asked
                 r["apps"] = apps
+    with step("password scan"):
+        r["secrets"] = secret_report(state)
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()
@@ -952,6 +956,401 @@ def build_report(state, conf):
         pass
     r["run_ms"] = int((time.monotonic() - started) * 1000)
     r["timings"] = dict(TIMINGS)
+    return r
+
+
+# --------------------------------------------------------------------------
+# Password exposure scan (opt-in: turned on per computer in the Rollcall dashboard)
+# --------------------------------------------------------------------------
+# PRIVACY: no password ever leaves this computer. Not the password, not part of it, not a hash
+# of it and not the text around it. A finding holds only:
+#   path  - the file it is in        line - the line (or paragraph) number
+#   rule  - which kind of thing matched, e.g. "keyvalue"
+#   key   - the setting's name, e.g. "DbPassword" (letters, digits, space and ._- only, up to 40)
+#   len   - how many characters the value has
+# The matched value is measured and then dropped; it is never stored, logged or sent. The
+# findings kept between runs in secrets.json on this computer hold the same fields, nothing more.
+# File and folder names are sent as they are, so the admin can find the file.
+SECRETS_PATH = os.path.join(DATA_DIR, "secrets.json")
+SECRET_BUDGET = 45                       # seconds of scanning per agent run; carries on next run
+SECRET_MAX_TEXT = 2 * 1024 * 1024
+SECRET_MAX_OFFICE = 10 * 1024 * 1024
+SECRET_PER_FILE = 20
+SECRET_MAX = 500
+SECRET_ROOTS = ["/home", "/root", "/opt", "/srv", "/var/www"]
+SECRET_SKIP_DIRS = {
+    "node_modules", ".git", ".svn", ".hg", "__pycache__", ".venv", "venv", "site-packages", "dist-packages",
+    ".cache", ".npm", ".nuget", ".cargo", ".rustup", ".m2", ".gradle", ".vscode-server", ".trash", "trash",
+    "$recycle.bin", "system volume information", "appdata", "windows", "program files", "program files (x86)",
+    "programdata", "winsxs", "snap", "vendor", "bower_components", "packages", ".nvm", ".pyenv", ".rbenv",
+    ".gem", "anaconda3", "miniconda3", ".local", ".mozilla", ".thunderbird", ".config"}
+SECRET_TEXT_EXT = {
+    "txt", "md", "rtf", "csv", "ini", "conf", "cfg", "config", "cnf", "properties", "env", "yml", "yaml", "json",
+    "xml", "ps1", "psm1", "psd1", "bat", "cmd", "vbs", "sh", "bash", "zsh", "py", "js", "ts", "php", "rb", "sql",
+    "reg", "udl", "ppk", "pem", "key", "toml", "tfvars", "inc", "java", "cs", "go"}
+SECRET_TEXT_NAMES = {
+    ".env", ".netrc", "_netrc", ".pgpass", ".my.cnf", ".git-credentials", "credentials", ".bash_history",
+    ".zsh_history", ".sh_history", ".python_history", ".mysql_history", ".psql_history", "id_rsa", "id_dsa",
+    "id_ecdsa", "id_ed25519", ".s3cfg", ".boto", ".npmrc", ".pypirc"}
+SECRET_DOC_EXT = {"txt", "md", "rtf", "csv", "docx", "xlsx"}
+SECRET_CODE_EXT = {"py", "js", "ts", "php", "rb", "ps1", "psm1", "vbs", "java", "cs", "go"}
+SECRET_NAMEONLY_EXT = {"doc", "xls", "odt", "ods", "pdf"}
+# The rules. Each: (rule id, pattern, key, value groups, the line must also match, which files).
+# The key may use {n} for group n. These are identical in the Windows agent.
+SECRET_RULES = [
+    ("cpassword", r'\bcpassword[ \t]*=[ \t]*"([^"\r\n]+)"', "cpassword", (1,), None, "any"),
+    ("unattend", r'(?is)<(AdministratorPassword|Password)>\s*<Value>([^<]{1,200})</Value>', "{1}", (2,), None, "any"),
+    ("securestring", r'(?i)ConvertTo-SecureString[ \t]+(?:-String[ \t]+)?(["\'])([^\r\n]{1,200}?)\1',
+     "ConvertTo-SecureString", (2,), r'(?i)-AsPlainText', "any"),
+    ("securestring", r'(?i)ConvertTo-SecureString\b[^|;\r\n]*?-String[ \t]+(["\'])([^\r\n]{1,200}?)\1',
+     "ConvertTo-SecureString", (2,), r'(?i)-AsPlainText', "any"),
+    ("param", r'(?i)(?:^|[ \t(])-(Password|Passwd|Pwd|Pass|PlainPassword|Secret|ApiKey|Token|ClientSecret)[ \t]+(["\'])([^\r\n]{1,200}?)\2',
+     "-{1}", (3,), None, "any"),
+    ("netuse", r'(?i)\bnet(?:\.exe)?[ \t]+use\b[^\r\n]*?[ \t]/user:[^ \t\r\n]+[ \t]+("[^"\r\n]+"|[^ \t\r\n/"]+)',
+     "net use", (1,), None, "any"),
+    ("netuse", r'(?i)\bnet(?:\.exe)?[ \t]+use[ \t]+(?:[a-z]:[ \t]+|\*[ \t]+)?\\\\[^ \t\r\n]+[ \t]+("[^"\r\n]+"|[^ \t\r\n/"]+)',
+     "net use", (1,), None, "any"),
+    ("netuser", r'(?i)\bnet(?:\.exe)?[ \t]+user[ \t]+(?:"[^"\r\n]+"|[^ \t\r\n/"]+)[ \t]+("[^"\r\n]+"|[^ \t\r\n/"*]+)',
+     "net user", (1,), None, "any"),
+    ("url", r'(?i)\b([a-z][a-z0-9+.\-]{1,15})://[^ \t\r\n/:@"\'<>]{1,64}:([^ \t\r\n/@"\'<>]{1,128})@[\w.\-]',
+     "{1}", (2,), None, "any"),
+    ("cmdline", r'\b[Mm]ysql(?:dump|admin)?\b[^|;\r\n]*?[ \t]-p([^ \t\r\n\'"\-][^ \t\r\n\'"]{2,199})', "mysql -p", (1,), None, "any"),
+    ("cmdline", r'(?:^|[ \t;|&])sshpass[ \t]+-p[ \t]*(["\']?)([^ \t\r\n"\']{1,200})\1', "sshpass -p", (2,), None, "any"),
+    ("cmdline", r'(?i)\bcurl\b[^|;\r\n]*?[ \t](?:-u|--user)[ \t]+["\']?[^: \t\r\n"\']+:([^ \t\r\n"\']{1,200})', "curl -u", (1,), None, "any"),
+    ("aws", r'\b((?:AKIA|ASIA)[0-9A-Z]{16})\b', "AWS access key", (1,), None, "any"),
+    ("github", r'\b(gh[pousr]_[A-Za-z0-9]{36,251}|github_pat_[A-Za-z0-9_]{22,250})\b', "GitHub token", (1,), None, "any"),
+    ("slack", r'\b(xox[abposr]-[A-Za-z0-9\-]{10,200})', "Slack token", (1,), None, "any"),
+    ("azurekey", r'(?i)\b(AccountKey|SharedAccessKey)[ \t]*=[ \t]*([A-Za-z0-9+/]{20,}={0,2})', "{1}", (2,), None, "any"),
+    ("connstring", r'(?i)(?:^|[;"\' \t])(password|pwd)[ \t]*=[ \t]*([^;"\'<> \t\r\n][^;"\'<>\r\n]{0,199})', "{1}", (2,),
+     r'(?i)(server|data source|user id|uid|host|database|initial catalog)[ \t]*=[^;\r\n]*;', "any"),
+    ("appsetting", r'(?i)\bkey[ \t]*=[ \t]*"([^"\r\n]*(?:password|passwd|pwd|secret|api[_\-]?key|token)[^"\r\n]*)"[ \t]+value[ \t]*=[ \t]*"([^"\r\n]{1,200})"',
+     "{1}", (2,), None, "any"),
+    ("xml", r'(?i)<([a-z0-9_:.\-]*(?:password|passwd|pwd|secret)[a-z0-9_:.\-]*)(?:[ \t][^>\r\n]*)?>([^<\r\n]{1,200})</',
+     "{1}", (2,), None, "any"),
+    ("keyvalue", r'(?i)(?:^|[ \t;,{(\[&?"\'<$@])([a-z0-9_.\-]*(?:password|passwd|passwort|kennwort|wachtwoord|pwd|secret|'
+     r'api[_\-]?key|access[_\-]?key|auth[_\-]?token|access[_\-]?token|client[_\-]?secret|private[_\-]?key)[a-z0-9_.\-]*)["\']?'
+     r'[ \t]*[:=][ \t]*(?:"([^"\r\n]{1,200})"|\'([^\'\r\n]{1,200})\'|([^ \t\r\n"\',;}<>]{1,200}))', "{1}", (2, 3, 4), None, "any"),
+    ("notes", r'(?i)(?:^|[ \t(\[,;:\-])(password|passwd|passcode|pass|pwd|pw|kennwort|passwort|wachtwoord)[ \t]*'
+     r'(?:is[ \t]+|:|=|-)[ \t]*["\']?([^ \t\r\n"\']{4,200})', "{1}", (2,), None, "doc"),
+    ("savedlogin", r'(?i)\bpassword[ \t]+([^ \t\r\n]{1,200})', "password", (1,), None, "netrc"),
+    ("savedlogin", r'(?m)^[^#:\r\n]+:[^:\r\n]*:[^:\r\n]*:[^:\r\n]*:([^\r\n]{1,200})', ".pgpass", (1,), None, "pgpass"),
+    ("privkey", r'(?m)^Encryption:[ \t]*none', "PuTTY key", (), None, "any"),
+]
+SECRET_KEY_SKIP = re.compile(
+    r'(?i)(expir|polic|length|_len|maxage|minage|age$|hint|reset|requir|change|complex|histor|never|last|count|'
+    r'min[_\-]|max[_\-]|_min|_max|minimum|maximum|enabled|type|format|prompt|label|file|path|url|uri|hash|salt|'
+    r'field|column|placeholder|validat|strength|rule|mode|timeout|attempt|lockout|forgot|manager)')
+SECRET_PLACEHOLDER = re.compile(
+    r'(?i)^(\$[\w{(]|%[\w()]+%|\{\{|\{%|<%|<[\w/!]|#\{|@\{|@\(|\[\[|env[:.]|process\.env|os\.environ|getenv|\(|'
+    r'vault[:(]|enc\(|encrypted[:(]|\{cipher\}|!vault|secretref|keyvault|/|\\\\|[a-z]:\\)')
+SECRET_WORDS = {
+    "null", "none", "nil", "true", "false", "yes", "no", "undefined", "empty", "required", "optional", "string",
+    "secret", "password", "passwd", "your_password", "yourpassword", "your-password", "example", "sample", "dummy",
+    "placeholder", "redacted", "hidden", "masked", "notset", "not_set", "unset", "todo", "tbd", "fixme", "pass",
+    "token", "enabled", "disabled", "never", "always", "auto", "prompt", "n/a", "default"}
+SECRET_SHEET_HEADER = re.compile(r'(?i)^[ \t"]*(passwords?|passwd|pwd|pw|pass|kennwort|passwort|wachtwoord)[ \t"]*$')
+SECRET_FILE_NAME = re.compile(
+    r'(?i)^((my[ _\-]?)?(password|passwd|pwd|login|credential|secret)s?|creds|'
+    r'(.*[^a-z])?(passwords|passwds|pwds|logins|credentials|creds|kennw(\u00f6|oe)rter|passw(\u00f6|oe)rter|wachtwoorden)([^a-z].*)?)$')
+_SECRET_RX = []
+
+
+def _secret_rules():
+    if not _SECRET_RX:
+        for rid, pat, key, vals, need, scope in SECRET_RULES:
+            flags = re.M if not pat.startswith("(?m)") else 0
+            _SECRET_RX.append((rid, re.compile(pat, flags), key, vals, re.compile(need) if need else None, scope))
+    return _SECRET_RX
+
+
+def secret_value_length(value, key, quoted, kind):
+    """How long the value is if it looks like a real secret, else None. The value itself is not kept."""
+    v = (value or "").strip()
+    if not quoted:
+        v = v.rstrip(".,;)")
+    if v[:1] in "\"'" and v[-1:] == v[:1] and len(v) >= 2:
+        v, quoted = v[1:-1], True
+    low = v.lower()
+    if len(v) < 4 or SECRET_PLACEHOLDER.search(v) or re.match(r'^(.)\1+$', v) or low in SECRET_WORDS:
+        return None
+    if "example" in low or "xxxx" in low or "****" in v or "…" in v or "<" in v or low == (key or "").lower():
+        return None
+    if not quoted:
+        if kind == "code" or "(" in v or re.match(r'^[A-Za-z_]\w*(\.\w+)+$', v):
+            return None
+    return len(v)
+
+
+def secret_text_findings(text, kind, special=""):
+    """Run the rules over a file's text. Returns findings without any of the matched text."""
+    out, seen, hit_lines = [], set(), set()
+    starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            starts.append(i + 1)
+
+    def line_of(pos):
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if starts[mid] <= pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    for rid, rx, key, vals, need, scope in _secret_rules():
+        if scope == "doc" and kind != "doc":
+            continue
+        if scope in ("netrc", "pgpass") and special != scope:
+            continue
+        for m in rx.finditer(text):
+            ln = line_of(m.start())
+            if need is not None:
+                end = starts[ln + 1] if ln + 1 < len(starts) else len(text)
+                if not need.search(text[starts[ln]:end]):
+                    continue
+            k = re.sub(r"\{(\d)\}", lambda g: m.group(int(g.group(1))) or "", key)
+            k = re.sub(r"[^A-Za-z0-9_.\- ]", "", k)[:40]
+            generic = rid in ("xml", "keyvalue", "notes")
+            if (generic or rid == "appsetting") and SECRET_KEY_SKIP.search(k):
+                continue
+            if generic and ln in hit_lines:
+                continue  # a more specific rule already reported this line
+            n = None
+            if vals:
+                gi = next((g for g in vals if m.group(g) is not None), None)
+                if gi is None:
+                    continue
+                quoted = not (rid == "notes" or (rid == "keyvalue" and gi == 4))
+                n = secret_value_length(m.group(gi), k, quoted, kind)
+                if n is None:
+                    continue
+                if (rid == "notes" or (rid == "keyvalue" and gi == 4 and kind == "doc")) and not secret_complex(m.group(gi)):
+                    continue
+            sig = (ln, k.lower())
+            if sig in seen:
+                continue
+            seen.add(sig)
+            if not generic:
+                hit_lines.add(ln)
+            out.append({"line": ln + 1, "rule": rid, "key": k, "len": n})
+    # Private keys with no passphrase
+    for m in re.finditer(r'-----BEGIN ((?:RSA |EC |DSA |OPENSSH )?)PRIVATE KEY-----', text):
+        kind_ = (m.group(1) or "").strip()
+        body = text[m.end():m.end() + 20000]
+        if kind_ == "OPENSSH":
+            b64 = re.sub(r"\s", "", body.split("-----END", 1)[0])
+            try:
+                import base64
+                raw = base64.b64decode(b64[:200] + "=" * (-len(b64[:200]) % 4))
+            except Exception:  # noqa: BLE001
+                continue
+            if not raw.startswith(b"openssh-key-v1\0") or len(raw) < 19:
+                continue
+            n = int.from_bytes(raw[15:19], "big")
+            if raw[19:19 + n] != b"none":
+                continue
+        elif "ENCRYPTED" in body[:200]:
+            continue
+        out.append({"line": line_of(m.start()) + 1, "rule": "privkey", "key": ((kind_ + " ") if kind_ else "") + "private key", "len": None})
+    out.sort(key=lambda f: f["line"])
+    return out
+
+
+def secret_complex(v):
+    """For free text: the word after "password" only counts if it looks like one (a digit or symbol,
+    or a capital letter after the first character)."""
+    v = v.strip().rstrip(".,;)")
+    return bool(re.search(r"[^A-Za-z]", v) or re.search(r"[A-Z]", v[1:]))
+
+
+def _xml_text(xml):
+    xml = re.sub(r"<w:tab/>|<w:br/>", " ", xml)
+    xml = re.sub(r"<[^>]+>", "", xml)
+    return xml.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+
+
+def secret_scan_file(path, name):
+    """Findings for one file (no values), or [] if nothing. Raises OSError if it can't be read."""
+    import zipfile
+    low = name.lower()
+    ext = low.rsplit(".", 1)[1] if "." in low.lstrip(".") else ""
+    stem = name[:-(len(ext) + 1)] if ext else name
+    kind = "doc" if ext in SECRET_DOC_EXT else ("code" if ext in SECRET_CODE_EXT else "config")
+    found = []
+    if (ext in SECRET_DOC_EXT or ext in SECRET_NAMEONLY_EXT) and SECRET_FILE_NAME.match(stem):
+        found.append({"line": None, "rule": "filename", "key": "", "len": None})
+    if ext in SECRET_NAMEONLY_EXT:
+        return found
+    if ext in ("docx", "xlsx"):
+        try:
+            with zipfile.ZipFile(path) as z:
+                if ext == "docx":
+                    xml = z.read("word/document.xml").decode("utf-8", "replace")
+                    text = "\n".join(_xml_text(p) for p in xml.split("</w:p>"))
+                    found += secret_text_findings(text, "doc")
+                else:
+                    try:
+                        xml = z.read("xl/sharedStrings.xml").decode("utf-8", "replace")
+                    except KeyError:
+                        xml = ""
+                    cells = [_xml_text(s) for s in re.findall(r"<si>(.*?)</si>", xml, re.S)]
+                    for c in cells:
+                        if SECRET_SHEET_HEADER.match(c):
+                            found.append({"line": None, "rule": "sheet", "key": re.sub(r"[^A-Za-z0-9_.\- ]", "", c.strip(' \t"'))[:40], "len": None})
+                            break
+                    for f in secret_text_findings("\n".join(c.replace("\n", " ") for c in cells), "doc"):
+                        f["line"] = None
+                        found.append(f)
+        except (zipfile.BadZipFile, KeyError, ValueError):
+            pass
+        return _secret_dedupe(found)
+    with open(path, "rb") as f:
+        raw = f.read(SECRET_MAX_TEXT + 1)
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        text = raw.decode("utf-16", "replace")
+    elif b"\0" in raw[:8000]:
+        return found
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252", "replace")
+    special = "netrc" if low in (".netrc", "_netrc") else ("pgpass" if low == ".pgpass" else "")
+    if ext == "csv":
+        first = text.split("\n", 1)[0]
+        for c in first.split(","):
+            if SECRET_SHEET_HEADER.match(c.strip()):
+                found.append({"line": 1, "rule": "sheet", "key": re.sub(r"[^A-Za-z0-9_.\- ]", "", c.strip(' \t"\r'))[:40], "len": None})
+                break
+    found += secret_text_findings(text, kind, special)
+    return _secret_dedupe(found)
+
+
+def _secret_dedupe(found):
+    out, seen = [], set()
+    for f in found:
+        s = (f["line"], f["rule"] if f["rule"] in ("filename", "sheet") else "", f["key"].lower())
+        if s not in seen:
+            seen.add(s)
+            out.append(f)
+    return out[:SECRET_PER_FILE]
+
+
+def secret_candidate(name, size):
+    low = name.lower()
+    ext = low.rsplit(".", 1)[1] if "." in low.lstrip(".") else ""
+    if ext in ("docx", "xlsx"):
+        return size <= SECRET_MAX_OFFICE
+    if ext in SECRET_NAMEONLY_EXT:
+        return True
+    if ext in SECRET_TEXT_EXT or low in SECRET_TEXT_NAMES or low.startswith(".env."):
+        return size <= SECRET_MAX_TEXT
+    return False
+
+
+def secret_scan(state, budget=SECRET_BUDGET, roots=None):
+    """Scan for up to `budget` seconds, carrying on where the last run stopped. Returns the scan state."""
+    conf = state.get("secret_scan") or {}
+    if roots is None and not conf.get("on"):
+        if os.path.exists(SECRETS_PATH):
+            os.remove(SECRETS_PATH)
+        return None
+    if roots is None:
+        roots = list(SECRET_ROOTS) + [str(p) for p in conf.get("paths") or [] if str(p).startswith("/")]
+    hours = max(1, int(conf.get("hours") or 24))
+    st = load_json(SECRETS_PATH, {}) if budget else {}
+    sig = hashlib.sha256(json.dumps([roots, hours]).encode()).hexdigest()[:16]
+    now = time.time()
+    if st.get("sig") != sig:
+        st.update({"sig": sig, "stack": [], "done_at": None})
+    if not st.get("stack"):
+        if st.get("done_at") and now - st["done_at"] < hours * 3600:
+            return st
+        st.update({"stack": list(reversed(roots)), "cur": {}, "pass_start": now, "errors": 0, "truncated": False})
+    st.setdefault("found", [])
+    st.setdefault("files", {})
+    started = time.monotonic()
+    cur, prev, found = st["cur"], st["files"], st["found"]
+
+    def visit(path, name, stt):
+        if path in cur:
+            return
+        sig_ = [int(stt.st_mtime), stt.st_size]
+        cur[path] = sig_
+        if prev.get(path) == sig_:
+            return  # unchanged since the last pass: its findings stand
+        found[:] = [f for f in found if f["path"] != path]
+        try:
+            new = secret_scan_file(path, name)
+        except OSError:
+            st["errors"] += 1
+            return
+        for f in new:
+            if len(found) >= SECRET_MAX:
+                st["truncated"] = True
+                break
+            f["path"] = path
+            found.append(f)
+
+    while st["stack"]:
+        if budget and time.monotonic() - started > budget:
+            break
+        d = st["stack"].pop()
+        try:
+            if os.path.isfile(d) and not os.path.islink(d):
+                visit(d, os.path.basename(d), os.stat(d))
+                continue
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        subdirs, stopped = [], False
+        for e in sorted(entries, key=lambda x: x.name):
+            try:
+                if e.is_symlink():
+                    continue
+                if e.is_dir():
+                    if e.name.lower() not in SECRET_SKIP_DIRS and e.path not in ("/proc", "/sys", "/dev", "/run"):
+                        subdirs.append(e.path)
+                elif e.is_file():
+                    s = e.stat()
+                    if secret_candidate(e.name, s.st_size):
+                        visit(e.path, e.name, s)
+            except OSError:
+                continue
+            if budget and time.monotonic() - started > budget:
+                st["stack"].append(d)  # finish this folder next time (done files are skipped)
+                stopped = True
+                break
+        if not stopped:
+            st["stack"].extend(reversed(subdirs))
+    st["ms"] = int((time.monotonic() - started) * 1000)
+    if not st["stack"]:
+        st["files"] = cur
+        st["found"] = [f for f in found if f["path"] in cur]
+        st["cur"] = {}
+        st["done_at"] = now
+    if budget:
+        save_json(SECRETS_PATH, st)
+    st["finished"] = not st["stack"]  # this run completed a pass
+    return st
+
+
+def secret_report(state):
+    """What the report says about the scan: status, and the findings when they changed."""
+    conf = state.get("secret_scan") or {}
+    if not conf.get("on"):
+        return {"on": False}
+    st = load_json(SECRETS_PATH, {})
+    found = sorted(({k: f.get(k) for k in ("path", "line", "rule", "key", "len")} for f in st.get("found") or []),
+                   key=lambda f: (f["path"], f["line"] or 0, f["rule"]))
+    h = hashlib.sha256(json.dumps(found, sort_keys=True).encode()).hexdigest()[:16]
+    r = {"on": True, "scanning": bool(st.get("stack")), "pass_start": utc(st.get("pass_start")),
+         "done_at": utc(st.get("done_at")), "files": len(st.get("files") or {}), "errors": st.get("errors", 0),
+         "truncated": bool(st.get("truncated")), "count": len(found), "hash": h}
+    if state.get("secrets_sent") != h:
+        r["findings"] = found
     return r
 
 
@@ -1098,6 +1497,14 @@ def agent_run(conf, report_only=False):
         state["apps_sent"] = report["apps_hash"]
     if (body or {}).get("send_apps"):
         state["apps_sent"] = None  # Rollcall hasn't got this list: send it next time
+    sec = report.get("secrets") or {}
+    if "findings" in sec:
+        state["secrets_sent"] = sec["hash"]
+    if (body or {}).get("send_secrets"):
+        state["secrets_sent"] = None
+    sc = (body or {}).get("secret_scan")
+    state["secret_scan"] = {"on": bool(sc.get("on")), "paths": [str(p)[:260] for p in sc.get("paths") or []][:20],
+                            "hours": int(sc.get("hours") or 24)} if isinstance(sc, dict) else {"on": False}
     state["last_run"] = utc(time.time())
     if ACTIVE["server"]:
         state["last_server"] = ACTIVE["server"]
@@ -1116,6 +1523,12 @@ def agent_run(conf, report_only=False):
             self_update(body["agent_update"], state["token"], server, ignore)
         except Exception as err:  # noqa: BLE001
             log("WARN Agent update: %s" % err)
+    try:  # after the report, so it never slows reports down; findings go with the next one
+        st = secret_scan(state)
+        if st and st.get("finished"):
+            log("Password scan finished: %d file(s) checked, %d finding(s)" % (len(st.get("files") or {}), len(st.get("found") or [])))
+    except Exception as err:  # noqa: BLE001
+        log("WARN Password scan: %s" % err)
 
 
 # --------------------------------------------------------------------------
@@ -1213,6 +1626,8 @@ def main():
     ap.add_argument("--enrol-key", dest="enrol_key")
     ap.add_argument("--immich-url", dest="immich_url", help="Immich address (default: found from its container)")
     ap.add_argument("--immich-api-key", dest="immich_api_key", help="admin API key for job queues and statistics")
+    ap.add_argument("--secret-test", dest="secret_test", metavar="PATH",
+                    help="scan PATH for passwords left in files and print what would be reported (nothing is sent)")
     ap.add_argument("--ignore-cert", dest="ignore_cert", action="store_true", help="accept a self-signed HTTPS certificate")
     args = ap.parse_args()
     try:
@@ -1220,6 +1635,10 @@ def main():
             return uninstall()
         if args.install:
             return install(args)
+        if args.secret_test:
+            st = secret_scan({}, budget=0, roots=[os.path.abspath(args.secret_test)])
+            print(json.dumps(sorted(st["found"], key=lambda f: (f["path"], f["line"] or 0, f["rule"])), indent=1))
+            return
         conf = load_json(CONFIG_PATH, {})
         for k in ("server", "enrol_key", "immich_url", "immich_api_key"):
             if getattr(args, k):

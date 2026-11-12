@@ -97,12 +97,13 @@ AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
+SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
-SECURITY_KEYS = ("agent_security", "agent_domain")
+SECURITY_KEYS = ("agent_security", "agent_domain", "agent_secrets")
 UPS_LIMIT_KEYS = {"runtime_warn": (0, 600), "runtime_crit": (0, 600), "load_warn": (1, 100)}
 
 
@@ -161,6 +162,7 @@ DEFAULTS = {
     "agent_sql_backup_hours": 36,
     "printer_supply_warn": 10,
     "software_updates": True,
+    "agent_secret_scan": "off",
     "name_line": "auto",
     "agent_exchange_queue_warn": 250,
     "agent_patch_days": 60,
@@ -1407,6 +1409,8 @@ def svc_entity(h: Host, s: Service) -> str:
 class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
         self._sw: dict = {}          # agent id -> its software list, loaded when first needed
+        self._sec: dict = {}         # agent id -> where its password scan found passwords, loaded when first needed
+        self.want_secrets: set = set()  # agents whose scan findings Rollcall is missing
         self.winget = None           # the winget catalogue (wingetidx.Index), for newer versions of Windows programs
         self.winget_info: dict = {}
         self._newer: dict = {}       # (agent id, list hash, catalogue) -> {program index: newer version}
@@ -2378,7 +2382,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain", "nics")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain", "nics", "secrets")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.
@@ -2474,6 +2478,8 @@ class Monitor:
 
     async def receive_report(self, agent: dict, report: dict, source_ip: str | None, forwarded_for: str | None = None) -> None:
         now = time.time()
+        raw_sec = report.get("secrets") if isinstance(report, dict) else None
+        findings = raw_sec.get("findings") if isinstance(raw_sec, dict) else None  # kept apart: the tidy-up below drops them
         report = agentlib.normalize_report(report)
         sent_to = str(report.get("sent_to") or "")[:200]
         if sent_to and sent_to != agent.get("sent_to") and agent.get("sent_to"):
@@ -2485,6 +2491,14 @@ class Monitor:
                      ips=[str(i) for i in (report.get("ips") or [])][:8] or agent.get("ips"),
                      roles=[str(r) for r in (report.get("roles") or [])][:30])
         apps, ahash = report.pop("apps", None), str(report.pop("apps_hash", "") or "")[:64]
+        sec = report.get("secrets") if isinstance(report.get("secrets"), dict) else None
+        if sec is not None:
+            if not sec.get("on"):
+                self._clear_secrets(agent)
+            elif findings is not None:
+                self._store_secrets(agent, findings, str(sec.get("hash") or "")[:64], now)
+            elif sec.get("hash") and self.secret_findings(agent["id"]).get("hash") != str(sec["hash"])[:64]:
+                self.want_secrets.add(agent["id"])  # Rollcall hasn't got these findings: the reply asks for them
         if apps is not None:
             self._store_apps(agent, apps, ahash, now)
         elif ahash and self.software(agent["id"]).get("hash") != ahash:
@@ -2496,6 +2510,81 @@ class Monitor:
             return
         await self._apply(h, agent, report, now)
         self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history})
+
+    # -- password exposure scan -------------------------------------------
+    # Agents send only where a password is (file, line, setting name, length), never the password;
+    # clean_secret_finding keeps just those fields whatever arrives.
+    def _sec_path(self, agent_id: str) -> Path:
+        return SECRETS_DIR / (re.sub(r"[^A-Za-z0-9_-]", "", str(agent_id))[:64] + ".json")
+
+    def secret_findings(self, agent_id: str | None) -> dict:
+        """{hash, updated, findings: [{path, line, rule, key, len, first}]} ({} if none)."""
+        if not agent_id:
+            return {}
+        if agent_id not in self._sec:
+            try:
+                self._sec[agent_id] = json.loads(self._sec_path(agent_id).read_text())
+            except (OSError, ValueError):
+                self._sec[agent_id] = {}
+        return self._sec[agent_id]
+
+    def _store_secrets(self, agent: dict, findings, fhash: str, now: float) -> None:
+        old = {agentlib.secret_key(f) + f"|{f.get('line')}": f.get("first") for f in self.secret_findings(agent["id"]).get("findings") or []}
+        clean = []
+        for f in findings if isinstance(findings, list) else []:
+            c = agentlib.clean_secret_finding(f)
+            if c:
+                c["first"] = old.get(agentlib.secret_key(c) + f"|{c['line']}") or int(now)
+                clean.append(c)
+            if len(clean) >= 500:
+                break
+        before = len(self.secret_findings(agent["id"]).get("findings") or [])
+        self._sec[agent["id"]] = {"hash": fhash, "updated": int(now), "findings": clean}
+        self.want_secrets.discard(agent["id"])
+        try:
+            SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = self._sec_path(agent["id"]).with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._sec[agent["id"]], separators=(",", ":")))
+            os.chmod(tmp, 0o600)
+            tmp.replace(self._sec_path(agent["id"]))
+        except OSError as err:
+            log.warning("Couldn't save the password scan findings for %s: %s", agent.get("hostname"), err)
+        if len(clean) != before:
+            log.info("%s: password scan found %d place%s with a password", agent.get("hostname"), len(clean), "" if len(clean) == 1 else "s")
+
+    def _clear_secrets(self, agent: dict) -> None:
+        if self.secret_findings(agent["id"]):
+            self._sec[agent["id"]] = {}
+            try:
+                self._sec_path(agent["id"]).unlink()
+            except OSError:
+                pass
+            log.info("%s: password scan turned off; its findings were removed", agent.get("hostname"))
+        self.want_secrets.discard(agent["id"])
+
+    def secret_scan_config(self, agent: dict) -> dict:
+        """What the agent is told: scan or not, extra folders, how often. The add-on option picks
+        which computers scan by default; each computer's details can turn it on or off."""
+        h = self.hosts.get(agent.get("host_key") or "")
+        hs = (self.agent_settings["hosts"].get(h.key) or {}).get("secret_scan") or {} if h else {}
+        mode = hs.get("mode") or "default"
+        if mode == "default":
+            dflt = str(self.opts.get("agent_secret_scan", "off"))
+            ws = ((h.agent_report or {}) if h else {}).get("workstation") is True
+            on = dflt == "all" or (dflt == "servers" and not ws) or (dflt == "workstations" and ws)
+        else:
+            on = mode == "on"
+        return {"on": bool(on and h), "paths": list(hs.get("paths") or []), "hours": int(hs.get("hours") or 24)}
+
+    async def set_secret_scan(self, h: Host, mode: str, paths: list, hours: int, who: str | None) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        if mode == "default" and not paths and hours == 24:
+            hs.pop("secret_scan", None)
+        else:
+            hs["secret_scan"] = {"mode": mode, "paths": paths, "hours": hours}
+        self._save_agent_settings()
+        log.info("%s: password scan set to %s%s by %s", h.name, mode, f" (+{len(paths)} folder{'s' if len(paths) != 1 else ''})" if paths else "",
+                 who or "someone")
 
     # -- installed software ----------------------------------------------
     def _sw_path(self, agent_id: str) -> Path:
@@ -2888,6 +2977,7 @@ class Monitor:
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
+                "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",
@@ -3343,9 +3433,19 @@ class Monitor:
             states = res[2]["states"] if res else {}
             r["checks"] = {**r["checks"], "certs": {**cs, "certs": [{**c, "_state": (states.get(c["thumbprint"]) or ["", ""])[0]}
                                                                     for c in cs["certs"]]}}
+        secrets_out = None
+        if include_security:
+            ag = self.agents.agents.get(h.agent_id) or {}
+            hsc = (self.agent_settings["hosts"].get(h.key) or {}).get("secret_scan") or {}
+            secrets_out = {"status": r.get("secrets"), "findings": self.secret_findings(h.agent_id).get("findings") or [],
+                           "rules": agentlib.SECRET_RULES, "config": {"mode": hsc.get("mode") or "default", "paths": hsc.get("paths") or [],
+                                                                      "hours": hsc.get("hours") or 24},
+                           "on": self.secret_scan_config({**ag, "host_key": h.key})["on"],
+                           "default": str(self.opts.get("agent_secret_scan", "off")), "linux": ag.get("os_family") == "linux"}
         if not include_security:
             r.pop("security", None)
             r.pop("sessions", None)
+            r.pop("secrets", None)
         hist = {k: [{**{kk: vv for kk, vv in i.items() if kk != "_rx"}, "received": i.get("_rx")} for i in v[-100:]]
                 for k, v in h.agent_history.items() if include_security or k in ("events", "detections")}
         hs = self.agent_settings["hosts"].get(h.key) or {}
@@ -3381,7 +3481,7 @@ class Monitor:
                   else ("winget" if self.winget else None), "winget": self.winget_info}
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
                 "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first", "updates_from", "winget")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
-                "received": h.agent_seen, "security_visible": include_security,
+                "received": h.agent_seen, "security_visible": include_security, "secrets": secrets_out,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN}
                            for s in h.agent_checks]}
@@ -3816,6 +3916,38 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         if len(q) < 2 or len(q) > 100:
             return web.json_response({"error": "search for at least 2 characters"}, status=400)
         return web.json_response({"results": monitor.software_search(q)})
+
+    async def agent_secret_scan(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        mode = str(body.get("mode") or "default")
+        if mode not in ("default", "on", "off"):
+            return web.json_response({"error": "invalid setting"}, status=400)
+        raw = body.get("paths") or []
+        if isinstance(raw, str):
+            raw = raw.splitlines()
+        paths = []
+        for p in raw if isinstance(raw, list) else []:
+            p = str(p).strip()
+            if not p:
+                continue
+            if len(p) > 260 or not p.isprintable() or not re.match(r"^(/|[A-Za-z]:\\|\\\\)", p):
+                return web.json_response({"error": f"not a full folder path: {p[:80]}"}, status=400)
+            if p not in paths:
+                paths.append(p)
+        if len(paths) > 20:
+            return web.json_response({"error": "20 folders at most"}, status=400)
+        try:
+            hours = int(body.get("hours") or 24)
+        except (TypeError, ValueError):
+            hours = 0
+        if not 1 <= hours <= 720:
+            return web.json_response({"error": "how often must be 1 to 720 hours"}, status=400)
+        user = await access.who(req)
+        await monitor.set_secret_scan(h, mode, paths, hours, user["display"])
+        return web.json_response({"ok": True})
 
     async def agent_nic(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -4396,6 +4528,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
+    app.router.add_post("/api/hosts/{key}/agent/secret-scan", editor_only(agent_secret_scan))
     app.router.add_get("/api/software", software_search)
     app.router.add_post("/api/hosts/{key}/agent/backup-forget", editor_only(agent_backup_forget))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
@@ -4762,6 +4895,9 @@ def build_agent_app(monitor: Monitor) -> web.Application:
             resp["servers"] = servers  # agents use these from now on (plus the address they were installed with)
         if agent["id"] in monitor.want_apps:
             resp["send_apps"] = True
+        resp["secret_scan"] = monitor.secret_scan_config(agent)
+        if agent["id"] in monitor.want_secrets:
+            resp["send_secrets"] = True
         offer = monitor.agent_update_offer(agent, body)
         if offer:
             resp["agent_update"] = offer

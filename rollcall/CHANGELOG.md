@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.65.0 - 2026-11-12
+
+### Added
+- **Passwords left in files** (Windows agent 1.0.36, Linux agent 1.0.17): agents can look for passwords saved in plain text. That covers scripts, configuration files, notes, Word and Excel files, setup answer files and command histories, plus Group Policy `cpassword` values, the automatic sign-in password in the registry, cloud access keys and private keys with no passphrase.
+  - **Passwords never leave the computer.** For each one found, the agent sends only the file, the line, what kind of thing it is, the setting's name and how many characters it has. It never sends the password, any part of it, a hash of it, or the text around it. Rollcall keeps only those details, and only admins and editors can see them.
+  - Off by default. The new `agent_secret_scan` option chooses servers, workstations or all computers, and each computer can be turned on or off, with extra folders, under Details → **Security**.
+  - Runs after each report for up to 45 seconds at low priority, carries on where it left off, and re-reads only changed files. Cloud-only OneDrive files are skipped, so nothing is downloaded.
+  - A new *Passwords in files* check goes amber at most and never sends a notification. Each finding has an **Ignore** button.
+  - `-SecretTest` (Windows) and `--secret-test` (Linux) show what would be reported for a folder, without sending anything.
+
 ## 1.64.4 - 2026-11-12
 
 ### Added

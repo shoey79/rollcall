@@ -17,6 +17,9 @@
       - role checks: IIS app pools and sites, AD replication and SYSVOL,
         DHCP scope usage, Hyper-V VM state, shared printer status,
         RDS sessions, Microsoft Defender status and detections
+      - if turned on in the dashboard: files with passwords left in them. Only
+        where they are is sent (file, line, setting name, length), never the
+        passwords themselves.
 
     It runs every 5 minutes as a SYSTEM scheduled task and sends a small
     JSON report to the add-on. It never accepts commands from the add-on.
@@ -39,6 +42,10 @@
 .PARAMETER ShowReport
     Collect and print the report without sending it (troubleshooting).
 
+.PARAMETER SecretTest
+    Scan a folder for passwords left in files and print what would be reported: where each
+    one is, never the password. Nothing is sent.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File \\example.local\NETLOGON\PingMonitorAgent.ps1 -Install
 
@@ -57,10 +64,11 @@ param(
     [int]$IntervalMinutes = 5,
     [string[]]$ExtraServices = @(),
     [switch]$IgnoreCertificate,
-    [string]$DataPath = ''
+    [string]$DataPath = '',
+    [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.35'
+$AgentVersion = '1.0.36'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -121,7 +129,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null; secrets_sent = $null; secret_scan = $null }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -138,6 +146,8 @@ function Read-State {
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
+            if ($raw.secrets_sent) { $state.secrets_sent = [string]$raw.secrets_sent }
+            if ($raw.secret_scan) { $state.secret_scan = @{ on = [bool]$raw.secret_scan.on; paths = @($raw.secret_scan.paths | Where-Object { $_ } | ForEach-Object { [string]$_ }); hours = [int]$raw.secret_scan.hours } }
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
             if ($raw.exch_dbs) { $state.exch_dbs = [string]$raw.exch_dbs }
             if ($raw.exch_checked) { try { $state.exch_checked = [int64]$raw.exch_checked } catch { } }
@@ -1898,6 +1908,456 @@ function Get-StorageHealth($State) {
     return $st
 }
 
+# ---------------------------------------------------------------------------
+# Password exposure scan (opt-in: turned on per computer in the Rollcall dashboard)
+# ---------------------------------------------------------------------------
+# PRIVACY: no password ever leaves this computer. Not the password, not part of it, not a hash
+# of it and not the text around it. A finding holds only:
+#   path - the file it is in        line - the line (or paragraph) number
+#   rule - which kind of thing matched, e.g. "keyvalue"
+#   key  - the setting's name, e.g. "DbPassword" (letters, digits, space and ._- only, up to 40)
+#   len  - how many characters the value has
+# The matched value is measured and then dropped; it is never stored, logged or sent. The
+# findings kept between runs in secrets.json on this computer hold the same fields, nothing more.
+# File and folder names are sent as they are, so the admin can find the file.
+# The rules are generated from the Linux agent's, so both agents find the same things.
+$SecretsPath = Join-Path $DataPath 'secrets.json'
+$SecretFilesPath = Join-Path $DataPath 'secrets-files.txt'
+$SecretBudget = 45          # seconds of scanning per agent run; carries on next run
+$SecretMaxText = 2MB
+$SecretMaxOffice = 10MB
+$SecretPerFile = 20
+$SecretMax = 500
+$SecretRules = @(
+    ,@('cpassword', '\bcpassword[ \t]*=[ \t]*"([^"\r\n]+)"', 'cpassword', @(1), $null, 'any')
+    ,@('unattend', '(?is)<(AdministratorPassword|Password)>\s*<Value>([^<]{1,200})</Value>', '{1}', @(2), $null, 'any')
+    ,@('securestring', '(?i)ConvertTo-SecureString[ \t]+(?:-String[ \t]+)?(["\''])([^\r\n]{1,200}?)\1', 'ConvertTo-SecureString', @(2), '(?i)-AsPlainText', 'any')
+    ,@('securestring', '(?i)ConvertTo-SecureString\b[^|;\r\n]*?-String[ \t]+(["\''])([^\r\n]{1,200}?)\1', 'ConvertTo-SecureString', @(2), '(?i)-AsPlainText', 'any')
+    ,@('param', '(?i)(?:^|[ \t(])-(Password|Passwd|Pwd|Pass|PlainPassword|Secret|ApiKey|Token|ClientSecret)[ \t]+(["\''])([^\r\n]{1,200}?)\2', '-{1}', @(3), $null, 'any')
+    ,@('netuse', '(?i)\bnet(?:\.exe)?[ \t]+use\b[^\r\n]*?[ \t]/user:[^ \t\r\n]+[ \t]+("[^"\r\n]+"|[^ \t\r\n/"]+)', 'net use', @(1), $null, 'any')
+    ,@('netuse', '(?i)\bnet(?:\.exe)?[ \t]+use[ \t]+(?:[a-z]:[ \t]+|\*[ \t]+)?\\\\[^ \t\r\n]+[ \t]+("[^"\r\n]+"|[^ \t\r\n/"]+)', 'net use', @(1), $null, 'any')
+    ,@('netuser', '(?i)\bnet(?:\.exe)?[ \t]+user[ \t]+(?:"[^"\r\n]+"|[^ \t\r\n/"]+)[ \t]+("[^"\r\n]+"|[^ \t\r\n/"*]+)', 'net user', @(1), $null, 'any')
+    ,@('url', '(?i)\b([a-z][a-z0-9+.\-]{1,15})://[^ \t\r\n/:@"\''<>]{1,64}:([^ \t\r\n/@"\''<>]{1,128})@[\w.\-]', '{1}', @(2), $null, 'any')
+    ,@('cmdline', '\b[Mm]ysql(?:dump|admin)?\b[^|;\r\n]*?[ \t]-p([^ \t\r\n\''"\-][^ \t\r\n\''"]{2,199})', 'mysql -p', @(1), $null, 'any')
+    ,@('cmdline', '(?:^|[ \t;|&])sshpass[ \t]+-p[ \t]*(["\'']?)([^ \t\r\n"\'']{1,200})\1', 'sshpass -p', @(2), $null, 'any')
+    ,@('cmdline', '(?i)\bcurl\b[^|;\r\n]*?[ \t](?:-u|--user)[ \t]+["\'']?[^: \t\r\n"\'']+:([^ \t\r\n"\'']{1,200})', 'curl -u', @(1), $null, 'any')
+    ,@('aws', '\b((?:AKIA|ASIA)[0-9A-Z]{16})\b', 'AWS access key', @(1), $null, 'any')
+    ,@('github', '\b(gh[pousr]_[A-Za-z0-9]{36,251}|github_pat_[A-Za-z0-9_]{22,250})\b', 'GitHub token', @(1), $null, 'any')
+    ,@('slack', '\b(xox[abposr]-[A-Za-z0-9\-]{10,200})', 'Slack token', @(1), $null, 'any')
+    ,@('azurekey', '(?i)\b(AccountKey|SharedAccessKey)[ \t]*=[ \t]*([A-Za-z0-9+/]{20,}={0,2})', '{1}', @(2), $null, 'any')
+    ,@('connstring', '(?i)(?:^|[;"\'' \t])(password|pwd)[ \t]*=[ \t]*([^;"\''<> \t\r\n][^;"\''<>\r\n]{0,199})', '{1}', @(2), '(?i)(server|data source|user id|uid|host|database|initial catalog)[ \t]*=[^;\r\n]*;', 'any')
+    ,@('appsetting', '(?i)\bkey[ \t]*=[ \t]*"([^"\r\n]*(?:password|passwd|pwd|secret|api[_\-]?key|token)[^"\r\n]*)"[ \t]+value[ \t]*=[ \t]*"([^"\r\n]{1,200})"', '{1}', @(2), $null, 'any')
+    ,@('xml', '(?i)<([a-z0-9_:.\-]*(?:password|passwd|pwd|secret)[a-z0-9_:.\-]*)(?:[ \t][^>\r\n]*)?>([^<\r\n]{1,200})</', '{1}', @(2), $null, 'any')
+    ,@('keyvalue', '(?i)(?:^|[ \t;,{(\[&?"\''<$@])([a-z0-9_.\-]*(?:password|passwd|passwort|kennwort|wachtwoord|pwd|secret|api[_\-]?key|access[_\-]?key|auth[_\-]?token|access[_\-]?token|client[_\-]?secret|private[_\-]?key)[a-z0-9_.\-]*)["\'']?[ \t]*[:=][ \t]*(?:"([^"\r\n]{1,200})"|\''([^\''\r\n]{1,200})\''|([^ \t\r\n"\'',;}<>]{1,200}))', '{1}', @(2, 3, 4), $null, 'any')
+    ,@('notes', '(?i)(?:^|[ \t(\[,;:\-])(password|passwd|passcode|pass|pwd|pw|kennwort|passwort|wachtwoord)[ \t]*(?:is[ \t]+|:|=|-)[ \t]*["\'']?([^ \t\r\n"\'']{4,200})', '{1}', @(2), $null, 'doc')
+    ,@('savedlogin', '(?i)\bpassword[ \t]+([^ \t\r\n]{1,200})', 'password', @(1), $null, 'netrc')
+    ,@('savedlogin', '(?m)^[^#:\r\n]+:[^:\r\n]*:[^:\r\n]*:[^:\r\n]*:([^\r\n]{1,200})', '.pgpass', @(1), $null, 'pgpass')
+    ,@('privkey', '(?m)^Encryption:[ \t]*none', 'PuTTY key', @(), $null, 'any')
+)
+$SecretKeySkip = New-Object Text.RegularExpressions.Regex('(?i)(expir|polic|length|_len|maxage|minage|age$|hint|reset|requir|change|complex|histor|never|last|count|min[_\-]|max[_\-]|_min|_max|minimum|maximum|enabled|type|format|prompt|label|file|path|url|uri|hash|salt|field|column|placeholder|validat|strength|rule|mode|timeout|attempt|lockout|forgot|manager)')
+$SecretPlaceholder = New-Object Text.RegularExpressions.Regex('(?i)^(\$[\w{(]|%[\w()]+%|\{\{|\{%|<%|<[\w/!]|#\{|@\{|@\(|\[\[|env[:.]|process\.env|os\.environ|getenv|\(|vault[:(]|enc\(|encrypted[:(]|\{cipher\}|!vault|secretref|keyvault|/|\\\\|[a-z]:\\)')
+$SecretSheetHeader = New-Object Text.RegularExpressions.Regex('(?i)^[ \t"]*(passwords?|passwd|pwd|pw|pass|kennwort|passwort|wachtwoord)[ \t"]*$')
+$SecretFileName = New-Object Text.RegularExpressions.Regex('(?i)^((my[ _\-]?)?(password|passwd|pwd|login|credential|secret)s?|creds|(.*[^a-z])?(passwords|passwds|pwds|logins|credentials|creds|kennw(\u00f6|oe)rter|passw(\u00f6|oe)rter|wachtwoorden)([^a-z].*)?)$')
+$SecretWords = @('always', 'auto', 'default', 'disabled', 'dummy', 'empty', 'enabled', 'example', 'false', 'fixme', 'hidden', 'masked', 'n/a', 'never', 'nil', 'no', 'none', 'not_set', 'notset', 'null', 'optional', 'pass', 'passwd', 'password', 'placeholder', 'prompt', 'redacted', 'required', 'sample', 'secret', 'string', 'tbd', 'todo', 'token', 'true', 'undefined', 'unset', 'yes', 'your-password', 'your_password', 'yourpassword')
+$SecretSkipDirs = @('$recycle.bin', '.cache', '.cargo', '.config', '.gem', '.git', '.gradle', '.hg', '.local', '.m2',
+    '.mozilla', '.npm', '.nuget', '.nvm', '.pyenv', '.rbenv', '.rustup', '.svn', '.thunderbird', '.trash', '.venv',
+    '.vscode-server', '__pycache__', 'anaconda3', 'appdata', 'bower_components', 'dist-packages', 'miniconda3',
+    'node_modules', 'packages', 'program files', 'program files (x86)', 'programdata', 'site-packages', 'snap',
+    'system volume information', 'trash', 'vendor', 'venv', 'windows', 'winsxs')
+$SecretTextExt = @('bash', 'bat', 'cfg', 'cmd', 'cnf', 'conf', 'config', 'cs', 'csv', 'env', 'go', 'inc', 'ini',
+    'java', 'js', 'json', 'key', 'md', 'pem', 'php', 'ppk', 'properties', 'ps1', 'psd1', 'psm1', 'py', 'rb', 'reg',
+    'rtf', 'sh', 'sql', 'tfvars', 'toml', 'ts', 'txt', 'udl', 'vbs', 'xml', 'yaml', 'yml', 'zsh')
+$SecretTextNames = @('.bash_history', '.boto', '.env', '.git-credentials', '.my.cnf', '.mysql_history', '.netrc',
+    '.npmrc', '.pgpass', '.psql_history', '.pypirc', '.python_history', '.s3cfg', '.sh_history', '.zsh_history',
+    '_netrc', 'credentials', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_rsa')
+$SecretDocExt = @('csv', 'docx', 'md', 'rtf', 'txt', 'xlsx')
+$SecretCodeExt = @('cs', 'go', 'java', 'js', 'php', 'ps1', 'psm1', 'py', 'rb', 'ts', 'vbs')
+$SecretNameOnlyExt = @('doc', 'ods', 'odt', 'pdf', 'xls')
+
+function Get-SecretRules {
+    if (-not $script:SecretRx) {
+        $script:SecretRx = @(foreach ($r in $SecretRules) {
+                $need = $null
+                if ($r[4]) { $need = New-Object Text.RegularExpressions.Regex($r[4]) }
+                @{ id = $r[0]; rx = New-Object Text.RegularExpressions.Regex($r[1], [Text.RegularExpressions.RegexOptions]::Multiline)
+                    key = $r[2]; vals = @($r[3]); need = $need; scope = $r[5] }
+            })
+    }
+    return $script:SecretRx
+}
+
+# How long the value is if it looks like a real secret, else $null. The value itself is not kept.
+function Get-SecretValueLength([string]$Value, [string]$Key, [bool]$Quoted, [string]$Kind) {
+    $v = $Value.Trim()
+    if (-not $Quoted) { $v = $v.TrimEnd([char[]]'.,;)') }
+    if ($v.Length -ge 2 -and ($v[0] -eq [char]'"' -or $v[0] -eq [char]"'") -and $v[$v.Length - 1] -eq $v[0]) {
+        $v = $v.Substring(1, $v.Length - 2); $Quoted = $true
+    }
+    $low = $v.ToLowerInvariant()
+    if ($v.Length -lt 4 -or $SecretPlaceholder.IsMatch($v) -or [regex]::IsMatch($v, '^(.)\1+$') -or $SecretWords -ccontains $low) { return $null }
+    if ($low.Contains('example') -or $low.Contains('xxxx') -or $v.Contains('****') -or $v.Contains([string][char]0x2026) -or $v.Contains('<') -or $low -ceq $Key.ToLowerInvariant()) { return $null }
+    if (-not $Quoted) {
+        if ($Kind -eq 'code' -or $v.Contains('(') -or [regex]::IsMatch($v, '^[A-Za-z_]\w*(\.\w+)+$')) { return $null }
+    }
+    return $v.Length
+}
+
+# For free text: the word after "password" only counts if it looks like one (a digit or symbol,
+# or a capital letter after the first character).
+function Test-SecretComplex([string]$Value) {
+    $v = $Value.Trim().TrimEnd([char[]]'.,;)')
+    return ([regex]::IsMatch($v, '[^A-Za-z]') -or ($v.Length -gt 1 -and [regex]::IsMatch($v.Substring(1), '[A-Z]')))
+}
+
+function New-SecretFinding($Line, [string]$Rule, [string]$Key, $Len) {
+    return [ordered]@{ line = $Line; rule = $Rule; key = $Key; len = $Len }
+}
+
+# Run the rules over a file's text. Returns findings without any of the matched text.
+function Get-SecretTextFindings([string]$Text, [string]$Kind, [string]$Special = '') {
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{}; $hitLines = @{}
+    $starts = New-Object 'System.Collections.Generic.List[int]'
+    $starts.Add(0)
+    foreach ($m in [regex]::Matches($Text, "`n")) { $starts.Add($m.Index + 1) }
+    $sa = $starts.ToArray()
+    foreach ($r in (Get-SecretRules)) {
+        if ($r.scope -eq 'doc' -and $Kind -ne 'doc') { continue }
+        if (($r.scope -eq 'netrc' -or $r.scope -eq 'pgpass') -and $Special -ne $r.scope) { continue }
+        foreach ($m in $r.rx.Matches($Text)) {
+            $ln = [Array]::BinarySearch($sa, $m.Index)
+            if ($ln -lt 0) { $ln = (-bnot $ln) - 1 }
+            if ($r.need) {
+                $end = if ($ln + 1 -lt $sa.Length) { $sa[$ln + 1] } else { $Text.Length }
+                if (-not $r.need.IsMatch($Text.Substring($sa[$ln], $end - $sa[$ln]))) { continue }
+            }
+            $k = $r.key
+            for ($g = 1; $g -lt $m.Groups.Count; $g++) { $k = $k.Replace("{$g}", $m.Groups[$g].Value) }
+            $k = [regex]::Replace($k, '[^A-Za-z0-9_.\- ]', '')
+            if ($k.Length -gt 40) { $k = $k.Substring(0, 40) }
+            $generic = ($r.id -eq 'xml' -or $r.id -eq 'keyvalue' -or $r.id -eq 'notes')
+            if (($generic -or $r.id -eq 'appsetting') -and $SecretKeySkip.IsMatch($k)) { continue }
+            if ($generic -and $hitLines.ContainsKey($ln)) { continue }  # a more specific rule already reported this line
+            $n = $null
+            if ($r.vals.Count) {
+                $gi = $null
+                foreach ($g in $r.vals) { if ($m.Groups[$g].Success) { $gi = $g; break } }
+                if ($null -eq $gi) { continue }
+                $quoted = -not ($r.id -eq 'notes' -or ($r.id -eq 'keyvalue' -and $gi -eq 4))
+                $n = Get-SecretValueLength $m.Groups[$gi].Value $k $quoted $Kind
+                if ($null -eq $n) { continue }
+                if (($r.id -eq 'notes' -or ($r.id -eq 'keyvalue' -and $gi -eq 4 -and $Kind -eq 'doc')) -and -not (Test-SecretComplex $m.Groups[$gi].Value)) { continue }
+            }
+            $sig = "$ln|$($k.ToLowerInvariant())"
+            if ($seen.ContainsKey($sig)) { continue }
+            $seen[$sig] = $true
+            if (-not $generic) { $hitLines[$ln] = $true }
+            [void]$out.Add((New-SecretFinding ($ln + 1) $r.id $k $n))
+        }
+    }
+    # Private keys with no passphrase
+    foreach ($m in [regex]::Matches($Text, '-----BEGIN ((?:RSA |EC |DSA |OPENSSH )?)PRIVATE KEY-----')) {
+        $kind = $m.Groups[1].Value.Trim()
+        $body = $Text.Substring($m.Index + $m.Length, [Math]::Min(20000, $Text.Length - $m.Index - $m.Length))
+        if ($kind -eq 'OPENSSH') {
+            $b64 = [regex]::Replace(($body -split '-----END', 2)[0], '\s', '')
+            if ($b64.Length -gt 200) { $b64 = $b64.Substring(0, 200) }
+            while ($b64.Length % 4) { $b64 += '=' }
+            try { $raw = [Convert]::FromBase64String($b64) } catch { continue }
+            if ($raw.Length -lt 19 -or [Text.Encoding]::ASCII.GetString($raw, 0, 15) -ne "openssh-key-v1`0") { continue }
+            $n = ([int]$raw[15] -shl 24) + ([int]$raw[16] -shl 16) + ([int]$raw[17] -shl 8) + [int]$raw[18]
+            if ($raw.Length -lt 19 + $n -or [Text.Encoding]::ASCII.GetString($raw, 19, $n) -ne 'none') { continue }
+        } elseif ($body.Substring(0, [Math]::Min(200, $body.Length)).Contains('ENCRYPTED')) { continue }
+        $ln = [Array]::BinarySearch($sa, $m.Index)
+        if ($ln -lt 0) { $ln = (-bnot $ln) - 1 }
+        $label = if ($kind) { "$kind private key" } else { 'private key' }
+        [void]$out.Add((New-SecretFinding ($ln + 1) 'privkey' $label $null))
+    }
+    # Sort by line, keeping the rules' order within a line
+    $i = 0
+    $sorted = @($out | ForEach-Object { $i++; [pscustomobject]@{ f = $_; l = [int]$_.line; i = $i } } | Sort-Object l, i | ForEach-Object { $_.f })
+    return , $sorted
+}
+
+function ConvertFrom-XmlText([string]$Xml) {
+    $Xml = [regex]::Replace($Xml, '<w:tab/>|<w:br/>', ' ')
+    $Xml = [regex]::Replace($Xml, '<[^>]+>', '')
+    return $Xml.Replace('&lt;', '<').Replace('&gt;', '>').Replace('&quot;', '"').Replace('&apos;', "'").Replace('&amp;', '&')
+}
+
+function Read-ZipEntry($Zip, [string]$Name) {
+    $e = $Zip.GetEntry($Name)
+    if (-not $e) { return $null }
+    $sr = New-Object IO.StreamReader($e.Open(), [Text.Encoding]::UTF8)
+    try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
+}
+
+function Get-SecretExtension([string]$Name) {
+    $low = $Name.ToLowerInvariant()
+    $t = $low.TrimStart('.')
+    if ($t.Contains('.')) { return $low.Substring($low.LastIndexOf('.') + 1) }
+    return ''
+}
+
+function Get-SecretDedupe($Found) {
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($f in $Found) {
+        $r = if ($f.rule -eq 'filename' -or $f.rule -eq 'sheet') { $f.rule } else { '' }
+        $s = "$($f.line)|$r|$($f.key.ToLowerInvariant())"
+        if (-not $seen.ContainsKey($s)) { $seen[$s] = $true; [void]$out.Add($f) }
+        if ($out.Count -ge $SecretPerFile) { break }
+    }
+    return , $out
+}
+
+function Get-SheetKey([string]$Cell) {
+    $k = [regex]::Replace($Cell.Trim([char[]]" `t`"`r"), '[^A-Za-z0-9_.\- ]', '')
+    if ($k.Length -gt 40) { $k = $k.Substring(0, 40) }
+    return $k
+}
+
+# Findings for one file (no values). Throws if it can't be read.
+function Get-SecretFileFindings([string]$Path, [string]$Name) {
+    $low = $Name.ToLowerInvariant()
+    $ext = Get-SecretExtension $Name
+    $stem = if ($ext) { $Name.Substring(0, $Name.Length - $ext.Length - 1) } else { $Name }
+    $kind = if ($SecretDocExt -contains $ext) { 'doc' } elseif ($SecretCodeExt -contains $ext) { 'code' } else { 'config' }
+    $found = New-Object System.Collections.ArrayList
+    if (($SecretDocExt -contains $ext -or $SecretNameOnlyExt -contains $ext) -and $SecretFileName.IsMatch($stem)) {
+        [void]$found.Add((New-SecretFinding $null 'filename' '' $null))
+    }
+    if ($SecretNameOnlyExt -contains $ext) { return , $found }
+    if ($ext -eq 'docx' -or $ext -eq 'xlsx') {
+        try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
+        $zip = $null
+        try { $zip = [IO.Compression.ZipFile]::OpenRead($Path) } catch [IO.InvalidDataException] { return , $found }
+        try {
+            if ($ext -eq 'docx') {
+                $xml = Read-ZipEntry $zip 'word/document.xml'
+                if ($null -ne $xml) {
+                    $text = (@($xml -split '</w:p>') | ForEach-Object { ConvertFrom-XmlText $_ }) -join "`n"
+                    foreach ($f in (Get-SecretTextFindings $text 'doc')) { [void]$found.Add($f) }
+                }
+            } else {
+                $xml = Read-ZipEntry $zip 'xl/sharedStrings.xml'
+                if ($null -eq $xml) { $xml = '' }
+                $cells = @(foreach ($m in [regex]::Matches($xml, '<si>(.*?)</si>', [Text.RegularExpressions.RegexOptions]::Singleline)) { ConvertFrom-XmlText $m.Groups[1].Value })
+                foreach ($c in $cells) {
+                    if ($SecretSheetHeader.IsMatch($c)) { [void]$found.Add((New-SecretFinding $null 'sheet' (Get-SheetKey $c) $null)); break }
+                }
+                foreach ($f in (Get-SecretTextFindings (($cells | ForEach-Object { $_.Replace("`n", ' ') }) -join "`n") 'doc')) {
+                    $f.line = $null; [void]$found.Add($f)
+                }
+            }
+        } finally { $zip.Dispose() }
+        return Get-SecretDedupe $found
+    }
+    $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $buf = New-Object byte[] ([Math]::Min($fs.Length, $SecretMaxText + 1))
+        $got = 0
+        while ($got -lt $buf.Length) { $n = $fs.Read($buf, $got, $buf.Length - $got); if ($n -le 0) { break }; $got += $n }
+    } finally { $fs.Dispose() }
+    if ($got -ge 2 -and $buf[0] -eq 0xFF -and $buf[1] -eq 0xFE) { $text = [Text.Encoding]::Unicode.GetString($buf, 2, $got - 2) }
+    elseif ($got -ge 2 -and $buf[0] -eq 0xFE -and $buf[1] -eq 0xFF) { $text = [Text.Encoding]::BigEndianUnicode.GetString($buf, 2, $got - 2) }
+    elseif ([Array]::IndexOf($buf, [byte]0, 0, [Math]::Min($got, 8000)) -ge 0) { return , $found }
+    else {
+        $start = 0
+        if ($got -ge 3 -and $buf[0] -eq 0xEF -and $buf[1] -eq 0xBB -and $buf[2] -eq 0xBF) { $start = 3 }
+        try { $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($buf, $start, $got - $start) }
+        catch {
+            $enc = $null
+            try { $enc = [Text.Encoding]::GetEncoding(1252) } catch { $enc = [Text.Encoding]::GetEncoding(28591) }
+            $text = $enc.GetString($buf, 0, $got)
+        }
+    }
+    $special = ''
+    if ($low -eq '.netrc' -or $low -eq '_netrc') { $special = 'netrc' } elseif ($low -eq '.pgpass') { $special = 'pgpass' }
+    if ($ext -eq 'csv') {
+        foreach ($c in (($text -split "`n", 2)[0] -split ',')) {
+            if ($SecretSheetHeader.IsMatch($c.Trim())) { [void]$found.Add((New-SecretFinding 1 'sheet' (Get-SheetKey $c) $null)); break }
+        }
+    }
+    foreach ($f in (Get-SecretTextFindings $text $kind $special)) { [void]$found.Add($f) }
+    return Get-SecretDedupe $found
+}
+
+function Test-SecretCandidate([string]$Name, [long]$Size) {
+    $low = $Name.ToLowerInvariant()
+    $ext = Get-SecretExtension $Name
+    if ($ext -eq 'docx' -or $ext -eq 'xlsx') { return $Size -le $SecretMaxOffice }
+    if ($SecretNameOnlyExt -contains $ext) { return $true }
+    if ($SecretTextExt -contains $ext -or $SecretTextNames -contains $low -or $low.StartsWith('.env.')) { return $Size -le $SecretMaxText }
+    return $false
+}
+
+# Where to look by default: users' folders (not AppData), PowerShell command histories, setup answer
+# files, IIS, SYSVOL on domain controllers and common script folders, plus the dashboard's extra folders.
+function Get-SecretRoots($Conf) {
+    $roots = New-Object System.Collections.ArrayList
+    $sd = if ($env:SystemDrive) { $env:SystemDrive } else { 'C:' }
+    $win = if ($env:SystemRoot) { $env:SystemRoot } else { "$sd\Windows" }
+    $users = "$sd\Users"
+    $cands = @($users, "$sd\inetpub", "$sd\Scripts", "$sd\Temp", "$sd\Install", "$sd\Deploy",
+        "$win\Panther\unattend.xml", "$win\Panther\Unattend\unattend.xml", "$win\System32\sysprep\unattend.xml",
+        "$win\System32\sysprep\Panther\unattend.xml", "$sd\unattend.xml", "$sd\autounattend.xml")
+    if (Test-Path $users) {
+        foreach ($u in @(Get-ChildItem -LiteralPath $users -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })) {
+            $cands += $u.FullName + '\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        }
+    }
+    try {
+        $sv = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters' -Name SysVol -ErrorAction Stop).SysVol
+        if ($sv) { $cands += $sv }
+    } catch { }
+    foreach ($p in @($Conf.paths)) { if ([string]$p -match '^([A-Za-z]:\\|\\\\)') { $cands += [string]$p } }
+    foreach ($c in $cands) { if ($c -and (Test-Path -LiteralPath $c) -and -not $roots.Contains($c)) { [void]$roots.Add($c) } }
+    return [string[]]$roots.ToArray()
+}
+
+function Read-SecretState {
+    $st = @{ sig = $null; stack = @(); done_at = $null; pass_start = $null; errors = 0; truncated = $false; ms = 0
+        found = (New-Object System.Collections.ArrayList); files = @{}; cur = @{} }
+    if (Test-Path $SecretsPath) {
+        try {
+            $raw = Get-Content -Path $SecretsPath -Raw | ConvertFrom-Json
+            foreach ($k in 'sig', 'done_at', 'pass_start', 'errors', 'truncated', 'ms') { if ($null -ne $raw.$k) { $st[$k] = $raw.$k } }
+            $st.stack = @($raw.stack | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            foreach ($f in @($raw.found)) { if ($f) { [void]$st.found.Add([ordered]@{ path = [string]$f.path; line = $f.line; rule = [string]$f.rule; key = [string]$f.key; len = $f.len }) } }
+        } catch { }
+    }
+    if (Test-Path $SecretFilesPath) {
+        foreach ($l in [IO.File]::ReadAllLines($SecretFilesPath)) {
+            $p = $l.Split("`t", 3)
+            if ($p.Count -eq 3) { if ($l[0] -eq [char]'P') { $st.files[$p[2]] = $p[1] } else { $st.cur[$p[2]] = $p[1] } }
+        }
+    }
+    return $st
+}
+
+function Save-SecretState($St) {
+    $o = [ordered]@{ sig = $St.sig; stack = @($St.stack); done_at = $St.done_at; pass_start = $St.pass_start; errors = $St.errors
+        truncated = $St.truncated; ms = $St.ms; found = @($St.found) }
+    $o | ConvertTo-Json -Depth 4 -Compress | Set-Content -Path $SecretsPath -Encoding UTF8
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($kv in $St.files.GetEnumerator()) { $lines.Add("P`t$($kv.Value)`t$($kv.Key)") }
+    foreach ($kv in $St.cur.GetEnumerator()) { $lines.Add("C`t$($kv.Value)`t$($kv.Key)") }
+    [IO.File]::WriteAllLines($SecretFilesPath, $lines)
+}
+
+# Scan for up to $Budget seconds, carrying on where the last run stopped. Returns the scan state.
+function Invoke-SecretScan($State, [int]$Budget = $SecretBudget, [string[]]$Roots = $null) {
+    $conf = $State.secret_scan
+    if (-not $Roots -and -not ($conf -and $conf.on)) {
+        foreach ($p in $SecretsPath, $SecretFilesPath) { if (Test-Path $p) { Remove-Item -Path $p -Force } }
+        return $null
+    }
+    $hours = 24
+    if ($conf -and $conf.hours) { $hours = [Math]::Max(1, [int]$conf.hours) }
+    if (-not $Roots) { $Roots = @(Get-SecretRoots $conf) }
+    $st = if ($Budget) { Read-SecretState } else { $null }
+    if (-not $st) { $st = @{ sig = $null; stack = @(); done_at = $null; found = (New-Object System.Collections.ArrayList); files = @{}; cur = @{}; errors = 0; truncated = $false } }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $sig = (-join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes((($Roots -join "`n") + "|$hours"))) | ForEach-Object { $_.ToString('x2') })).Substring(0, 16)
+    $now = [long]([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
+    if ($st.sig -ne $sig) { $st.sig = $sig; $st.stack = @(); $st.done_at = $null }
+    if (-not @($st.stack).Count) {
+        if ($st.done_at -and ($now - [long]$st.done_at) -lt $hours * 3600) { return $st }
+        $list = @($Roots); [Array]::Reverse($list)
+        $st.stack = $list; $st.cur = @{}; $st.pass_start = $now; $st.errors = 0; $st.truncated = $false
+        if ($Budget) {
+            # Automatic sign-in (autologon) password kept in the registry in plain text
+            $wl = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+            $keep = @($st.found | Where-Object { $_.path -ne $wl })
+            $st.found = New-Object System.Collections.ArrayList
+            foreach ($f in $keep) { [void]$st.found.Add($f) }
+            try {
+                $dp = (Get-ItemProperty -Path ('Registry::' + $wl) -Name DefaultPassword -ErrorAction Stop).DefaultPassword
+                if ($dp) { [void]$st.found.Add([ordered]@{ path = $wl; line = $null; rule = 'autologon'; key = 'DefaultPassword'; len = ([string]$dp).Length }) }
+                $dp = $null
+            } catch { }
+            $st.cur[$wl] = '0'
+        }
+    }
+    $stack = New-Object System.Collections.ArrayList
+    foreach ($s in @($st.stack)) { [void]$stack.Add([string]$s) }
+    $cur = $st.cur; $prev = $st.files; $found = $st.found
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    if ($Budget) { try { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' } catch { } }
+    $visit = {
+        param($Item)
+        $path = $Item.FullName
+        if ($cur.ContainsKey($path)) { return }
+        $sig_ = "$([long]($Item.LastWriteTimeUtc.Ticks / 10000000)):$($Item.Length)"
+        $cur[$path] = $sig_
+        if ($prev[$path] -eq $sig_) { return }  # unchanged since the last pass: its findings stand
+        for ($j = $found.Count - 1; $j -ge 0; $j--) { if ($found[$j].path -eq $path) { $found.RemoveAt($j) } }
+        try { $new = Get-SecretFileFindings $path $Item.Name } catch { $st.errors = [int]$st.errors + 1; return }
+        foreach ($f in $new) {
+            if ($found.Count -ge $SecretMax) { $st.truncated = $true; break }
+            $f.Insert(0, 'path', $path)
+            [void]$found.Add($f)
+        }
+    }
+    while ($stack.Count) {
+        if ($Budget -and $sw.Elapsed.TotalSeconds -gt $Budget) { break }
+        $d = $stack[$stack.Count - 1]; $stack.RemoveAt($stack.Count - 1)
+        $items = $null
+        try {
+            if ([IO.File]::Exists($d)) { & $visit (New-Object IO.FileInfo($d)); continue }
+            $items = @((New-Object IO.DirectoryInfo($d)).GetFileSystemInfos() | Sort-Object Name)
+        } catch { continue }
+        $subdirs = New-Object System.Collections.ArrayList
+        $stopped = $false
+        foreach ($e in $items) {
+            try {
+                $attr = [int]$e.Attributes
+                if ($e -is [IO.DirectoryInfo]) {
+                    # Skip junctions and links (they loop back), except OneDrive's own folders
+                    if (($attr -band 0x400) -and $e.FullName -notmatch '\\OneDrive') { continue }
+                    if ($SecretSkipDirs -notcontains $e.Name.ToLowerInvariant() -and @($e.FullName.Split([char[]]'\/')).Count -lt 40) { [void]$subdirs.Add($e.FullName) }
+                } elseif (-not ($attr -band 0x441000)) {
+                    # (cloud-only files are skipped so the scan never downloads them)
+                    if (Test-SecretCandidate $e.Name $e.Length) { & $visit $e }
+                }
+            } catch { continue }
+            if ($Budget -and $sw.Elapsed.TotalSeconds -gt $Budget) { [void]$stack.Add($d); $stopped = $true; break }  # finish this folder next time
+        }
+        if (-not $stopped) { for ($j = $subdirs.Count - 1; $j -ge 0; $j--) { [void]$stack.Add($subdirs[$j]) } }
+    }
+    $st.stack = @($stack)
+    $st.ms = [int]$sw.Elapsed.TotalMilliseconds
+    if (-not $stack.Count) {
+        $st.files = $cur
+        $keep = @($found | Where-Object { $cur.ContainsKey($_.path) })
+        $st.found = New-Object System.Collections.ArrayList
+        foreach ($f in $keep) { [void]$st.found.Add($f) }
+        $st.cur = @{}
+        $st.done_at = $now
+        $st.finished = $true  # this run completed a pass
+    }
+    if ($Budget) { Save-SecretState $st }
+    return $st
+}
+
+# What the report says about the scan: its status, and the findings when they changed.
+function Get-SecretReport($State) {
+    $conf = $State.secret_scan
+    if (-not ($conf -and $conf.on)) { return [ordered]@{ on = $false } }
+    $st = Read-SecretState
+    $found = @($st.found | Sort-Object @{ e = { $_.path } }, @{ e = { [int]$_.line } }, @{ e = { $_.rule } } |
+            ForEach-Object { [ordered]@{ path = $_.path; line = $_.line; rule = $_.rule; key = $_.key; len = $_.len } })
+    $text = ($found | ForEach-Object { "$($_.path)|$($_.line)|$($_.rule)|$($_.key)|$($_.len)" }) -join "`n"
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $h = (-join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)) | ForEach-Object { $_.ToString('x2') })).Substring(0, 16)
+    $iso = { param($t) if ($t) { ([DateTime]'1970-01-01').AddSeconds([double]$t).ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $null } }
+    $r = [ordered]@{ on = $true; scanning = [bool]@($st.stack).Count; pass_start = (& $iso $st.pass_start); done_at = (& $iso $st.done_at)
+        files = $st.files.Count; errors = [int]$st.errors; truncated = [bool]$st.truncated; count = $found.Count; hash = $h }
+    if ($State.secrets_sent -ne $h) { $r.findings = $found }
+    return $r
+}
+
 function Get-Report($State, [string[]]$ExtraWatch) {
     $now = Get-Date
     $since = if ($State.last_run) { ([DateTime]$State.last_run).ToLocalTime().AddMinutes(-2) } else { $now.AddMinutes(-60) }
@@ -1937,6 +2397,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $report.apps_hash = Get-AppsHash $apps
         if ($State.apps_sent -ne $report.apps_hash) { $report.apps = $apps }  # only when it changed, or Rollcall asked
     } catch { Add-CollectorError 'installed software' $_ }
+    try { $report.secrets = Measure-Step 'password scan' { Get-SecretReport $State } } catch { Add-CollectorError 'password scan' $_ }
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
@@ -2147,6 +2608,13 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($res.body -and $res.body.watch_services) { $state.watch = @($res.body.watch_services) } else { $state.watch = @() }
     if ($report.Contains('apps')) { $state.apps_sent = $report.apps_hash }
     if ($res.body -and $res.body.send_apps) { $state.apps_sent = $null }  # Rollcall hasn't got this list: send it next time
+    if ($report.secrets -and $report.secrets.Contains('findings')) { $state.secrets_sent = $report.secrets.hash }
+    if ($res.body -and $res.body.send_secrets) { $state.secrets_sent = $null }
+    $sc = if ($res.body) { $res.body.secret_scan } else { $null }
+    if ($sc) {
+        $state.secret_scan = @{ on = [bool]$sc.on; paths = @(@($sc.paths) | Where-Object { $_ } | ForEach-Object { ([string]$_).Substring(0, [Math]::Min(260, ([string]$_).Length)) } | Select-Object -First 20)
+            hours = $(if ($sc.hours) { [int]$sc.hours } else { 24 }) }
+    } else { $state.secret_scan = @{ on = $false } }
     $state.last_run = ConvertTo-UtcString (Get-Date)
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
     if ($res.body -and $res.body.servers) {
@@ -2164,6 +2632,13 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($res.body -and $res.body.agent_update) {
         try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }
     }
+    # After the report, so it never slows reports down; the findings go with the next one
+    try {
+        $st = Invoke-SecretScan $state
+        if ($st -and $st.finished) {
+            Write-AgentLog ("Password scan finished: {0} file(s) checked, {1} finding(s)" -f $st.files.Count, @($st.found).Count)
+        }
+    } catch { Write-AgentLog "WARN Password scan: $($_.Exception.Message)" }
 }
 
 # ---------------------------------------------------------------------------
@@ -2214,6 +2689,11 @@ function Main {
             'uninstall' { $doUninstall = $true }
             'report' { $doReport = $true }
             default { throw "Unknown -Action '$Action'. Use Install, Uninstall or Report." }
+        }
+        if ($SecretTest) {
+            $st = Invoke-SecretScan @{} 0 @((Resolve-Path -LiteralPath $SecretTest).Path)
+            ConvertTo-Json -InputObject @($st.found | Sort-Object @{ e = { $_.path } }, @{ e = { [int]$_.line } }, @{ e = { $_.rule } }) -Depth 3
+            return
         }
         if ($doUninstall) { Uninstall-Agent; return }
         if ($doInstall) { Install-Agent; return }

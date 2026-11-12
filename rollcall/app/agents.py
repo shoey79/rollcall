@@ -260,6 +260,8 @@ def normalize_report(r) -> dict:
         fl["count"] = int(fl.get("count") or 0)
     except (TypeError, ValueError):
         fl["count"] = 0
+    if "secrets" in r:
+        r["secrets"] = clean_secret_status(r["secrets"])
     c = r["checks"] = _as_dict(r.get("checks"))
     if "iis" in c:
         iis = c["iis"] = _as_dict(c["iis"])
@@ -560,6 +562,82 @@ def nic_state(nics: dict, watch: dict) -> tuple[str, str, list] | None:
     n = len(watch)
     return OK, f"{n} watched adapter{'s' if n != 1 else ''} up", []
 
+# --------------------------------------------------------------------------
+# Password exposure scan. The agents never send passwords: only where each one is
+# (file, line, setting name, how many characters). Rollcall keeps only those fields.
+# --------------------------------------------------------------------------
+SECRET_RULES = {
+    "cpassword": "Group Policy password (cpassword), readable by any domain user",
+    "unattend": "Password in a Windows setup answer file",
+    "securestring": "Password in a script (ConvertTo-SecureString -AsPlainText)",
+    "param": "Password given on a command line",
+    "netuse": "Password in a net use command",
+    "netuser": "Password in a net user command",
+    "url": "User name and password in a web address",
+    "cmdline": "Password in a command (mysql, sshpass, curl)",
+    "aws": "AWS access key",
+    "github": "GitHub token",
+    "slack": "Slack token",
+    "azurekey": "Azure storage or Service Bus key",
+    "connstring": "Password in a database connection string",
+    "appsetting": "Password in an application setting",
+    "xml": "Password in an XML setting",
+    "keyvalue": "Password or secret in a setting",
+    "notes": "Password written in a note or document",
+    "savedlogin": "Saved password (.netrc or .pgpass)",
+    "privkey": "Private key with no passphrase",
+    "filename": "File name suggests it holds passwords",
+    "sheet": "Spreadsheet with a password column",
+    "autologon": "Automatic sign-in password in the registry",
+}
+SECRET_SCAN_MODES = ("off", "servers", "workstations", "all")
+_SECRET_KEY_CHARS = re.compile(r"[^A-Za-z0-9_.\- ]")
+
+
+def _int_or_none(v, hi):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= hi else None
+
+
+def clean_secret_finding(f) -> dict | None:
+    """One finding as Rollcall keeps it: only these five fields, whatever an agent sent."""
+    if not isinstance(f, dict) or f.get("rule") not in SECRET_RULES or not str(f.get("path") or "").strip():
+        return None
+    return {"path": str(f["path"]).strip()[:400], "line": _int_or_none(f.get("line"), 10_000_000), "rule": f["rule"],
+            "key": _SECRET_KEY_CHARS.sub("", str(f.get("key") or ""))[:40], "len": _int_or_none(f.get("len"), 100_000)}
+
+
+def clean_secret_status(s) -> dict:
+    s = _as_dict(s)
+    if not s.get("on"):
+        return {"on": False}
+    out = {"on": True, "scanning": s.get("scanning") is True, "truncated": s.get("truncated") is True,
+           "hash": str(s.get("hash") or "")[:64]}
+    for k in ("pass_start", "done_at"):
+        out[k] = str(s[k])[:30] if s.get(k) else None
+    for k in ("files", "errors", "count"):
+        out[k] = _int_or_none(s.get(k), 100_000_000) or 0
+    return out
+
+
+def secret_key(f: dict) -> str:
+    """What an Ignore button stores for a finding: the file, the rule and the setting (not the line, which moves)."""
+    return f"{f.get('path') or ''}|{f.get('rule') or ''}|{f.get('key') or ''}"[:600]
+
+
+def secrets_state(status: dict, findings: list, ign: "Ignore") -> tuple[str, str]:
+    """Amber at most: a password in a file is worth fixing, not worth waking anyone for."""
+    live = [f for f in findings if not ign.has("secret", secret_key(f))]
+    if live:
+        files = sorted({f["path"] for f in live})
+        names = ", ".join(re.split(r"[\\/]", p)[-1] for p in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
+        n = len(live)
+        return WARN, f"{n} possible password{'s' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}: {names}"
+    if not status.get("done_at"):
+        return OK, "First scan under way" if status.get("scanning") or not status.get("files") else "Scanning"
+    ignored = len(findings)
+    extra = f" ({ignored} ignored)" if ignored else ""
+    return OK, f"None found in {status.get('files') or 0} files{extra}"
+
 
 def fmt_speed(mbps: int) -> str:
     return f"{mbps / 1000:g} Gb/s" if mbps >= 1000 else f"{mbps} Mb/s"
@@ -582,7 +660,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange", "domain", "aduser")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange", "domain", "aduser", "secret")
 
 
 def disk_key(name) -> str:
@@ -600,7 +678,7 @@ def clean_ignore_item(kind: str, value: str) -> str:
     value = str(value or "").strip()
     if kind not in IGNORE_KINDS:
         raise ValueError(f"unknown kind '{kind}'")
-    if not value or len(value) > 128 or any(c in value for c in "\r\n\t"):
+    if not value or len(value) > (600 if kind == "secret" else 128) or any(c in value for c in "\r\n\t"):
         raise ValueError("invalid value")
     if kind == "event" and not value.isdigit():
         raise ValueError("an event must be a number")
@@ -1465,6 +1543,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         res = nic_state(nics, settings.get("nic_watch") or {})
         if res:
             checks.append(_check("nics", "Network", res[0], res[1], confirm=res[0] == CRIT))
+
+    rs = report.get("secrets")
+    if rs and rs.get("on"):
+        res = secrets_state(rs, settings.get("secret_findings") or [], ign)
+        checks.append(_check("secrets", "Passwords in files", res[0], res[1]))
 
     notable = {"events": [], "security": [], "detections": [], "failed_logons": None}
 

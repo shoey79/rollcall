@@ -1,5 +1,5 @@
 name: Rollcall
-version: "1.64.4"
+version: "1.65.0"
 slug: ping_monitor
 description: "Who's up, and how are they doing? Server monitoring by ping, service checks, Home Assistant sensors and optional Windows and Linux agents (disk, services, containers, logs, security, updates), with a dashboard and alerts."
 url: https://github.com/shoey79/rollcall
@@ -54,6 +54,7 @@ options:
   agent_sql_backup_hours: 36
   printer_supply_warn: 10
   software_updates: true
+  agent_secret_scan: "off"
   name_line: auto
   agent_exchange_queue_warn: 250
   agent_patch_days: 60
@@ -108,6 +109,7 @@ schema:
   agent_sql_backup_hours: int(1,8760)
   printer_supply_warn: int(1,50)
   software_updates: bool
+  agent_secret_scan: list(off|servers|workstations|all)
   name_line: list(auto|model|os|address|user|none)
   agent_exchange_queue_warn: int(1,1000000)
   agent_patch_days: int(0,3650)
