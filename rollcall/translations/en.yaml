@@ -1,0 +1,133 @@
+configuration:
+  interval:
+    name: Check interval (seconds)
+    description: How often each computer and service is checked, from 30 to 3600 seconds.
+  retry_interval:
+    name: Re-check after a miss (seconds)
+    description: How soon something that didn't answer is checked again before it goes red. Lower it (e.g. 60) to find out sooner.
+  ping_count:
+    name: Ping packets per check
+    description: How many pings to send each check. Any reply counts as up.
+  ping_timeout:
+    name: Ping timeout (seconds)
+    description: How long to wait for each ping reply.
+  service_timeout:
+    name: Service check timeout (seconds)
+    description: How long to wait for a port, web page, SIP or certificate check to answer.
+  history_days:
+    name: Keep history for (days)
+    description: How long check results and syslog messages are kept, from 1 to 90 days.
+  notify_services:
+    name: Phone or other notifications
+    description: Home Assistant notify services to alert, without the "notify." part, e.g. mobile_app_my_phone.
+  persistent_notification:
+    name: Home Assistant bell notification
+    description: Show a notification in Home Assistant's sidebar while something is down.
+  notify_recovery:
+    name: Notify when things come back
+    description: Also send a notification when something that was down is working again.
+  log_level:
+    name: Log level
+    description: How much the add-on writes to its Log tab. "info" is right for everyday use; "debug" helps when troubleshooting.
+  maintenance_minutes:
+    name: Default pause length (minutes)
+    description: The time limit offered when you pause a computer for a reboot or maintenance.
+  notification_url:
+    name: Notification link
+    description: Where tapping a notification goes. Leave blank to open the Rollcall dashboard.
+  admin_only_changes:
+    name: Only admins can make changes
+    description: Only Home Assistant administrators (and the people listed under Editors) can add, change, pause or delete things. Everyone else can look.
+  editors:
+    name: Editors
+    description: Home Assistant usernames of people who aren't administrators but may make changes.
+  cert_warn_days:
+    name: Certificate warning (days before expiry)
+    description: Certificate checks go amber this many days before the certificate expires.
+  cert_crit_days:
+    name: Certificate alert (days before expiry)
+    description: Certificate checks go red, with a notification, this many days before expiry or once expired.
+  ups_runtime_warn_minutes:
+    name: UPS runtime warning (minutes)
+    description: A UPS goes amber when its battery would last less than this. 0 turns it off. Each UPS can have its own limits in its details.
+  ups_runtime_crit_minutes:
+    name: UPS runtime alert (minutes)
+    description: A UPS goes red when its battery would last less than this. 0 turns it off.
+  ups_load_warn:
+    name: UPS load warning (%)
+    description: A UPS goes amber at this load or more. 95% or more is always red.
+  agent_stale_minutes:
+    name: Agent not reporting after (minutes)
+    description: An agent goes red when it hasn't reported for this long.
+  agent_slow_seconds:
+    name: Slow agent run (seconds)
+    description: An agent goes amber when one run takes longer than this. 0 turns it off.
+  agent_disk_warn:
+    name: Disk space warning (% free)
+    description: Disks go amber at or below this much free space. Each disk can have its own limits in the computer's details.
+  agent_disk_crit:
+    name: Disk space alert (% free)
+    description: Disks go red at or below this much free space.
+  agent_failed_logons:
+    name: Failed logons that count as an attack
+    description: This many failed logons in one agent report turns the Security check red.
+  agent_laps_overdue_days:
+    name: LAPS overdue (days)
+    description: The LAPS check goes red once a password rotation is this many days overdue.
+  agent_bitlocker_require:
+    name: Require BitLocker on
+    description: Which physical computers with a TPM must use BitLocker. "workstations" means Windows 10 and 11. Computers that already use BitLocker are always checked; virtual machines never are.
+  agent_sql_backup_hours:
+    name: SQL Server backup age (hours)
+    description: A database goes amber when it has had no full or differential backup for this long.
+  printer_supply_warn:
+    name: Printer supplies warning (%)
+    description: A printer goes amber when a toner, ink or other supply is at or below this level.
+  software_updates:
+    name: Highlight newer software versions
+    description: Mark installed programs that have a newer version. Windows uses the winget catalogue, downloaded once a day; Linux uses the package manager. Never alerts.
+  name_line:
+    name: Line under each name
+    description: What the dashboard shows under each computer's name, unless the computer has its own choice. "auto" shows the make and model, or else the operating system.
+  agent_exchange_queue_warn:
+    name: Exchange queue warning (messages)
+    description: The Exchange check goes amber when this many messages are waiting to be delivered.
+  agent_patch_days:
+    name: Windows updates overdue (days)
+    description: The Updates check goes amber when nothing has been installed for this long. 0 turns it off.
+  agent_event_alerts:
+    name: Alert on System log events
+    description: Alert when one of the watched System log events below appears (unexpected shutdowns, crashes, disk errors and so on).
+  agent_security_alerts:
+    name: Alert on Security log events
+    description: Alert when one of the watched Security log events below appears (lockouts, new accounts, group changes, cleared logs).
+  agent_event_watch:
+    name: Watched System log events
+    description: System log events that alert, written as "Source:ID" or just an ID, e.g. Kernel-Power:41.
+  agent_security_alert_ids:
+    name: Watched Security log event IDs
+    description: Security log event IDs that alert, e.g. 4740 for an account lockout.
+  agent_watch_services:
+    name: Extra services to watch
+    description: Windows or Linux services to watch on every server, as well as the ones Rollcall picks automatically.
+  agent_ignore:
+    name: Ignore everywhere
+    description: Things to ignore on every server, e.g. a service, event or disk. Most ignores are easier to add with the Ignore buttons in the dashboard.
+  agent_auto_add:
+    name: Add approved servers automatically
+    description: When you approve an agent, add its computer to the dashboard straight away.
+  agent_ssl:
+    name: Agent port uses HTTPS
+    description: Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder.
+  agent_certfile:
+    name: Agent HTTPS certificate
+    description: The certificate file in Home Assistant's /ssl folder.
+  agent_keyfile:
+    name: Agent HTTPS private key
+    description: The certificate's private key file in Home Assistant's /ssl folder.
+  hosts:
+    name: Import computers
+    description: Optional. Computers listed here are imported into the dashboard once, then this list is emptied. Adding them in the dashboard is easier.
+network:
+  8100/tcp: Agent reports (Windows and Linux servers send their health here)
+  5140/udp: Syslog (devices send their log messages here)

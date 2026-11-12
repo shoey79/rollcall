@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.64.4 - 2026-11-12
+
+### Added
+- **Friendlier Configuration page:** each option in the add-on's Configuration tab now has a plain name and a description, e.g. "UPS runtime warning (minutes)" instead of `ups_runtime_warn_minutes`, plus the ports on the Network section.
+
 ## 1.64.3 - 2026-11-12
 
 ### Fixed
