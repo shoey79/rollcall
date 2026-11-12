@@ -3514,14 +3514,22 @@ class Monitor:
         now = time.time()
         return uptime_pct(self.store.rows(key, now - DAY), now - DAY, now, self.max_gap)
 
+    @staticmethod
+    def history_start(now: float | None = None) -> int:
+        """Where the uptime strip starts. Segments are whole half hours on the clock (16:00-16:30 ...);
+        the last one is the current half hour, up to now."""
+        size = int(DAY / BUCKETS)
+        return int((now or time.time()) // size * size - (BUCKETS - 1) * size)
+
     def history(self, key: str) -> list[str]:
         now = time.time()
-        rows = self.store.rows(key, now - DAY)
+        first = self.history_start(now)
+        rows = self.store.rows(key, first)
         size = DAY / BUCKETS
         out = []
         for b in range(BUCKETS):
-            start = now - DAY + b * size
-            up, down, maint = coverage(rows, start, start + size, self.max_gap)
+            start = first + b * size
+            up, down, maint = coverage(rows, start, min(start + size, now), self.max_gap)
             if up + down <= 0:
                 out.append("m" if maint > 0 else "n")
             else:
@@ -3578,7 +3586,7 @@ class Monitor:
                 "key": h.key, "name": h.name, "host": h.host, "ip": h.ip,
                 "vm_host": on if on and on != h.name else None,
                 "status": h.status, "failures": h.failures, "latency_ms": h.latency,
-                "uptime_24h": self.uptime_24h(h.key), "history": self.history(h.key),
+                "uptime_24h": self.uptime_24h(h.key), "history": self.history(h.key), "history_start": self.history_start(),
                 "last_check": h.last_check, "last_change": h.last_change,
                 "next_check": h.next_due, "checking": h.checking,
                 "entity_id": h.entity_id,

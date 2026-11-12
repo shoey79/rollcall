@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.65.4 - 2026-11-12
+
+### Changed
+- **Uptime bar segments are whole half hours on the clock**, e.g. 16:00 – 16:30 and 16:30 – 17:00, instead of half hours counted back from now. The last segment is the current half hour, up to now, and the hover labels match.
+
 ## 1.65.3 - 2026-11-12
 
 ### Added
