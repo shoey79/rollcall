@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.67.0 - 2026-11-12
+
+### Added
+- **Critical alerts** ([#6](https://github.com/shoey79/rollcall/issues/6), thanks to [tomvining](https://github.com/tomvining) for the request): tick **Critical** on a computer (Edit → Monitoring schedule) and its problem notifications in the Home Assistant app become critical alerts that sound even when the phone is on silent.
+  - **iPhone:** a critical alert, which also gets through Do Not Disturb.
+  - **Android:** delivered at once on the `alarm_stream` channel, so it plays as an alarm on vibrate or silent.
+  - Used when it goes down, a check goes red, or a Veeam backup job fails. "Back up" messages and warnings stay normal.
+  - A 🚨 next to its name shows it's set.
+
 ## 1.66.0 - 2026-11-12
 
 ### Added

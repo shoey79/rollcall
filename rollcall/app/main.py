@@ -612,6 +612,8 @@ def validate_entry(raw: dict) -> dict:
             entry["schedule"] = sched
     if raw.get("no_alerts"):
         entry["no_alerts"] = True
+    elif raw.get("critical"):
+        entry["critical"] = True  # its "down" alerts get through a silenced phone
     if "syslog_alert" in raw:
         try:
             lvl = int(raw.get("syslog_alert"))
@@ -1358,6 +1360,7 @@ class Host:
     schedule: dict | None = None       # None: monitored all the time
     expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
     no_alerts: bool = False            # show its status, never notify
+    critical: bool = False             # its problem alerts are critical notifications on phones
     off_schedule: bool = False         # outside its monitoring schedule right now
     reachable: bool | None = None      # answered its last ping (shown while off schedule)
     check_by: str = "auto"             # how to tell it's up: "auto" (ping, or a recent agent report), "ping" or "agent"
@@ -1535,6 +1538,7 @@ class Monitor:
                             **({"schedule": h.schedule} if h.schedule else {}),
                             **({"expect_off": True} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
+                            **({"critical": True} if h.critical else {}),
                             **({"check_by": h.check_by} if h.check_by != "auto" else {}),
                             **({"icon": h.icon} if h.icon else {}),
                             **({"model": h.model} if h.model else {}),
@@ -1558,6 +1562,7 @@ class Monitor:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        h.critical = bool(entry.get("critical")) and not h.no_alerts
         h.snmp_community = entry.get("snmp_community") or None
         h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
         h.icon = str(entry.get("icon") or "") if ICON_REF.match(str(entry.get("icon") or "")) else ""
@@ -1602,6 +1607,7 @@ class Monitor:
         h.checks = entry["checks"]
         h.schedule = entry.get("schedule")
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        h.critical = bool(entry.get("critical")) and not h.no_alerts
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
         if "check_by" in entry:
@@ -2248,7 +2254,7 @@ class Monitor:
                 "agent_never": "Its agent hasn't reported yet.",
             }.get(reason, "No reply to ping on two consecutive checks.")
             msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
-            await self.notify(f"🔴 {h.name} is down", msg, tag)
+            await self.notify(f"🔴 {h.name} is down", msg, tag, critical=h.critical)
             await self.persist(tag, f"Rollcall: {h.name} is down", msg)
         elif old == RED and new in (GREEN, DEGRADED):
             await self.dismiss(tag)
@@ -2288,7 +2294,7 @@ class Monitor:
             return
         if new == RED and s.kind == "snmp":
             msg = f"{h.name} ({h.ip or h.host}): {s.detail}."
-            await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag)
+            await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag, critical=h.critical)
             await self.persist(tag, f"Rollcall: {h.name} SNMP", msg)
             return
         if old == RED and new == GREEN and s.kind == "snmp":
@@ -2298,7 +2304,7 @@ class Monitor:
             return
         if new == RED and s.kind == "ha":
             msg = f"{s.label} on {h.name} is {s.detail} ({s.entity})."
-            await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag)
+            await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag, critical=h.critical)
             await self.persist(tag, f"Rollcall: {h.name} {s.label}", msg)
         elif old == RED and new == GREEN and s.kind == "ha":
             await self.dismiss(tag)
@@ -2307,7 +2313,7 @@ class Monitor:
         elif new == RED:
             msg = (f"{h.name} ({h.ip or h.host}) is up, but {s.label} ({s.desc}) "
                    f"is not responding: {s.detail}.")
-            await self.notify(f"🟠 {h.name}: {s.label} is down", msg, tag)
+            await self.notify(f"🟠 {h.name}: {s.label} is down", msg, tag, critical=h.critical)
             await self.persist(tag, f"Rollcall: {h.name} {s.label} is down", msg)
         elif old == RED and new == GREEN:
             await self.dismiss(tag)
@@ -2323,7 +2329,9 @@ class Monitor:
         h = self.hosts.get(tag[len("ping_monitor_"):].split("__")[0])
         return bool(h and h.no_alerts)
 
-    async def notify(self, title: str, message: str, tag: str | None = None) -> None:
+    async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False) -> None:
+        """critical: sent to the Home Assistant app as a critical alert, which gets through a silenced
+        phone (a computer marked Critical, for problems only, never "back up")."""
         if self._quiet(tag):
             return
         for svc in self.opts.get("notify_services") or []:
@@ -2340,6 +2348,11 @@ class Monitor:
                     data["url"] = self.click_url          # iOS
                 if tag:
                     data["tag"] = tag  # newer alert for the same thing replaces older
+                if critical:
+                    # iPhone: a critical alert plays even when muted or on Do Not Disturb.
+                    data["push"] = {"sound": {"name": "default", "critical": 1, "volume": 1.0}, "interruption-level": "critical"}
+                    # Android: delivered at once and played on the alarm stream, so it sounds on silent.
+                    data.update(ttl=0, priority="high", channel="alarm_stream")
                 payload["data"] = data
             await self.ha.service("notify", svc, payload)
 
@@ -2993,8 +3006,8 @@ class Monitor:
                 title, msg = f"🟠 {h.name}: backup missed", f"{job} missed its scheduled run."
             else:
                 title, msg = f"🟠 {h.name}: backup overdue", f"{job} hasn't completed successfully for {why.split('for ')[-1]}."
-            await self.notify(title, msg,
-                              f"ping_monitor_{h.key}__backup_{slugify(str(j.get('name')))}")
+            await self.notify(title, msg, f"ping_monitor_{h.key}__backup_{slugify(str(j.get('name')))}",
+                              critical=h.critical and level == agentlib.CRIT)  # a failed backup, not a late one
         if changed:
             self._save_agent_settings()
 
@@ -3335,7 +3348,7 @@ class Monitor:
         if new == RED:
             if s.key == "agent_agent" and h.status == RED:
                 return  # the "down" alert already covers it
-            await self.notify(f"🟠 {h.name}: {s.label}", s.detail or "", tag)
+            await self.notify(f"🟠 {h.name}: {s.label}", s.detail or "", tag, critical=h.critical)
             await self.persist(tag, f"Rollcall: {h.name} {s.label}", s.detail or "")
         elif old == RED:
             await self.dismiss(tag)
@@ -3606,6 +3619,7 @@ class Monitor:
                 "off_schedule": h.off_schedule,
                 "schedule": "whenever it's on" if h.expect_off else describe_schedule(h.schedule),
                 "alerts": not h.no_alerts,
+                "critical": h.critical,
                 "services": {s.label: s.status for s in h.services + h.agent_checks},
             },
         )
@@ -3645,7 +3659,7 @@ class Monitor:
                 "maint_until": h.maint_until, "maint_seen_down": h.maint_seen_down,
                 "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else
                 ("Checked whenever it's on" if h.expect_off else None),
-                "expect_off": h.expect_off, "no_alerts": h.no_alerts,
+                "expect_off": h.expect_off, "no_alerts": h.no_alerts, "critical": h.critical,
                 "off_schedule": h.off_schedule, "reachable": h.reachable, "schedule_next": schedule_state(h.schedule, time.time())[2],
                 "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
                 "checks": h.checks,

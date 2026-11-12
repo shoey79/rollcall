@@ -1030,6 +1030,12 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 **Never alert.** **Never alert for this computer** (Edit → Monitoring schedule) turns off every notification for it: down, checks, agent, events and updates. The dashboard still shows its real status, it still counts in tabs such as Needs attention, and its entities and events still update, so your own automations keep working. A 🔕 next to its name shows it's set. It can be combined with any schedule.
 
+**Critical alerts.** **Critical** (Edit → Monitoring schedule) is for computers that should wake you, such as a mail server. When it goes down, one of its checks goes red, or a Veeam backup job fails, the notification sent to the Home Assistant app is a critical alert:
+- **iPhone:** a critical alert, which plays a sound even when the phone is muted or on Do Not Disturb. iOS asks you to allow critical alerts for the Home Assistant app the first time.
+- **Android:** a high-priority notification on the `alarm_stream` channel, which plays as an alarm even on vibrate or silent. To get through Do Not Disturb too, allow that channel to override it in Android's notification settings for the Home Assistant app.
+
+"Back up" messages, amber warnings, certificate reminders and syslog alerts stay normal. Only `mobile_app_…` notify services get critical alerts; others get the normal message. Pauses and monitoring schedules still apply. A 🚨 next to its name shows it's set, and it can't be combined with **Never alert**.
+
 ---
 
 ## Administration
