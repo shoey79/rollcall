@@ -60,7 +60,7 @@ param(
     [string]$DataPath = ''
 )
 
-$AgentVersion = '1.0.34'
+$AgentVersion = '1.0.35'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -941,8 +941,9 @@ function Get-CertBindings {
         $out = & netsh.exe http show sslcert 2>$null
         $where = ''
         foreach ($line in $out) {
-            if ($line -match '^\s*(IP:port|Hostname:port|Central Certificate Store)\s*:\s*(\S+)') { $where = $Matches[2] }
-            elseif ($line -match '^\s*Certificate Hash\s*:\s*([0-9a-fA-F]{40})') {
+            # The labels are in the system's language, so go by the values: an address:port, then a 40-hex hash
+            if ($line -match '^\s*\S.*?\s+:\s*((?:\d{1,3}\.){3}\d{1,3}:\d+|\[[0-9a-fA-F:]+\]:\d+|[A-Za-z0-9.*_-]+:\d+)\s*$') { $where = $Matches[1] }
+            elseif ($line -match '^\s*\S.*?\s+:\s*([0-9a-fA-F]{40})\s*$') {
                 $t = $Matches[1].ToLower()
                 if (-not $map[$t]) { $map[$t] = New-Object System.Collections.Generic.List[string] }
                 if ($where -and $map[$t].Count -lt 4) { $map[$t].Add("HTTPS $where") }
@@ -1136,7 +1137,10 @@ function Get-LogEvents([string]$Log, [string]$Provider, [int[]]$Ids, [DateTime]$
     if ($Provider) { $f.ProviderName = $Provider }
     if ($Ids) { $f.Id = $Ids }
     try { @(Get-WinEvent -FilterHashtable $f -MaxEvents $Max -ErrorAction Stop) }
-    catch { if ($_.Exception.Message -match 'No events were found|specified query') { @() } else { throw } }
+    catch {
+        # "No events found" is an error in Get-WinEvent; its message is in the system's language, so go by its ID
+        if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -match 'No events were found|specified query') { @() } else { throw }
+    }
 }
 
 function Get-GroupPolicyStatus {

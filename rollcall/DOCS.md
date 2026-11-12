@@ -1151,6 +1151,14 @@ Rollcall was called Ping Monitor until 1.6.0. Only the visible name changed, so 
 
 ---
 
+## Languages
+
+Rollcall's dashboard, notifications and Home Assistant entities are in English. Dates and times follow the browser's own settings, e.g. 11.11.2026 14:05 in a German browser.
+
+The agents work on Windows and Linux in any language:
+- Text that comes from the system, such as Windows event messages, service names and program names, is shown as the system wrote it, so it may be in another language.
+- Anything the agents read to make decisions doesn't depend on the system's language. Linux commands run in the C locale. On Windows, the agents use IDs and values rather than translated labels, and the signed-in user check understands the common languages' words for an active session.
+
 ## Troubleshooting
 
 **A computer shows down but it's on.**

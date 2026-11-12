@@ -45,7 +45,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.15"
+AGENT_VERSION = "1.0.16"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -115,8 +115,10 @@ def run(cmd, timeout=30):
     if not shutil.which(cmd[0]):
         return 127, "", "%s not found" % cmd[0]
     try:
+        # Commands' output is parsed, so read it in the C locale whatever the system's language is
+        env = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8", LANGUAGE="")
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
-                           universal_newlines=True, errors="replace")
+                           universal_newlines=True, errors="replace", env=env)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "timed out after %ss" % timeout

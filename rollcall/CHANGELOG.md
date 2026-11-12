@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.64.3 - 2026-11-12
+
+### Fixed
+- **Agents on non-English systems** (Windows agent 1.0.35, Linux agent 1.0.16):
+  - **Windows "no events" error:** an event log with no matching events gave a collector error on non-English Windows, because the agent recognised that case by Windows' English message. It now goes by the error's ID.
+  - **Certificate bindings:** the certificates bound to IIS and other HTTPS listeners weren't found on non-English Windows, because `netsh` labels are translated. They're now read by their values.
+  - **Linux:** commands whose output the agent reads now always run in the C locale, so their output is the same whatever the system's language.
+- The docs say what's in English and what follows the system's language (new **Languages** section).
+
 ## 1.64.2 - 2026-11-12
 
 ### Fixed
