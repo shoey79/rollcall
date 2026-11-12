@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.64.2 - 2026-11-12
+
+### Fixed
+- **Pause stuck on "Waiting for it to go down" after a reboot.** A paused computer only resumed once a check had seen it down. Computers checked by their agent (and Automatic ones with an agent) count as up for 10 minutes after each report, so a normal reboot never looked like down.
+  - A restart is now spotted from the agent's uptime: if it goes back between reports and the boot was after the pause began, the pause ends as soon as the agent reports again.
+  - While waiting for a paused computer to go down, it's checked every 15 seconds, so quick reboots of pinged computers aren't missed either.
+
 ## 1.64.1 - 2026-11-11
 
 ### Fixed

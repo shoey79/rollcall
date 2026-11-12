@@ -1342,7 +1342,8 @@ class Host:
     next_due: float = 0.0
     checking: bool = False
     maint_until: float | None = None   # set while paused for maintenance
-    maint_seen_down: bool = False      # has it stopped replying since the pause began?
+    maint_seen_down: bool = False      # has it stopped replying (or restarted) since the pause began?
+    maint_started: float | None = None # when the pause began
     maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
     schedule: dict | None = None       # None: monitored all the time
     expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
@@ -1812,13 +1813,14 @@ class Monitor:
             if h and m.get("until"):
                 h.maint_until = float(m["until"])
                 h.maint_seen_down = bool(m.get("seen_down"))
+                h.maint_started = m.get("started")
                 h.status = MAINT
                 for s in h.services:
                     s.status, s.failures = UNKNOWN, 0
                 log.info("%s: maintenance restored, until %s", h.name, iso(h.maint_until))
 
     def _save_maint(self) -> None:
-        data = {h.key: {"until": h.maint_until, "seen_down": h.maint_seen_down}
+        data = {h.key: {"until": h.maint_until, "seen_down": h.maint_seen_down, "started": h.maint_started}
                 for h in self.hosts.values() if h.maint_until}
         try:
             MAINT_PATH.write_text(json.dumps(data))
@@ -1830,6 +1832,7 @@ class Monitor:
         old = h.status
         h.maint_until = now + minutes * 60
         h.maint_seen_down = False
+        h.maint_started = now
         h.status = MAINT
         h.last_change = now
         h.down_since = None
@@ -1999,6 +2002,8 @@ class Monitor:
             retry = (new == AMBER or (new == MAINT and not h.off_schedule)
                      or any(s.status == AMBER for s in h.services))
             h.next_due = now + (min(self.retry_interval, self.interval) if retry else self.interval)
+            if h.maint_until and not h.maint_seen_down:
+                h.next_due = min(h.next_due, now + 15)  # paused until it's back: check often, so a quick restart isn't missed
             nxt = schedule_state(h.schedule, now)[2] if h.schedule else None
             if nxt and now < nxt < h.next_due:
                 h.next_due = nxt + 1  # check as soon as its window opens or closes
@@ -3040,7 +3045,18 @@ class Monitor:
             self._nic_rates(h, report, received)
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
+        prev_up = (h.agent_report or {}).get("uptime_s")
         h.agent_report, h.agent_seen = report, received
+        up = report.get("uptime_s")
+        if (h.maint_until and not h.maint_seen_down and h.maint_started and not restoring and not reeval
+                and isinstance(up, (int, float)) and isinstance(prev_up, (int, float))
+                and up < prev_up and received - up > h.maint_started - 300):
+            # Paused until it's back: it booted after the pause began, so it has been down and come back,
+            # even if it was quick enough that no check saw it (agents count as up for 10 minutes).
+            h.maint_seen_down = True
+            self._save_maint()
+            h.next_due = 0
+            log.info("%s: restarted during maintenance (booted %s)", h.name, iso(received - up))
         if h.check_by != "ping" and h.status not in (GREEN, DEGRADED) and not restoring:
             h.next_due = 0  # it's reporting again: show it as up now, not at the next check
         notable = result["notable"]

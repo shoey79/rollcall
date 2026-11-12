@@ -60,9 +60,8 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 
 Rollcall opens on the **Overview**:
 
-- **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open the matching list.
+- **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open a list of just those computers, as a temporary tab with **×** to go back to All.
 - **Alerts** lists everything that isn't green, worst and newest first. That includes computers not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the computer's Details on the right tab.
-- **The summary tiles** at the top (Up, Need attention, Down, Paused or off, Agents) open a list of just those computers, as a temporary tab with **×** to go back to All.
 - **At a glance** shows every computer as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
   - **Group** (the default): one section per group. A computer's group is the one typed in its Edit form, or else its icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
   - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A computer in two tabs appears in both.
@@ -935,7 +934,9 @@ Choose **Pause** on a row, or in Details, before rebooting or working on a machi
 
 - When it has gone down and replies again, monitoring resumes by itself, with a "back online" message if `notify_recovery` is on.
 - If it isn't back by the time limit, it goes red and you're alerted.
-- If it never appeared to go down (a reboot quicker than the check interval), it resumes quietly at the time limit.
+- While it's waiting for the machine to go down, it's checked every 15 seconds, so a quick reboot isn't missed.
+- With an agent, a restart is also spotted from the agent's uptime: if the computer booted after the pause began, it counts as having gone down and come back. This matters for computers checked by their agent, which count as up for 10 minutes after each report, so a reboot never shows as down.
+- If it never appeared to go down or restart, it resumes quietly at the time limit.
 - **Resume** ends the pause early.
 
 Paused time doesn't count towards uptime, and pauses survive an add-on restart. An agent isn't flagged for not reporting while its server is paused, and gets a full `agent_stale_minutes` after the pause ends. To pause a whole tab at once, see [Tabs](#tabs).
