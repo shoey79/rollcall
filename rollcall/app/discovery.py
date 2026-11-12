@@ -106,6 +106,31 @@ def suggest_ranges(host_ips: list[str], local: list[str]) -> list[str]:
     return out[:6]
 
 
+def route_for(ip: str, interfaces: list[dict]) -> dict | None:
+    """Which of Home Assistant's interfaces the host sends traffic for this address through:
+    the one on the address's subnet, else the one with the default route. None if unknown
+    (a name that isn't an address, or no interface list)."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if a.version != 4 or not interfaces:
+        return None
+    best = None
+    for i in interfaces:
+        for cidr in i.get("addresses") or []:
+            try:
+                net = ipaddress.ip_interface(cidr).network
+            except ValueError:
+                continue
+            if a in net and (best is None or net.prefixlen > best[1].prefixlen):
+                best = (i, net)
+    if best:
+        return {"name": best[0]["name"], "network": str(best[1]), "routed": False}
+    prim = next((i for i in interfaces if i.get("primary")), None)
+    return {"name": prim["name"], "network": None, "routed": True} if prim else None
+
+
 # ---------------------------------------------------------------- probes
 async def tcp_open(ip: str, port: int, timeout: float) -> bool:
     try:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.66.0 - 2026-11-12
+
+### Added
+- **Networks Rollcall uses** ([#5](https://github.com/shoey79/rollcall/issues/5), thanks to [tomvining](https://github.com/tomvining) for the request): when Home Assistant has more than one network interface, Discover devices lists each one with its subnet, and you choose which ones Rollcall uses.
+  - Discovery only suggests and scans the chosen networks.
+  - The add and edit form says which interface a device will be reached through, and warns if it's another one.
+  - Each device's Details shows **Reached through**, e.g. `eth1 (10.0.1.0/24)` or the default route, marked ⚠ if it isn't one of Rollcall's networks.
+  - Home Assistant's host still picks the interface for each check (the one on the device's subnet, or the default route); this keeps Rollcall to the networks you pick and shows where each check goes.
+
 ## 1.65.4 - 2026-11-12
 
 ### Changed

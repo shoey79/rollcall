@@ -1266,8 +1266,10 @@ class HomeAssistant:
         except Exception:  # noqa: BLE001
             return {}
 
-    async def host_networks(self) -> list[str]:
-        """Home Assistant's own IPv4 addresses with prefix, e.g. ["192.168.1.5/24"], from the Supervisor."""
+    async def host_interfaces(self) -> list[dict]:
+        """Home Assistant's connected network interfaces from the Supervisor:
+        [{"name": "eth0", "addresses": ["192.168.1.5/24"], "primary": True}, ...]. "primary" is the one
+        with the default route, which reaches anything not on a directly attached subnet."""
         if not self.enabled:
             return []
         try:
@@ -1282,8 +1284,14 @@ class HomeAssistant:
         for i in data.get("interfaces") or []:
             if i.get("connected") is False:
                 continue
-            out += [a for a in ((i.get("ipv4") or {}).get("address") or []) if isinstance(a, str)]
+            addrs = [a for a in ((i.get("ipv4") or {}).get("address") or []) if isinstance(a, str)]
+            if addrs:
+                out.append({"name": str(i.get("interface") or "?"), "addresses": addrs, "primary": i.get("primary") is True})
         return out
+
+    async def host_networks(self) -> list[str]:
+        """Home Assistant's own IPv4 addresses with prefix, e.g. ["192.168.1.5/24"], from the Supervisor."""
+        return [a for i in await self.host_interfaces() for a in i["addresses"]]
 
     async def addon_slug(self) -> str | None:
         """This add-on's slug from the Supervisor (e.g. local_ping_monitor)."""
@@ -1421,6 +1429,7 @@ class Monitor:
         self.syslog_unknown: dict[str, dict] = {}
         self.scan: discovery.Scan | None = None
         self.discovery = self._load_discovery()
+        self._ifaces: tuple[float, list] = (0.0, [])  # (when fetched, Home Assistant's interfaces)
         self.syslog_port: int | None = None  # the port on the Home Assistant machine, if known
         self.ha = ha
         self.interval = int(opts["interval"])
@@ -2847,9 +2856,40 @@ class Monitor:
         try:
             d = json.loads(DISCOVERY_PATH.read_text())
             return {"results": list(d.get("results") or []), "summary": dict(d.get("summary") or {}),
-                    "ranges": str(d.get("ranges") or ""), "hidden": list(d.get("hidden") or [])}
+                    "ranges": str(d.get("ranges") or ""), "hidden": list(d.get("hidden") or []),
+                    "networks": [str(x) for x in d.get("networks") or []] or None}
         except (OSError, ValueError):
-            return {"results": [], "summary": {}, "ranges": "", "hidden": []}
+            return {"results": [], "summary": {}, "ranges": "", "hidden": [], "networks": None}
+
+    # ---- Networks Rollcall uses ----
+    # Rollcall doesn't pick an interface: Home Assistant's host sends each check out of the interface on
+    # the device's subnet (or the default route). This choice keeps discovery to the networks picked,
+    # and the dashboard shows which interface each device is reached through.
+    async def interfaces(self) -> list[dict]:
+        now = time.time()
+        if now - self._ifaces[0] > 300:
+            got = await self.ha.host_interfaces()
+            self._ifaces = (now, got if got or now - self._ifaces[0] > 3600 else self._ifaces[1])
+        return self._ifaces[1]
+
+    async def network_view(self) -> dict:
+        ifs = await self.interfaces()
+        use = self.discovery.get("networks")
+        return {"interfaces": [{**i, "used": use is None or i["name"] in use} for i in ifs], "chosen": use is not None}
+
+    async def allowed(self, ip: str) -> tuple[bool, dict | None]:
+        """Is this address reached through a network Rollcall uses? (True, None) when unknown."""
+        ifs = await self.interfaces()
+        use = self.discovery.get("networks")
+        via = discovery.route_for(ip, ifs)
+        if not via or use is None:
+            return True, via
+        return via["name"] in use, via
+
+    async def set_networks(self, names: list[str] | None, who: str) -> None:
+        self.discovery["networks"] = names
+        self._save_discovery()
+        log.info("Networks Rollcall uses set to %s by %s", ", ".join(names) if names is not None else "all", who or "someone")
 
     def _save_discovery(self) -> None:
         try:
@@ -2874,6 +2914,13 @@ class Monitor:
         addrs, problems = discovery.parse_ranges(ranges)
         if problems:
             return {"error": "; ".join(problems)}
+        outside = {}
+        for ip in addrs:
+            ok, via = await self.allowed(ip)
+            if not ok:
+                outside.setdefault(via["name"], ip)
+        if outside:
+            return {"error": "; ".join(f"{ip} is reached through {n}, which isn't one of the networks Rollcall uses" for n, ip in outside.items())}
         if not addrs:
             return {"error": "give an address range to scan, e.g. 192.168.1.0/24"}
         ping_one = lambda ip: ping(ip, 1, 1)  # noqa: E731
@@ -2901,10 +2948,15 @@ class Monitor:
         name_of = lambda k: self.hosts[k].name if k in self.hosts else None  # noqa: E731
         out = [{**d, "known": known.get(d["ip"]), "known_name": name_of(known.get(d["ip"])), "hidden": d["ip"] in hidden}
                for d in sorted(results, key=lambda d: tuple(int(x) for x in d["ip"].split(".")))]
-        nets = await self.ha.host_networks()
+        nv = await self.network_view()
+        nets = [a for i in nv["interfaces"] if i["used"] for a in i["addresses"]]
+        ips = []
+        for h in self.hosts.values():
+            if (await self.allowed(h.ip or h.host))[0]:
+                ips.append(h.ip or h.host)
         return {"running": bool(sc), "summary": sc.summary() if sc else self.discovery["summary"], "results": out,
-                "ranges": self.discovery["ranges"], "suggested": discovery.suggest_ranges([h.ip or h.host for h in self.hosts.values()], nets),
-                "ha_networks": nets}
+                "ranges": self.discovery["ranges"], "suggested": discovery.suggest_ranges(ips, nets),
+                "ha_networks": nets, "networks": nv}
 
     async def _backup_alerts(self, h: Host, report: dict) -> None:
         """One notification per failed Veeam job run, and one when a job becomes overdue."""
@@ -3715,6 +3767,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         user = await access.who(req)
         snap["user"] = user["display"] or None
         snap["can_edit"] = user["can_edit"]
+        snap["networks"] = await monitor.network_view()
         if user["can_edit"] and monitor.agents:
             snap["agents_pending"] = len(monitor.agents.pending)
         if not user["can_edit"]:
@@ -4412,6 +4465,20 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
         res = await monitor.start_scan(str(body.get("ranges") or "")[:2000], str(body.get("community") or "public")[:64], user["display"] or "")
         return web.json_response(res, status=400 if res.get("error") else 200)
 
+    async def discovery_networks(req):
+        body = await req.json()
+        names = body.get("networks")
+        if names is not None:
+            known = {i["name"] for i in await monitor.interfaces()}
+            names = [str(n) for n in names if str(n) in known] if isinstance(names, list) else []
+            if not names:
+                return web.json_response({"error": "pick at least one network"}, status=400)
+            if set(names) == known:
+                names = None  # all of them, including any added later
+        user = await access.who(req)
+        await monitor.set_networks(names, user["display"] or "")
+        return web.json_response({"ok": True})
+
     async def discovery_cancel(_req):
         if monitor.scan and monitor.scan.finished is None:
             monitor.scan.cancelled = True
@@ -4529,6 +4596,7 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
     app.router.add_get("/api/discovery", editor_only(discovery_get))
     app.router.add_post("/api/discovery/scan", editor_only(discovery_scan))
+    app.router.add_post("/api/discovery/networks", editor_only(discovery_networks))
     app.router.add_post("/api/discovery/cancel", editor_only(discovery_cancel))
     app.router.add_post("/api/discovery/hide", editor_only(discovery_hide))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))

@@ -160,6 +160,15 @@ From that it guesses what the device is: domain controller, Exchange, SQL Server
 - Devices already in Rollcall are left out unless you tick **Show devices already in Rollcall**; then they link to their Details.
 - **Doesn't answer ping:** Rollcall checks by ping, so once added it would show as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent, as a computer counts as up while its agent reports.
 
+#### Networks Rollcall uses
+
+If Home Assistant has more than one network interface (e.g. one for your smart-home devices and one for your servers), **Networks Rollcall uses** at the top of Discover devices lists each one with its subnet. Untick the ones Rollcall shouldn't use:
+- Discovery only suggests and scans the networks that are ticked. A scan that includes an address on another network is refused.
+- When you add or edit a device, the form says which interface it will be reached through, with a warning if that isn't one of Rollcall's networks.
+- Each device's Details shows **Reached through**, e.g. `eth1 (10.0.1.0/24)`, or the default route for addresses on no directly attached subnet. It's marked ⚠ if that isn't one of Rollcall's networks.
+
+Rollcall doesn't choose the interface itself: Home Assistant's host sends each check out of the interface on the device's subnet, or the one with the default route. So this setting keeps discovery inside the networks you pick and shows you where each check goes, rather than redirecting traffic. Home Assistant's own adapter choice under Settings → System → Network is for integrations' discovery (Zeroconf and similar) and doesn't affect Rollcall.
+
 The add-on runs in Home Assistant's container network, so it can't read MAC addresses from the ARP table; the MAC shown comes from the NetBIOS reply. A scan sends a ping and a few connection attempts to every address, so intrusion detection on your network may notice it. Each scan is logged with who started it.
 
 ### Icons and make/model
