@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.65.2 - 2026-11-12
+
+### Fixed
+- **Turning off the password scan for a computer left its amber check showing** until the agent had reported twice more, or longer if the computer was off. The check and its findings now go as soon as you save. Turning it off in the add-on's options clears the check when the add-on restarts. Each agent still deletes its own scan files on its next run.
+
 ## 1.65.1 - 2026-11-12
 
 ### Added

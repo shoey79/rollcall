@@ -2602,6 +2602,10 @@ class Monitor:
         self._save_agent_settings()
         log.info("%s: password scan set to %s%s by %s", h.name, mode, f" (+{len(paths)} folder{'s' if len(paths) != 1 else ''})" if paths else "",
                  who or "someone")
+        ag = self.agents.agents.get(h.agent_id) if h.agent_id else None
+        if ag and not self.secret_scan_config({**ag, "host_key": h.key})["on"]:
+            self._clear_secrets(ag)  # gone now, not after the agent's next reports
+        await self.reevaluate(h)
 
     # -- installed software ----------------------------------------------
     def _sw_path(self, agent_id: str) -> Path:
@@ -2996,6 +3000,7 @@ class Monitor:
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "secret_ack": self._ack_time(h, "secrets"),
+                "secret_scan_on": self.secret_scan_config({**(self.agents.agents.get(h.agent_id) or {}), "host_key": h.key})["on"],
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
     async def set_sec_filter(self, h: Host, action: str, scope: str, flt: dict | None = None, fid: str = "",

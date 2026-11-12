@@ -1547,7 +1547,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
             checks.append(_check("nics", "Network", res[0], res[1], confirm=res[0] == CRIT))
 
     rs = report.get("secrets")
-    if rs and rs.get("on"):
+    if rs and rs.get("on") and settings.get("secret_scan_on", True):  # turned off in Rollcall: gone straight away
         res = secrets_state(rs, settings.get("secret_findings") or [], ign, float(settings.get("secret_ack") or 0))
         checks.append(_check("secrets", "Passwords in files", res[0], res[1]))
 
