@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.68.2 - 2026-11-13
+
+### Fixed
+- **Windows agents stopped reporting after updating to 1.0.37.** Its new start-up task check ran `schtasks /Query` before the report. On a computer without that task yet, `schtasks` writes an error, and Windows PowerShell 5.1 treats that as fatal, so every run ended before reporting (the agent log shows `ERROR: The system cannot find the file specified.`). Linux agents weren't affected.
+  - **Windows agent 1.0.38** sets up the start-up task only after the report has been sent, and nothing in it can stop a run.
+  - **To recover agents stuck on 1.0.37**, create the start-up task on each one; the agent then reports at its next run and updates itself to 1.0.38. Run this as administrator, or across many servers with `Invoke-Command`:
+    ```
+    schtasks /Create /TN "Ping Monitor Agent (start-up)" /TR "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\ProgramData\PingMonitor\PingMonitorAgent.ps1\"" /SC ONSTART /DELAY 0001:00 /RU SYSTEM /RL HIGHEST /F
+    ```
+    Reinstalling the agent from the dashboard (Agents → download) also works.
+
 ## 1.68.1 - 2026-11-13
 
 ### Fixed
