@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.69.1 - 2026-11-13
+
+### Fixed
+- **The "agent update stopped" notification needed another agent of the same kind to report.** With a single Windows or Linux agent, a computer that went quiet after updating was flagged as not reporting, but without saying it was the update. Rollcall now checks the rollout every minute.
+
 ## 1.69.0 - 2026-11-13
 
 ### Added

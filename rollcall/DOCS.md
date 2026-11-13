@@ -976,7 +976,7 @@ Each add-on release carries the latest agents. Under **Agents → Download and i
 - **Retry** tries it on a different computer first.
 - **Update the rest** sends it to every agent anyway.
 
-If the first computer is switched off before it fetches the update, another one is chosen after an hour. **Update** next to a single server always sends it straight away.
+If the first computer is switched off before it fetches the update, another one is chosen after an hour. With only one agent of a kind, it's updated straight away as before; if it goes quiet afterwards you're still told why. **Update** next to a single server always sends it straight away.
 
 An agent only installs an update if all of these pass; otherwise it keeps its current version and logs why:
 

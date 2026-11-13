@@ -76,3 +76,16 @@ def test_pilot_that_never_fetches_is_replaced(monkeypatch):
     t[0] += M.ROLLOUT_REPICK + 60
     assert offer(m, agent(2)) is True                 # another computer becomes the pilot
     assert offer(m, agent(1)) is False
+
+
+def test_single_agent_that_goes_quiet_is_still_reported(monkeypatch):
+    m = fake_monitor()
+    m.rollout_watch = types.MethodType(M.rollout_watch, m)
+    t = [1000.0]
+    monkeypatch.setattr(main.time, "time", lambda: t[0])
+    assert offer(m, agent(1)) is True                 # the only agent
+    m.rollout_sent(agent(1), "windows")
+    m.rollout_watch(t[0] + 60)
+    assert m.sent == []
+    m.rollout_watch(t[0] + M.ROLLOUT_WAIT + 60)       # no other agent asks; the timer notices
+    assert m.agent_settings["rollout"]["windows"]["state"] == "failed" and m.sent == ["windows"]

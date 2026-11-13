@@ -1969,6 +1969,7 @@ class Monitor:
             # Re-publish periodically so sensors reappear quickly after an HA restart.
             if now - last_publish >= 60:
                 last_publish = now
+                self.rollout_watch(now)
                 for h in list(self.hosts.values()):
                     if h.status != UNKNOWN and not h.removed:
                         await self.publish(h)
@@ -2945,6 +2946,13 @@ class Monitor:
         log.warning("%s agent %s update stopped: %s", os_name.capitalize(), r["version"], msg)
         asyncio.get_event_loop().create_task(self.notify(f"⚠️ {os_name.capitalize()} agent update stopped", msg,
                                                          f"ping_monitor_rollout_{os_name}"))
+
+    def rollout_watch(self, now: float) -> None:
+        """Once a minute: stop a rollout whose first computer went quiet after updating, even when
+        no other agent of that kind is left to ask for the update (e.g. only one agent)."""
+        for os_name, r in list((self.agent_settings.get("rollout") or {}).items()):
+            if r.get("state") == "testing" and r.get("sent") and now - r["sent"] > self.ROLLOUT_WAIT:
+                self._rollout_failed(os_name, r)
 
     def rollout_sent(self, agent: dict, os_name: str) -> None:
         r = (self.agent_settings.get("rollout") or {}).get(os_name)
