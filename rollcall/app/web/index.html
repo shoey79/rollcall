@@ -3556,7 +3556,8 @@ function renderAgents() {
       ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
       <h5>Update</h5><p>${o.update}</p>
       <label class="row-inline" style="margin-top:6px"><input type="checkbox" data-autoupdate="${o.os}" ${a.auto_update && a.auto_update[o.os] ? "checked" : ""}> Update ${o.title} agents automatically</label>
-      <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades.</p>
+      <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades. A new version goes to one computer first; the rest only get it once that one has reported on the new version.</p>
+      ${a.auto_update && a.auto_update[o.os] ? rolloutHtml(o.os, (a.rollout || {})[o.os]) : ""}
       <h5>Remove</h5><p>${o.remove}</p>
       <h5>Troubleshoot</h5><p>${o.trouble}</p>
     </div>`;
@@ -3614,6 +3615,27 @@ function renderAgents() {
   agExtNote();
 }
 
+// Staged agent updates: one computer first, then the rest
+function rolloutHtml(os, r) {
+  if (!r) return "";
+  const t = s => s ? new Date(s * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
+  const who = `<b>${esc(r.pilot_name || "a computer")}</b>`;
+  if (r.state === "waiting") return `<p class="hint">Version ${esc(r.version)}: waiting for a computer to report, to try it there first.</p>`;
+  if (r.state === "testing") return `<p class="hint">Version ${esc(r.version)}: trying it on ${who} first${r.sent ? ` (fetched at ${t(r.sent)})` : ""}. The others update once it reports on the new version.</p>`;
+  if (r.state === "ok") return `<p class="hint">✓ Version ${esc(r.version)} worked on ${who}${r.done ? ` at ${t(r.done)}` : ""}, so the other agents are updating at their next report.</p>`;
+  return `<div class="ackbar"><span>⚠ ${who} hasn't reported since fetching version ${esc(r.version)}${r.sent ? ` at ${t(r.sent)}` : ""}, so the update has been stopped for the other agents. Check its agent log first.</span>
+    <span class="edit-only"><button type="button" class="mini" data-rollout="${os}" data-act="retry" title="Try it on a different computer first">Retry</button>
+    <button type="button" class="mini" data-rollout="${os}" data-act="go" title="Send it to every agent anyway">Update the rest</button></span></div>`;
+}
+document.getElementById("agBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-rollout]"); if (!b) return;
+  if (b.dataset.act === "go" && !confirm("Send this version to every agent, even though the first computer hasn't reported on it?")) return;
+  b.disabled = true;
+  const r = await fetch("api/agents/rollout", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({os: b.dataset.rollout, action: b.dataset.act})});
+  if (!r.ok) alert("That didn't work (" + r.status + ")");
+  await loadAgents();
+});
 document.getElementById("agBody").addEventListener("change", async e => {
   const c = e.target.closest("input[data-autoupdate]");
   if (!c) return;

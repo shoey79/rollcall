@@ -2876,9 +2876,81 @@ class Monitor:
                 self.agent_settings["update_now"] = sorted(now)
                 self._save_agent_settings()
             return None
-        if (self.agent_settings.get("auto_update") or {}).get(os_name) or agent["id"] in now:
+        if agent["id"] in now:  # an admin asked for this one
             return {"version": latest}
+        if (self.agent_settings.get("auto_update") or {}).get(os_name):
+            return {"version": latest} if self._rollout_allows(os_name, latest, agent, report) else None
         return None
+
+    # -- staged agent updates ---------------------------------------------
+    # A new agent version goes to one computer first (the pilot). Everyone else only gets it once
+    # the pilot has reported on the new version. If the pilot goes quiet after updating, the
+    # rollout stops and admins are told, so a bad version can't silence every agent at once.
+    ROLLOUT_WAIT = 20 * 60         # the pilot must report on the new version within this long of fetching it
+    ROLLOUT_REPICK = 60 * 60       # a pilot that never fetched it is swapped for another computer after this
+
+    def rollout(self, os_name: str, latest: str) -> dict:
+        ro = self.agent_settings.setdefault("rollout", {})
+        r = ro.get(os_name)
+        if not r or r.get("version") != latest:
+            r = ro[os_name] = {"version": latest, "state": "waiting", "pilot": None, "pilot_name": None,
+                               "chosen": None, "sent": None, "done": None, "skip": []}
+            self._save_agent_settings()
+        return r
+
+    def _rollout_allows(self, os_name: str, latest: str, agent: dict, report: dict) -> bool:
+        r, now = self.rollout(os_name, latest), time.time()
+        if r["state"] == "ok":
+            return True
+        if r["state"] == "failed":
+            return False
+        if r["state"] == "testing" and r["pilot"] != agent["id"]:
+            if r.get("sent") and now - r["sent"] > self.ROLLOUT_WAIT:
+                self._rollout_failed(os_name, r)
+                return False
+            if not r.get("sent") and now - (r.get("chosen") or now) > self.ROLLOUT_REPICK:
+                r["skip"] = (r.get("skip") or []) + [r["pilot"]]
+                r["state"] = "waiting"  # the pilot never fetched it (switched off?): try another computer
+        if r["state"] == "waiting":
+            if agent["id"] in (r.get("skip") or []):
+                return False
+            # Prefer a server as the pilot; take any computer if no server has asked within 30 minutes
+            ws = report.get("workstation") is True or agent.get("workstation") is True
+            r.setdefault("waiting_since", now)
+            if ws and now - r["waiting_since"] < 1800:
+                return False
+            r.update(state="testing", pilot=agent["id"], pilot_name=agent.get("hostname"), chosen=now, sent=None)
+            self._save_agent_settings()
+            log.info("%s agent %s: trying it on %s first", os_name.capitalize(), latest, agent.get("hostname"))
+            return True
+        return r["pilot"] == agent["id"]
+
+    def rollout_seen(self, agent: dict, report: dict) -> None:
+        """A report arrived: if it's the pilot running the new version, roll it out to everyone."""
+        os_name = "linux" if report.get("os_family") == "linux" else "windows"
+        r = (self.agent_settings.get("rollout") or {}).get(os_name)
+        if (r and r.get("state") in ("testing", "failed") and r.get("pilot") == agent["id"]
+                and report.get("agent_version") == r.get("version")):
+            r.update(state="ok", done=time.time())
+            self._save_agent_settings()
+            log.info("%s agent %s works on %s: updating the other %s agents", os_name.capitalize(), r["version"],
+                     agent.get("hostname"), os_name.capitalize())
+
+    def _rollout_failed(self, os_name: str, r: dict) -> None:
+        r["state"] = "failed"
+        self._save_agent_settings()
+        msg = (f"{r.get('pilot_name') or 'The first computer'} hasn't reported since updating to {os_name.capitalize()} agent "
+               f"{r['version']}, so the update has been stopped for the other agents. Check its agent log, then choose "
+               f"Retry or Update the rest under Manage > Agents.")
+        log.warning("%s agent %s update stopped: %s", os_name.capitalize(), r["version"], msg)
+        asyncio.get_event_loop().create_task(self.notify(f"⚠️ {os_name.capitalize()} agent update stopped", msg,
+                                                         f"ping_monitor_rollout_{os_name}"))
+
+    def rollout_sent(self, agent: dict, os_name: str) -> None:
+        r = (self.agent_settings.get("rollout") or {}).get(os_name)
+        if r and r.get("state") == "testing" and r.get("pilot") == agent["id"] and not r.get("sent"):
+            r["sent"] = time.time()
+            self._save_agent_settings()
 
     def _track_admins(self, h: Host, report: dict, now: float) -> None:
         """Remember who is in the Administrators group, so additions and removals show with a date.
@@ -4249,6 +4321,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "latest_version": _script_version(),
             "latest_linux_version": _linux_script_version(),
             "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
+            "rollout": {k: v for k, v in (monitor.agent_settings.get("rollout") or {}).items()
+                        if v.get("version") == (_linux_script_version() if k == "linux" else _script_version())},
             "servers": monitor.agent_settings.get("servers") or {},
         })
 
@@ -4338,6 +4412,24 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         monitor._save_agent_settings()
         log.info("Automatic %s agent updates %s", os_name.capitalize(), "on" if au[os_name] else "off")
         return web.json_response({"auto_update": au})
+
+    async def agents_rollout(req):
+        body = await req.json()
+        os_name, action = body.get("os"), body.get("action")
+        if os_name not in ("windows", "linux") or action not in ("retry", "go"):
+            return web.json_response({"error": "invalid request"}, status=400)
+        latest = _linux_script_version() if os_name == "linux" else _script_version()
+        r = monitor.rollout(os_name, latest)
+        if action == "go":
+            r.update(state="ok", done=time.time())
+        else:  # try again, on a different computer
+            r.update(state="waiting", skip=(r.get("skip") or []) + ([r["pilot"]] if r.get("pilot") else []),
+                     pilot=None, pilot_name=None, chosen=None, sent=None, waiting_since=time.time())
+        monitor._save_agent_settings()
+        user = await access.who(req)
+        log.info("%s agent %s rollout: %s by %s", os_name.capitalize(), latest, "update the rest" if action == "go" else "retry",
+                 user["display"] or "someone")
+        return web.json_response({"ok": True})
 
     async def agents_update_now(req):
         aid = req.match_info["aid"]
@@ -4796,6 +4888,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/rotate-key", editor_only(agents_rotate))
     app.router.add_get("/api/agents/script", editor_only(agents_script))
     app.router.add_post("/api/agents/auto-update", editor_only(agents_auto_update))
+    app.router.add_post("/api/agents/rollout", editor_only(agents_rollout))
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
@@ -5154,6 +5247,7 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         resp["secret_scan"] = monitor.secret_scan_config(agent)
         if agent["id"] in monitor.want_secrets:
             resp["send_secrets"] = True
+        monitor.rollout_seen(agent, body)
         offer = monitor.agent_update_offer(agent, body)
         if offer:
             resp["agent_update"] = offer
@@ -5178,6 +5272,7 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         key = bytes.fromhex(agentlib.token_hash(token))
         sig = hmac.new(key, body, hashlib.sha256).hexdigest()
         log.info("Sending the %s agent update to %s", os_name.capitalize(), agent.get("hostname"))
+        monitor.rollout_sent(agent, os_name)
         return web.Response(body=body, content_type="application/octet-stream", headers={"X-Rollcall-Signature": sig})
 
     async def ping_view(_req):

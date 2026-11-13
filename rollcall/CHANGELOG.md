@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.69.0 - 2026-11-13
+
+### Added
+- **Agent updates go to one computer first.** With automatic updates on, a new agent version is sent to one computer (preferably a server). The other agents only get it once that one has reported on the new version.
+  - If it goes quiet for 20 minutes after updating, the rollout stops, you get a notification, and Agents offers **Retry** (on a different computer) or **Update the rest**.
+  - This stops a faulty agent version silencing every agent at once, as 1.0.37 did.
+- **Release checks:**
+  - a new test runs the real Windows agent with PowerShell set to stop on any program error, the way Windows PowerShell 5.1 behaves, and fails unless the report still gets through;
+  - tests for the staged rollout.
+
 ## 1.68.2 - 2026-11-13
 
 ### Fixed

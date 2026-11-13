@@ -972,6 +972,12 @@ In each case it's up again as soon as a report arrives. Port, web and certificat
 
 Each add-on release carries the latest agents. Under **Agents → Download and install**, tick **Update Windows agents automatically** and/or **Update Linux agents automatically**. At its next report, any agent older than the add-on's copy downloads it and replaces itself; the new version runs from the report after that. To update just one server, use **Update** next to it in the Approved list. Both are off by default, and the Agent column shows which servers are out of date.
 
+**New versions go to one computer first.** With automatic updates on, a new agent version is sent to one computer first, preferably a server. Every other agent only gets it once that computer has reported on the new version, usually within 5–10 minutes. If it hasn't reported within 20 minutes of fetching the update, the rollout stops: no other agent is updated, you get a notification, and Agents shows the computer concerned with two choices:
+- **Retry** tries it on a different computer first.
+- **Update the rest** sends it to every agent anyway.
+
+If the first computer is switched off before it fetches the update, another one is chosen after an hour. **Update** next to a single server always sends it straight away.
+
 An agent only installs an update if all of these pass; otherwise it keeps its current version and logs why:
 
 - It's signed (HMAC-SHA256) with that server's own token, which only the server and the add-on know. A copy changed on the way, or sent by anything other than your add-on, is refused.
