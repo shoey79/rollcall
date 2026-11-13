@@ -201,8 +201,8 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("dns", "DNS server", _W, [("DNS", "tcp:53")]),
     ("ldap", "LDAP", _W, [("LDAP", "tcp:389")]),
     ("ldaps", "LDAPS (secure LDAP)", _W, [("LDAPS", "tcp:636")]),
-    ("fileserver", "File server (SMB)", _W, [("SMB", "tcp:445")]),
-    ("rds", "Remote Desktop / Terminal Server", _W, [("RDP", "tcp:3389")]),
+    ("fileserver", "File server", _W, [("SMB", "tcp:445")]),
+    ("rds", "Remote Desktop", _W, [("RDP", "tcp:3389")]),
     ("sql", "SQL Server", _W, [("SQL", "tcp:1433")]),
     ("iis", "IIS (HTTP)", _W, [("HTTP", "http:80/")]),
     ("iis-https", "IIS (HTTPS)", _W, [("HTTPS", "https:443/")]),
@@ -210,11 +210,13 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("exchange", "Exchange", _W, [("OWA", "https:443/owa"), ("SMTP", "tcp:25")]),
     ("wsus", "WSUS", _W, [("WSUS", "tcp:8530")]),
     ("adfs", "AD FS", _W, [("ADFS", "https:443/FederationMetadata/2007-06/FederationMetadata.xml")]),
-    ("adcs", "Certificate Services (web enrolment)", _W, [("CertSrv", "http:80/certsrv/")]),
-    ("configmgr", "ConfigMgr / SCCM management point", _W, [("MP", "http:80/sms_mp/.sms_aut?mplist")]),
-    ("kms", "KMS activation", _W, [("KMS", "tcp:1688")]),
-    ("winrm", "WinRM / PowerShell remoting", _W, [("WinRM", "tcp:5985")]),
+    ("adcs", "Certificate Services", _W, [("CertSrv", "http:80/certsrv/")]),
+    ("configmgr", "ConfigMgr management point", _W, [("MP", "http:80/sms_mp/.sms_aut?mplist")]),
+    ("kms", "KMS", _W, [("KMS", "tcp:1688")]),
+    ("winrm", "WinRM", _W, [("WinRM", "tcp:5985")]),
     ("veeam", "Veeam Backup & Replication", _W, [("Veeam", "tcp:9392")]),
+    ("rdweb", "RD Web Access", _W, [("RD Web", "https:443/RDWeb/")]),
+    ("rdgateway", "RD Gateway", _W, [("RD Gateway", "tcp:443")]),
     # Databases
     ("mysql", "MySQL / MariaDB", _DB, [("MySQL", "tcp:3306")]),
     ("postgres", "PostgreSQL", _DB, [("PostgreSQL", "tcp:5432")]),
@@ -224,15 +226,15 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("elasticsearch", "Elasticsearch", _DB, [("Elasticsearch", "http:9200/")]),
     ("influxdb", "InfluxDB", _DB, [("InfluxDB", "http:8086/ping")]),
     # Mail & files
-    ("smtp", "SMTP relay / mail server", _MAIL, [("SMTP", "tcp:25")]),
-    ("imap", "IMAP (secure)", _MAIL, [("IMAPS", "tcp:993")]),
-    ("pop3", "POP3 (secure)", _MAIL, [("POP3S", "tcp:995")]),
+    ("smtp", "SMTP", _MAIL, [("SMTP", "tcp:25")]),
+    ("imap", "IMAPS", _MAIL, [("IMAPS", "tcp:993")]),
+    ("pop3", "POP3S", _MAIL, [("POP3S", "tcp:995")]),
     ("ftp", "FTP", _MAIL, [("FTP", "tcp:21")]),
     ("nextcloud", "Nextcloud", _MAIL, [("Nextcloud", "https:443/status.php")]),
     # Remote access
     ("ssh", "SSH / SFTP", _REM, [("SSH", "tcp:22")]),
     ("vnc", "VNC", _REM, [("VNC", "tcp:5900")]),
-    ("telnet", "Telnet (switches, old kit)", _REM, [("Telnet", "tcp:23")]),
+    ("telnet", "Telnet", _REM, [("Telnet", "tcp:23")]),
     # Virtualisation & storage
     ("proxmox", "Proxmox VE", _VIRT, [("Proxmox", "https:8006/")]),
     ("pbs", "Proxmox Backup Server", _VIRT, [("PBS", "https:8007/")]),
@@ -244,26 +246,36 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("unraid", "Unraid", _VIRT, [("Unraid", "http:80/")]),
     ("portainer", "Portainer", _VIRT, [("Portainer", "https:9443/")]),
     # Network & infrastructure
-    ("unifi", "UniFi Network, old controller (8443)", _NET, [("UniFi", "https:8443/"), ("Inform", "tcp:8080")]),
-    ("unifi-os", "UniFi OS console, e.g. Cloud Key or UDM (443)", _NET, [("UniFi", "https:443/")]),
-    ("unifi-os-server", "UniFi OS Server, self-hosted (11443)", _NET, [("UniFi", "https:11443/"), ("Inform", "tcp:8080")]),
-    ("idrac", "Dell iDRAC / server BMC", _NET, [("iDRAC", "https:443/")]),
+    ("unifi", "UniFi controller (8443)", _NET, [("UniFi", "https:8443/"), ("Inform", "tcp:8080")]),
+    ("unifi-os", "UniFi OS console", _NET, [("UniFi", "https:443/")]),
+    ("unifi-os-server", "UniFi OS Server", _NET, [("UniFi", "https:11443/"), ("Inform", "tcp:8080")]),
+    ("idrac", "iDRAC / BMC", _NET, [("iDRAC", "https:443/")]),
     ("pihole", "Pi-hole", _NET, [("DNS", "tcp:53"), ("Pi-hole", "http:80/admin/")]),
     ("adguard", "AdGuard Home", _NET, [("DNS", "tcp:53"), ("AdGuard", "http:80/")]),
     ("npm", "Nginx Proxy Manager", _NET, [("NPM", "http:81/")]),
-    ("squid", "Squid / web proxy", _NET, [("Proxy", "tcp:3128")]),
-    ("printer", "Network printer", _NET, [("Printer", "tcp:9100")]),
-    ("snmp", "SNMP: switch ports and PoE, NAS disks and RAID, UPS battery and power (e.g. Netgear, Buffalo, APC)", _NET, [("SNMP", "snmp:device")]),
-    ("cert", "Certificate expiry on HTTPS (443)", _NET, [("Cert 443", "cert:443")]),
-    ("syslog", "Syslog: keep this device's log messages and alert on errors", _NET, [("Syslog", "syslog:device")]),
-    ("camera", "IP camera / NVR (RTSP)", _NET, [("RTSP", "tcp:554")]),
-    ("voip", "VoIP phone, ATA or PBX (SIP on UDP 5060)", _NET, [("SIP", "sip:5060")]),
-    ("ata2", "Two-line ATA, e.g. Cisco SPA112/122 (SIP lines 1 and 2)", _NET, [("Line 1", "sip:5060"), ("Line 2", "sip:5061")]),
+    ("squid", "Web proxy", _NET, [("Proxy", "tcp:3128")]),
+    ("printer", "Printer", _NET, [("Printer", "tcp:9100")]),
+    ("omada", "TP-Link Omada controller", _NET, [("Omada", "https:8043/")]),
+    ("mikrotik", "MikroTik (Winbox)", _NET, [("Winbox", "tcp:8291")]),
+    ("openfire", "Openfire / XMPP chat", _NET, [("XMPP", "tcp:5222"), ("Openfire admin", "http:9090/")]),
+    ("snmp", "SNMP", _NET, [("SNMP", "snmp:device")]),
+    ("cert", "Certificate expiry", _NET, [("Cert 443", "cert:443")]),
+    ("syslog", "Syslog", _NET, [("Syslog", "syslog:device")]),
+    ("camera", "Camera / NVR", _NET, [("RTSP", "tcp:554")]),
+    ("onvif", "ONVIF camera", _NET, [("RTSP", "tcp:554"), ("ONVIF", "tcp:2020")]),
+    ("voip", "VoIP / SIP", _NET, [("SIP", "sip:5060")]),
+    ("ata2", "Two-line ATA", _NET, [("Line 1", "sip:5060"), ("Line 2", "sip:5061")]),
     # Home & automation
     ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
     ("nodered", "Node-RED", _HOME, [("Node-RED", "http:1880/")]),
-    ("mqtt", "MQTT broker (Mosquitto)", _HOME, [("MQTT", "tcp:1883")]),
+    ("mqtt", "MQTT broker", _HOME, [("MQTT", "tcp:1883")]),
     ("frigate", "Frigate NVR", _HOME, [("Frigate", "http:5000/api/version")]),
+    ("zigbee2mqtt", "Zigbee2MQTT", _HOME, [("Zigbee2MQTT", "http:8080/")]),
+    ("zwavejs", "Z-Wave JS UI", _HOME, [("Z-Wave JS", "http:8091/")]),
+    ("esphome", "ESPHome dashboard", _HOME, [("ESPHome", "http:6052/")]),
+    ("hue", "Philips Hue bridge", _HOME, [("Hue", "http:80/api/config")]),
+    ("shelly", "Shelly device", _HOME, [("Shelly", "http:80/shelly")]),
+    ("neohub", "Heatmiser neoHub", _HOME, [("neoHub API", "tcp:4243")]),
     ("vaultwarden", "Vaultwarden", _HOME, [("Vaultwarden", "http:80/alive")]),
     ("paperless", "Paperless-ngx", _HOME, [("Paperless", "http:8000/")]),
     ("uptimekuma", "Uptime Kuma", _HOME, [("Uptime Kuma", "http:3001/")]),
@@ -295,9 +307,34 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
 ]
 PRESETS: dict[str, list[tuple[str, str]]] = {n: checks for n, _t, _g, checks in PRESET_TABLE}
 PRESET_INFO = [(n, t, g) for n, t, g, _c in PRESET_TABLE]
+# A line of explanation, shown when hovering over a service in the form (and found by its search)
+PRESET_NOTES = {
+    "dc": "DNS, Kerberos, LDAP, SMB and Global Catalog", "rds": "Remote Desktop / Terminal Server",
+    "adcs": "Certificate Services web enrolment (/certsrv)", "configmgr": "ConfigMgr / SCCM management point",
+    "kms": "KMS activation", "winrm": "WinRM / PowerShell remoting",
+    "rdweb": "Remote Desktop Web Access page (/RDWeb)", "rdgateway": "Remote Desktop Gateway (HTTPS 443)",
+    "smtp": "SMTP relay or mail server", "imap": "IMAP over TLS", "pop3": "POP3 over TLS",
+    "telnet": "Telnet (switches, old kit)", "unifi": "UniFi Network, old self-hosted controller",
+    "unifi-os": "UniFi OS console, e.g. Cloud Key or UDM", "unifi-os-server": "UniFi OS Server, self-hosted",
+    "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
+    "printer": "Network printer (raw printing on 9100)",
+    "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies (e.g. Netgear, Buffalo, APC)",
+    "cert": "Warns before the HTTPS certificate on 443 expires",
+    "syslog": "Keep this device's log messages and alert on errors",
+    "camera": "IP camera or NVR (RTSP)", "onvif": "IP camera with RTSP and ONVIF, e.g. TP-Link Tapo",
+    "voip": "VoIP phone, ATA or PBX (SIP on UDP 5060)", "ata2": "Two-line ATA, e.g. Cisco SPA112/122 (SIP lines 1 and 2)",
+    "mqtt": "MQTT broker, e.g. Mosquitto", "fileserver": "File server (SMB)",
+    "omada": "TP-Link Omada software controller", "mikrotik": "MikroTik router or switch (Winbox port)",
+    "openfire": "Openfire or another XMPP chat server, and Openfire's admin console",
+    "zigbee2mqtt": "Zigbee2MQTT web interface", "zwavejs": "Z-Wave JS UI web interface",
+    "esphome": "ESPHome dashboard", "hue": "Philips Hue bridge", "shelly": "Shelly relay, plug or sensor",
+    "neohub": "Heatmiser neoHub local API (secure WebSocket on 4243, always on)",
+}
 ALIASES = {
     "smb": "fileserver", "file": "fileserver", "rdp": "rds", "terminal": "rds",
     "domain": "dc", "mssql": "sql", "owa": "exchange",
+    "tapo": "onvif", "heatmiser": "neohub", "neostat": "neohub", "zigbee": "zigbee2mqtt", "zwave": "zwavejs",
+    "xmpp": "openfire", "jabber": "openfire", "winbox": "mikrotik", "rdgw": "rdgateway",
     "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
     "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
     "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
@@ -313,11 +350,27 @@ ALIASES = {
 def preset_summary(name: str) -> str:
     """Short description of what a preset checks, e.g. 'TCP 1433' or 'DNS 53 · LDAP 389'."""
     checks = PRESETS[name]
+
+    def short(spec: str) -> str:
+        kind, _, rest = spec.partition(":")
+        if spec == "snmp:device":
+            return "SNMP polling"
+        if spec == "syslog:device":
+            return "log messages"
+        if kind == "tcp":
+            return f"TCP {rest}"
+        if kind == "cert":
+            return f"certificate on {rest}"
+        if kind == "sip":
+            return f"SIP {rest}"
+        if kind in ("http", "https"):
+            port, _, path = rest.partition("/")
+            first = path.split("/")[0].split("?")[0]
+            return f"{kind.upper()} {port}" + (f" /{first}" + ("…" if len(first) < len(path.rstrip("/")) else "") if first else "")
+        return spec
     if len(checks) == 1:
-        spec = checks[0][1]
-        return f"TCP {spec[4:]}" if spec.startswith("tcp:") else spec
-    return " · ".join(f"{label} {spec[4:] if spec.startswith('tcp:') else spec}"
-                      for label, spec in checks)
+        return short(checks[0][1])
+    return " · ".join(f"{label} {short(spec).removeprefix('TCP ')}" for label, spec in checks)
 
 
 _LABELLED = re.compile(r"^([^=:/]+)=(.+)$")
@@ -4531,7 +4584,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
 
     async def presets(_req):
         return web.json_response({
-            "presets": [{"name": n, "title": t, "group": g, "summary": preset_summary(n)}
+            "presets": [{"name": n, "title": t, "group": g, "summary": preset_summary(n), "note": PRESET_NOTES.get(n, "")}
                         for n, t, g in PRESET_INFO],
             "aliases": ALIASES,
         })

@@ -3844,8 +3844,8 @@ async function loadPresets() {
   document.getElementById("presetGroups").innerHTML = groups.map(g =>
     `<div class="pgroup"><div class="group-title">${esc(g)}</div><div class="presets">` +
     PRESETS.filter(p => p.group === g).map(p => {
-      const words = [p.name, p.title, p.summary, g, ...(aliasOf[p.name] || [])].join(" ").toLowerCase();
-      return `<label class="preset" data-search="${esc(words)}"><input type="checkbox" value="${esc(p.name)}">` +
+      const words = [p.name, p.title, p.summary, p.note || "", g, ...(aliasOf[p.name] || [])].join(" ").toLowerCase();
+      return `<label class="preset" data-search="${esc(words)}"${p.note ? ` title="${esc(p.note)}"` : ""}><input type="checkbox" value="${esc(p.name)}">` +
         `<span><b>${esc(p.title)}</b><small>${esc(p.summary)}</small></span></label>`;
     }).join("") + `</div></div>`).join("");
   document.getElementById("presetGroups").addEventListener("change", updatePicked);

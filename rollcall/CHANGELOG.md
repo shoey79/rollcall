@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.71.0 - 2026-11-13
+
+### Changed
+- **Tidier service list in the Add/Edit form.**
+  - Short names such as *SNMP*, *Syslog*, *Certificate expiry*, *Remote Desktop* and *VoIP / SIP*; the longer explanation now shows when you hover over one, and the search box still finds it.
+  - The line under each name reads plainly, e.g. *SNMP polling*, *certificate on 443* or *HTTPS 443 /owa*.
+
+### Added
+- **More services to tick:**
+  - **Windows:** RD Web Access, RD Gateway.
+  - **Network:** TP-Link Omada controller, MikroTik (Winbox), Openfire / XMPP chat, ONVIF camera (e.g. TP-Link Tapo: RTSP 554 and ONVIF 2020).
+  - **Home & automation:** Heatmiser neoHub (its local API on TCP 4243), Zigbee2MQTT, Z-Wave JS UI, ESPHome dashboard, Philips Hue bridge, Shelly devices.
+  - Searching *tapo*, *heatmiser*, *zigbee*, *xmpp* or *winbox* finds them.
+
 ## 1.70.0 - 2026-11-13
 
 ### Added

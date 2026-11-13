@@ -246,12 +246,12 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | Preset | Name | Checks |
 |---|---|---|
 | **Windows & Microsoft** | | |
-| `dc` (or `domain`) | Domain controller | DNS 53 · Kerberos 88 · LDAP 389 · SMB 445 · GC 3268 |
+| `dc` (or `domain`) | Domain controller: DNS, Kerberos, LDAP, SMB and Global Catalog | DNS 53 · Kerberos 88 · LDAP 389 · SMB 445 · GC 3268 |
 | `dns` | DNS server | TCP 53 |
 | `ldap` | LDAP | TCP 389 |
 | `ldaps` | LDAPS (secure LDAP) | TCP 636 |
-| `fileserver` (or `smb`, `file`) | File server (SMB) | TCP 445 |
-| `rds` (or `rdp`, `terminal`) | Remote Desktop / Terminal Server | TCP 3389 |
+| `fileserver` (or `smb`, `file`) | File server: File server (SMB) | TCP 445 |
+| `rds` (or `rdp`, `terminal`) | Remote Desktop: Remote Desktop / Terminal Server | TCP 3389 |
 | `sql` (or `mssql`) | SQL Server | TCP 1433 |
 | `iis` | IIS (HTTP) | http:80/ |
 | `iis-https` | IIS (HTTPS) | https:443/ |
@@ -259,11 +259,13 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `exchange` (or `owa`) | Exchange | OWA https:443/owa · SMTP 25 |
 | `wsus` | WSUS | TCP 8530 |
 | `adfs` | AD FS | https:443/FederationMetadata/2007-06/FederationMetadata.xml |
-| `adcs` (or `certsrv`) | Certificate Services (web enrolment) | http:80/certsrv/ |
-| `configmgr` (or `sccm`, `mecm`) | ConfigMgr / SCCM management point | http:80/sms_mp/.sms_aut?mplist |
-| `kms` | KMS activation | TCP 1688 |
-| `winrm` | WinRM / PowerShell remoting | TCP 5985 |
+| `adcs` (or `certsrv`) | Certificate Services: Certificate Services web enrolment (/certsrv) | http:80/certsrv/ |
+| `configmgr` (or `sccm`, `mecm`) | ConfigMgr management point: ConfigMgr / SCCM management point | http:80/sms_mp/.sms_aut?mplist |
+| `kms` | KMS: KMS activation | TCP 1688 |
+| `winrm` | WinRM: WinRM / PowerShell remoting | TCP 5985 |
 | `veeam` | Veeam Backup & Replication | TCP 9392 |
+| `rdweb` | RD Web Access: Remote Desktop Web Access page (/RDWeb) | https:443/RDWeb/ |
+| `rdgateway` (or `rdgw`) | RD Gateway: Remote Desktop Gateway (HTTPS 443) | TCP 443 |
 | **Databases** | | |
 | `mysql` (or `mariadb`) | MySQL / MariaDB | TCP 3306 |
 | `postgres` (or `postgresql`, `pgsql`) | PostgreSQL | TCP 5432 |
@@ -273,15 +275,15 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `elasticsearch` (or `elastic`) | Elasticsearch | http:9200/ |
 | `influxdb` (or `influx`) | InfluxDB | http:8086/ping |
 | **Mail & files** | | |
-| `smtp` | SMTP relay / mail server | TCP 25 |
-| `imap` | IMAP (secure) | TCP 993 |
-| `pop3` | POP3 (secure) | TCP 995 |
+| `smtp` | SMTP: SMTP relay or mail server | TCP 25 |
+| `imap` | IMAPS: IMAP over TLS | TCP 993 |
+| `pop3` | POP3S: POP3 over TLS | TCP 995 |
 | `ftp` | FTP | TCP 21 |
 | `nextcloud` | Nextcloud | https:443/status.php |
 | **Remote access** | | |
 | `ssh` (or `sftp`) | SSH / SFTP | TCP 22 |
 | `vnc` | VNC | TCP 5900 |
-| `telnet` | Telnet (switches, old kit) | TCP 23 |
+| `telnet` | Telnet: Telnet (switches, old kit) | TCP 23 |
 | **Virtualisation & storage** | | |
 | `proxmox` (or `pve`) | Proxmox VE | https:8006/ |
 | `pbs` | Proxmox Backup Server | https:8007/ |
@@ -293,23 +295,36 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `unraid` | Unraid | http:80/ |
 | `portainer` | Portainer | https:9443/ |
 | **Network & infrastructure** | | |
-| `unifi` | UniFi Network, old controller (8443) | UniFi https:8443/ · Inform 8080 |
-| `unifi-os` | UniFi OS console, e.g. Cloud Key or UDM (443) | https:443/ |
-| `unifi-os-server` | UniFi OS Server, self-hosted (11443) | UniFi https:11443/ · Inform 8080 |
-| `idrac` (or `ilo`, `bmc`, `ipmi`) | Dell iDRAC / server BMC | https:443/ |
+| `unifi` | UniFi controller (8443): UniFi Network, old self-hosted controller | UniFi https:8443/ · Inform 8080 |
+| `unifi-os` | UniFi OS console: UniFi OS console, e.g. Cloud Key or UDM | https:443/ |
+| `unifi-os-server` | UniFi OS Server: UniFi OS Server, self-hosted | UniFi https:11443/ · Inform 8080 |
+| `idrac` (or `ilo`, `bmc`, `ipmi`) | iDRAC / BMC: Dell iDRAC or another server management controller | https:443/ |
 | `pihole` (or `pi-hole`) | Pi-hole | DNS 53 · Pi-hole http:80/admin/ |
 | `adguard` | AdGuard Home | DNS 53 · AdGuard http:80/ |
 | `npm` | Nginx Proxy Manager | http:81/ |
-| `squid` | Squid / web proxy | TCP 3128 |
-| `printer` | Network printer | TCP 9100 |
-| `camera` (or `nvr`, `rtsp`) | IP camera / NVR (RTSP) | TCP 554 |
-| `voip` (or `sip`, `ata`, `pbx`) | VoIP phone, ATA or PBX | SIP UDP 5060 |
-| `ata2` (or `spa112`, `spa122`) | Two-line ATA, e.g. Cisco SPA112/122 | Line 1 SIP 5060 · Line 2 SIP 5061 |
+| `squid` | Web proxy: Squid or another web proxy | TCP 3128 |
+| `printer` | Printer: Network printer (raw printing on 9100) | TCP 9100 |
+| `omada` | TP-Link Omada controller: TP-Link Omada software controller | https:8043/ |
+| `mikrotik` (or `winbox`) | MikroTik (Winbox): MikroTik router or switch (Winbox port) | TCP 8291 |
+| `openfire` (or `xmpp`, `jabber`) | Openfire / XMPP chat: Openfire or another XMPP chat server, and Openfire's admin console | XMPP 5222 · Openfire admin http:9090/ |
+| `snmp` | SNMP: Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies (e.g. Netgear, Buffalo, APC) | snmp:device |
+| `cert` | Certificate expiry: Warns before the HTTPS certificate on 443 expires | cert:443 |
+| `syslog` | Syslog: Keep this device's log messages and alert on errors | syslog:device |
+| `camera` (or `nvr`, `rtsp`) | Camera / NVR: IP camera or NVR (RTSP) | TCP 554 |
+| `onvif` (or `tapo`) | ONVIF camera: IP camera with RTSP and ONVIF, e.g. TP-Link Tapo | RTSP 554 · ONVIF 2020 |
+| `voip` (or `sip`, `ata`, `pbx`, `phone`, `asterisk`, `freepbx`, `3cx`) | VoIP / SIP: VoIP phone, ATA or PBX (SIP on UDP 5060) | sip:5060 |
+| `ata2` (or `spa112`, `spa122`) | Two-line ATA: Two-line ATA, e.g. Cisco SPA112/122 (SIP lines 1 and 2) | Line 1 sip:5060 · Line 2 sip:5061 |
 | **Home & automation** | | |
 | `homeassistant` (or `ha`) | Home Assistant | http:8123/ |
 | `nodered` (or `node-red`) | Node-RED | http:1880/ |
-| `mqtt` (or `mosquitto`) | MQTT broker (Mosquitto) | TCP 1883 |
+| `mqtt` (or `mosquitto`) | MQTT broker: MQTT broker, e.g. Mosquitto | TCP 1883 |
 | `frigate` | Frigate NVR | http:5000/api/version |
+| `zigbee2mqtt` (or `zigbee`) | Zigbee2MQTT: Zigbee2MQTT web interface | http:8080/ |
+| `zwavejs` (or `zwave`) | Z-Wave JS UI: Z-Wave JS UI web interface | http:8091/ |
+| `esphome` | ESPHome dashboard | http:6052/ |
+| `hue` | Philips Hue bridge | http:80/api/config |
+| `shelly` | Shelly device: Shelly relay, plug or sensor | http:80/shelly |
+| `neohub` (or `heatmiser`, `neostat`) | Heatmiser neoHub: Heatmiser neoHub local API (secure WebSocket on 4243, always on) | TCP 4243 |
 | `vaultwarden` (or `bitwarden`) | Vaultwarden | http:80/alive |
 | `paperless` | Paperless-ngx | http:8000/ |
 | `uptimekuma` (or `kuma`) | Uptime Kuma | http:3001/ |
@@ -377,7 +392,7 @@ The check reads whatever certificate the service presents; internal and self-sig
 
 ### VoIP phones, ATAs and PBXs (SIP)
 
-Tick **VoIP phone, ATA or PBX** to check a device's SIP service on UDP 5060. For two-line adapters such as the Cisco SPA112/122, tick **Two-line ATA**: Line 1 is UDP 5060 and Line 2 is UDP 5061. For another port, use `sip:PORT`, e.g. `Line 3=sip:5062`, or `sip:HOST:PORT` for another address.
+Tick **VoIP / SIP** to check a device's SIP service on UDP 5060. For two-line adapters such as the Cisco SPA112/122, tick **Two-line ATA**: Line 1 is UDP 5060 and Line 2 is UDP 5061. For another port, use `sip:PORT`, e.g. `Line 3=sip:5062`, or `sip:HOST:PORT` for another address.
 
 ![A two-line ATA with both SIP lines answering](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/sip.png)
 
