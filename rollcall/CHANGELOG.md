@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.70.0 - 2026-11-13
+
+### Added
+- **Why a restart is pending** (Windows agent 1.0.39): a computer's details now say what's asking for the restart and what's waiting on it.
+  - **Asked for by:** Windows Update, Windows component servicing, the Configuration Manager client, and folders with files waiting to be replaced (common after Exchange or SQL Server updates).
+  - **Installed since the last restart:** from Windows Update history, and packages the Setup log says need a restart to finish.
+  - The Updates check names them too, e.g. *Reboot pending (KB5048661 and 1 more)*.
+  - Configuration Manager's own "restart pending" now counts as well.
+- **Last update installed shows the update's name**, not only a KB number, which some updates don't have in their title.
+
 ## 1.69.2 - 2026-11-13
 
 ### Changed

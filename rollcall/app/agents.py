@@ -237,6 +237,13 @@ def normalize_report(r) -> dict:
              "idle_min": x["idle_min"] if isinstance(x.get("idle_min"), int) and x["idle_min"] >= 0 else 0,
              "since": str(x.get("since") or "")[:30], "from": str(x.get("from") or "")[:80], "tty": str(x.get("tty") or "")[:20]}
             for x in _as_list(r["sessions"]) if isinstance(x, dict) and x.get("user")][:50]
+    # Why a restart is pending, and what was installed since the last one (Windows agent 1.0.39+;
+    # Linux agents send reboot_packages from /var/run/reboot-required.pkgs)
+    for k, n, ln in (("reboot_reasons", 8, 160), ("reboot_packages", 20, 160)):
+        if k in r:
+            r[k] = [str(x)[:ln] for x in (r[k] if isinstance(r[k], list) else []) if x][:n]
+    if "last_patch_title" in r:
+        r["last_patch_title"] = str(r["last_patch_title"] or "")[:200]
     for k in ("roles", "ips", "disks", "errors"):
         r[k] = _as_list(r.get(k))
     r["disks"] = [d for d in r["disks"] if isinstance(d, dict)]
@@ -1294,7 +1301,9 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     kb = report.get("last_patch_kb")
     bits = []
     if report.get("pending_reboot"):
-        bits.append("Reboot pending")
+        pk = report.get("reboot_packages") or []
+        kbs = [m for x in pk for m in re.findall(r"KB\d{6,8}", x)] or [x if len(x) <= 60 else x[:57] + "..." for x in pk]
+        bits.append("Reboot pending" + (f" ({', '.join(kbs[:2])}{f' and {len(kbs) - 2} more' if len(kbs) > 2 else ''})" if kbs else ""))
     if limit > 0 and patch_days is not None and patch_days > limit:
         bits.append(f"last update installed {int(patch_days)} days ago" + (f" ({kb})" if kb else ""))
     sec_upd, pend = report.get("security_updates"), report.get("updates_pending")

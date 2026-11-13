@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.38'
+$AgentVersion = '1.0.39'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -129,7 +129,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null; secrets_sent = $null; secret_scan = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null; secrets_sent = $null; secret_scan = $null; reboot_pkgs = $null }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -154,7 +154,11 @@ function Read-State {
             if ($raw.ad_report) { $state.ad_report = [string]$raw.ad_report }
             if ($raw.ad_checked) { try { $state.ad_checked = [int64]$raw.ad_checked } catch { } }
             if ($raw.laps_ad_at) { try { $state.laps_ad_at = [int64]$raw.laps_ad_at; $state.laps_ad_exp = [string]$raw.laps_ad_exp; $state.laps_ad_attr = [string]$raw.laps_ad_attr } catch { } }
-            if ($raw.patch) { $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source } }
+            if ($raw.patch) {
+                $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source
+                    title = $(if ($raw.patch.PSObject.Properties['title']) { [string]$raw.patch.title } else { $null }) }
+            }
+            if ($raw.reboot_pkgs) { $state.reboot_pkgs = @{ boot = [string]$raw.reboot_pkgs.boot; checked = $raw.reboot_pkgs.checked; list = @($raw.reboot_pkgs.list | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
         }
@@ -440,14 +444,68 @@ function Get-SystemInfo {
             Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' -and $_ -notlike '169.254.*' -and $_ -ne '127.0.0.1' })
         $info.ips = $ips
     } catch { Add-CollectorError 'ip' $_ }
-    $pending = $false
-    foreach ($key in @(
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
-        try { if (Test-Path $key) { $pending = $true } } catch { }
+    # Restart pending, and which parts of Windows are asking for it
+    $reasons = New-Object System.Collections.ArrayList
+    try { if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { [void]$reasons.Add('Windows component servicing') } } catch { }
+    try { if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { [void]$reasons.Add('Windows Update') } } catch { }
+    try {
+        $ccm = Invoke-CimMethod -Namespace 'root\ccm\ClientSDK' -ClassName CCM_ClientUtilities -MethodName DetermineIfRebootPending -ErrorAction Stop
+        if ($ccm -and ($ccm.RebootPending -or $ccm.IsHardRebootPending)) { [void]$reasons.Add('Configuration Manager client') }
+    } catch { }  # no Configuration Manager client
+    $info.pending_reboot = ($reasons.Count -gt 0)
+    if ($info.pending_reboot) {
+        # Files Windows will replace at the next restart (often an Exchange or SQL Server update);
+        # only mentioned when a restart is already pending, as some programs leave these about.
+        try {
+            # Pairs of entries: the file, then what replaces it (blank = delete it)
+            $pfro = @((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction Stop).PendingFileRenameOperations |
+                    ForEach-Object { ([string]$_) -replace '^!', '' -replace '^\\\?\?\\', '' })
+            $dirs = @{}
+            for ($i = 0; $i -lt $pfro.Count; $i += 2) {
+                if (-not $pfro[$i]) { continue }
+                $d = Split-Path -Path $pfro[$i] -Parent -ErrorAction SilentlyContinue
+                if ($d) { $dirs[$d] = 1 + [int]$dirs[$d] }
+            }
+            foreach ($kv in @($dirs.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 3)) {
+                [void]$reasons.Add((Limit-Text ("Files waiting to be replaced in {0} ({1})" -f $kv.Key, $kv.Value) 160))
+            }
+        } catch { }
     }
-    $info.pending_reboot = $pending
+    $info.reboot_reasons = @($reasons)
     return $info
+}
+
+# What was installed since the last restart, when one is pending: Windows Update history, and
+# packages the Setup log says need a restart to finish. Re-checked every 30 minutes.
+function Get-RebootPackages($State, $BootTime) {
+    $c = $State.reboot_pkgs
+    if ($c -and $c.boot -eq $BootTime -and $c.checked) {
+        try { if (((Get-Date) - [DateTime]$c.checked).TotalMinutes -lt 30) { return @($c.list) } } catch { }
+    }
+    $boot = ([DateTime]$BootTime).ToLocalTime()
+    $list = New-Object System.Collections.ArrayList
+    try {
+        $searcher = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher()
+        $count = $searcher.GetTotalHistoryCount()
+        if ($count -gt 0) {
+            foreach ($h in @($searcher.QueryHistory(0, [Math]::Min($count, 50)))) {
+                if ($h.Operation -ne 1 -or ($h.ResultCode -ne 2 -and $h.ResultCode -ne 3)) { continue }
+                if (([DateTime]$h.Date).ToLocalTime() -le $boot) { continue }
+                if ($h.Title -match 'Security Intelligence Update|Definition Update|Antimalware platform|Antivirus platform|KB2267602|KB4052623|KB915597') { continue }
+                $title = Limit-Text ([string]$h.Title) 160
+                if ($title -and -not $list.Contains($title)) { [void]$list.Add($title) }
+            }
+        }
+    } catch { }
+    try {
+        foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = 'Setup'; Id = 4; StartTime = $boot } -MaxEvents 30 -ErrorAction Stop)) {
+            $kb = ([regex]'KB\d{6,8}').Match([string]$e.Message).Value
+            if ($kb -and -not ($list | Where-Object { $_ -like "*$kb*" })) { [void]$list.Add($kb) }
+        }
+    } catch { }  # none since the restart
+    $out = @($list | Select-Object -First 10)
+    $State.reboot_pkgs = @{ boot = $BootTime; checked = ConvertTo-UtcString (Get-Date); list = $out }
+    return $out
 }
 
 function Get-PatchInfo($State, $BootTime) {
@@ -463,10 +521,10 @@ function Get-PatchInfo($State, $BootTime) {
             if ($fresh -and $BootTime -and ([DateTime]$BootTime) -gt $checked) { $fresh = $false }
         } catch { $fresh = $false }
     }
-    if ($fresh) { return @{ date = $c.date; kb = $c.kb; source = $c.source; cached = $true } }
+    if ($fresh -and $null -ne $c.title) { return @{ date = $c.date; kb = $c.kb; title = $c.title; source = $c.source; cached = $true } }
     $p = Get-LastPatch
-    $State.patch = @{ checked = ConvertTo-UtcString (Get-Date); date = (ConvertTo-UtcString $p.date); kb = $p.kb; source = $p.source }
-    return @{ date = $State.patch.date; kb = $p.kb; source = $p.source; cached = $false }
+    $State.patch = @{ checked = ConvertTo-UtcString (Get-Date); date = (ConvertTo-UtcString $p.date); kb = $p.kb; title = $p.title; source = $p.source }
+    return @{ date = $State.patch.date; kb = $p.kb; title = $p.title; source = $p.source; cached = $false }
 }
 
 function Get-LastPatch {
@@ -476,11 +534,11 @@ function Get-LastPatch {
     #    however it arrived, even with the Windows Update service disabled
     #  - Win32_QuickFixEngineering: its InstalledOn text is US-format; Get-HotFix
     #    can misread it on non-US servers, so it's parsed here explicitly
-    $best = @{ date = $null; kb = $null; source = $null }
+    $best = @{ date = $null; kb = $null; title = $null; source = $null }
     $consider = {
-        param($Date, $Kb, $Source)
+        param($Date, $Kb, $Source, $Title)
         if ($Date -and $Date -le (Get-Date).AddDays(1) -and (-not $best.date -or $Date -gt $best.date)) {
-            $best.date = $Date; $best.kb = $Kb; $best.source = $Source
+            $best.date = $Date; $best.kb = $Kb; $best.source = $Source; $best.title = $Title
         }
     }
     try {
@@ -492,7 +550,7 @@ function Get-LastPatch {
                 if ($h.Operation -ne 1 -or ($h.ResultCode -ne 2 -and $h.ResultCode -ne 3)) { continue }
                 if ($h.Title -match 'Security Intelligence Update|Definition Update|Antimalware platform|Antivirus platform|KB2267602|KB4052623|KB915597') { continue }
                 $kb = ([regex]'KB\d{6,8}').Match([string]$h.Title).Value
-                & $consider ([DateTime]$h.Date).ToLocalTime() $kb 'Windows Update history'
+                & $consider ([DateTime]$h.Date).ToLocalTime() $kb 'Windows Update history' (Limit-Text ([string]$h.Title) 200)
             }
         }
     } catch { }
@@ -514,7 +572,7 @@ function Get-LastPatch {
                 if ([DateTime]::TryParseExact(([string]$q.InstalledOn).Trim(), $formats,
                         [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$parsed)) { $d = $parsed }
             }
-            & $consider $d ([string]$q.HotFixID) 'Installed updates list'
+            & $consider $d ([string]$q.HotFixID) 'Installed updates list' ([string]$q.Description)
         }
     } catch { Add-CollectorError 'updates' $_ }
     return $best
@@ -2379,10 +2437,14 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         if ($patch.date) {
             $report.last_patch = $patch.date
             $report.last_patch_kb = $patch.kb
+            $report.last_patch_title = $patch.title
             $report.last_patch_source = $patch.source
         }
         $report.last_patch_cached = [bool]$patch.cached
     } catch { Add-CollectorError 'updates' $_ }
+    if ($sys -and $sys.pending_reboot -and $sys.boot_time) {
+        try { $report.reboot_packages = @(Measure-Step 'pending restart' { Get-RebootPackages $State $sys.boot_time }) } catch { Add-CollectorError 'pending restart' $_ }
+    }
 
     $allServices = @()
     try { $allServices = @(Measure-Step 'service list' { Get-CimInstance -ClassName Win32_Service }) } catch { Add-CollectorError 'services' $_ }

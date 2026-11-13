@@ -586,7 +586,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Agent** | A run took longer than `agent_slow_seconds` (120) | No report for `agent_stale_minutes` (15) |
 | **Disk** | A volume under `agent_disk_warn` (15%) free | Under `agent_disk_crit` (5%) free |
 | **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row) |
-| **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off) | |
+| **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off). The details say what asked for the restart (Windows Update, component servicing, Configuration Manager, files waiting to be replaced) and what was installed since the last one | |
 | **IIS** | | An app pool or site stopped (two reports) |
 | **Storage** | A disk predicting failure, or a RAID volume rebuilding | A failed disk, a degraded mirror, RAID-5 or Storage Space, a missing dynamic disk, or an unhealthy disk (two reports) |
 | **Hardware** (Dell OMSA) | Non-Critical chassis health | Critical chassis health |

@@ -229,6 +229,7 @@ table.small tr.dim td{opacity:.55}
 .secset{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 16px;margin:10px 0 4px;font-size:13px}
 .secset label{display:flex;flex-direction:column;gap:3px}.secset label span{color:var(--muted);font-size:11px}
 .secset textarea{min-height:58px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+.rebootpk{margin:2px 0 0;padding-left:18px;font-size:12.5px}
 .newer{display:inline-block;margin-top:2px;font-size:11.5px;font-weight:600;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);padding:0 7px;border-radius:9px;white-space:nowrap}
 .linkish{background:none;border:0;padding:0;color:var(--accent, inherit);font:inherit;font-weight:600;cursor:pointer;text-align:left}
 .linkish:hover{text-decoration:underline}
@@ -2167,10 +2168,14 @@ function renderDetails(d) {
     <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
     <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""}</div>
     <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
-    <div><span>Last update installed</span>${esc(r.last_patch_kb || "—")} ${r.last_patch ? "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>
+    <div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>
     <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
     ${r.updates_pending != null ? `<div><span>Updates available</span>${r.updates_pending}${r.security_updates ? ` <b class='old'>(${r.security_updates} security)</b>` : ""}</div>` : ""}
-    <div><span>Reboot pending</span>${r.pending_reboot ? "<b class='old'>Yes</b>" + ((r.reboot_packages || []).length ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>` : "") : "No"}</div></div>`);
+    <div${r.pending_reboot && ((r.reboot_reasons || []).length || (r.reboot_packages || []).length > 1) ? ' style="grid-column:span 2"' : ""}><span>Reboot pending</span>${!r.pending_reboot ? "No" : "<b class='old'>Yes</b>" +
+      ((r.reboot_reasons || []).length ? `<br><small class="muted">Asked for by: ${r.reboot_reasons.map(esc).join("; ")}</small>` : "") +
+      ((r.reboot_packages || []).length ? (linux ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>`
+        : `<br><small class="muted">Installed since the last restart:</small><ul class="rebootpk">${r.reboot_packages.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`)
+        : (r.reboot_reasons && !linux ? `<br><small class="muted">Nothing installed since the last restart was found in Windows Update history or the Setup log.</small>` : ""))}</div></div>`);
   if ((r.sessions || []).length > 1 || (r.sessions || []).some(x => x.session !== "console")) {
     const idle = m => !m ? "—" : m < 60 ? m + " min" : m < 1440 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " d " + Math.floor(m % 1440 / 60) + " h";
     const kind = x => ({console: "Console", rdp: "Remote Desktop", ssh: "SSH"})[x.session] || x.session || "—";
