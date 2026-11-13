@@ -32,7 +32,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 6. [Linux agent](#linux-agent)
 7. [Agent addresses and updates](#agent-addresses-and-updates)
 8. [Alerts and quiet times](#alerts-and-quiet-times): notifications, acknowledging, pausing, schedules
-9. [Administration](#administration): who can change things, export and import, security
+9. [Administration](#administration): settings, who can change things, export and import, security
 10. [Reference](#reference): every option, ports, sensors and events, files
 11. [Troubleshooting](#troubleshooting)
 
@@ -896,7 +896,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
 - **Revoke** stops a server's reports. Deleting a computer from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
-- **Reports go over HTTP by default**, so they're readable on your network. To use HTTPS, set `agent_ssl: true` with a certificate in Home Assistant's `/ssl` folder (`agent_certfile`, `agent_keyfile`), and download the script with an `https://` address. Tick **Accept a self-signed certificate** if yours is self-signed.
+- **Reports go over HTTP by default**, so they're readable on your network. To use HTTPS, turn on **Agent port uses HTTPS** (`agent_ssl`) under **Manage → Settings → Agent port**, with a certificate in Home Assistant's `/ssl` folder (`agent_certfile`, `agent_keyfile`), and download the script with an `https://` address. Tick **Accept a self-signed certificate** if yours is self-signed.
 
 ---
 
@@ -1040,6 +1040,16 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 ## Administration
 
+### Settings
+
+**Manage → Settings** (admins and editors) changes the add-on's settings from the dashboard: check intervals, notifications, alert limits, agent options, the agent port and who can make changes. They're the same settings as the add-on's **Configuration** tab, grouped into tabs with a search box, and saved to the same place, so the two always agree.
+
+- **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each computer's next check or agent report; turning **Agent port uses HTTPS** on or off switches the agent port over at once.
+- **Checked as you type.** A value out of range is marked and **Save** waits until it's fixed. If Home Assistant turns a change down, nothing is changed and the reason is shown.
+- **Who can make changes** (`admin_only_changes`, `editors`) can only be changed by Home Assistant admins, not by editors.
+- **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
+- Computers aren't listed here; add and edit them on the dashboard.
+
 ### Who can see and change things
 
 The **Rollcall** sidebar panel is visible to every Home Assistant user.
@@ -1071,7 +1081,7 @@ Rollcall runs with the least access it needs, which gives it Home Assistant's to
 - **No extra privileges.** Ping uses unprivileged ICMP sockets, which Docker allows by default, so the add-on doesn't need `NET_RAW`. If a system doesn't allow them, Rollcall says so in its log and on the dashboard, and checks whether each host is up over TCP instead: a host counts as up if any common port (or one of its check ports) answers, even by refusing the connection.
 - **AppArmor profile** (`apparmor.txt`): no mounting, no tracing other processes, and no capabilities beyond ordinary file ownership.
 - **Ingress:** the dashboard is only reachable through Home Assistant, with Home Assistant's login.
-- **Supervisor API** with the default (lowest) role, only to read the add-on's own details, restart it after an import, and update its own options.
+- **Supervisor API** with the default (lowest) role, only to read the add-on's own details, restart it after an import, and update its own options (from **Manage → Settings**).
 - **Home Assistant API:** reading states, devices and users, sending notifications, and pressing a linked device's buttons or switches when an admin asks.
 
 ---
@@ -1080,7 +1090,7 @@ Rollcall runs with the least access it needs, which gives it Home Assistant's to
 
 ### Options
 
-Set these in the add-on's **Configuration** tab.
+Set these under **Manage → Settings** on the dashboard, or in the add-on's **Configuration** tab. Either way they apply without a restart.
 
 | Option | Default | What it does |
 |---|---|---|

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.68.0 - 2026-11-13
+
+### Added
+- **Settings on the dashboard:** **Manage → Settings** changes everything in the add-on's Configuration tab (apart from the computer list, which is already on the dashboard), grouped into tabs with a search box.
+  - **No restart needed.** Changes take effect when you save: shorter check intervals start straight away, new limits apply from each computer's next check or agent report, the log level changes at once, and the agent port switches between HTTP and HTTPS without restarting.
+  - Values are checked as you type, and Home Assistant checks them again when they're saved, so the Configuration tab always shows the same settings.
+  - Only Home Assistant admins can change **Only admins can make changes** and **Editors**; editors can change the rest.
+  - Notification services offers the phone and other notify services Home Assistant has, and the agent certificate fields list the files in `/ssl`.
+
+### Changed
+- **Configuration tab changes apply without a restart** too: Rollcall notices them within about 10 seconds.
+
 ## 1.67.0 - 2026-11-12
 
 ### Added

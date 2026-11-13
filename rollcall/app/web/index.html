@@ -147,6 +147,35 @@ legend small{font-weight:400}
 .bk p{margin:4px 0 8px;font-size:13px;color:var(--muted);line-height:1.5}
 .bk .warn{color:var(--text)}
 dialog.wide{width:min(980px,calc(100vw - 24px))}
+/* Settings */
+#stDlg{height:min(820px,calc(100vh - 24px))}
+#stDlg form{height:100%;max-height:none}
+#stDlg .dlg-body{flex:1}
+.st-top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.st-top input[type=search]{max-width:260px}
+.st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
+.st-grid .wide{grid-column:1/-1}
+.st-f{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--text)}
+.st-f small{font-weight:400;color:var(--muted);line-height:1.4}
+.st-f input:not([type=checkbox]),.st-f select,.st-f textarea{font:inherit;font-size:14px;font-weight:400;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.st-f textarea{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;min-height:74px;resize:vertical}
+.st-f input:focus,.st-f select:focus,.st-f textarea:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
+.st-f.bool{flex-direction:row;align-items:flex-start;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:pointer}
+.st-f.bool input{margin:2px 0 0;accent-color:var(--accent);flex:none;width:16px;height:16px}
+.st-f.bool span{display:flex;flex-direction:column;gap:2px}
+.st-f.changed input:not([type=checkbox]),.st-f.changed select,.st-f.changed textarea,.st-f.bool.changed{border-color:var(--accent)}
+.st-f.bad input:not([type=checkbox]),.st-f.bad select,.st-f.bad textarea,.st-f.bool.bad{border-color:var(--red)}
+.st-f .st-err{color:var(--red);font-weight:500}
+.st-f .st-sugg{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.st-f .st-sugg button{font-size:11.5px;padding:2px 8px;border-radius:999px}
+.st-f :disabled{opacity:.6;cursor:not-allowed}
+.st-note{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:10px 0 0;background:var(--bg);font-size:12.5px;color:var(--muted)}
+.st-gt{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:16px 0 0}
+.st-status{font-size:12.5px;color:var(--muted);align-self:center}
+.st-status.ok{color:var(--green)}.st-status.bad{color:var(--red)}
+.dtab .dirty[hidden]{display:none}
+.dtab .dirty{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:6px;vertical-align:middle}
+@media (max-width:640px){.st-grid{grid-template-columns:1fr}}
 .sect{margin:16px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
 .sect:first-child{border-top:0;padding-top:0;margin-top:4px}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px;box-shadow:0 0 0 1px var(--line)}.swatch.none{background:transparent;box-shadow:none}
@@ -437,6 +466,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
         <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added">Discover devices</button>
         <button type="button" id="swBtn" role="menuitem" title="Which computers have a program installed, and which version">Find software</button>
+        <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options">Settings</button>
         <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export">Export / import</button>
         <hr>
         <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host">Reset all uptime…</button>
@@ -511,6 +541,17 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
       </div>
     </div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="stDlg" class="wide">
+  <form method="dialog" id="stForm" novalidate>
+    <div class="dlg-head"><div class="st-top"><h2>Settings</h2><input type="search" id="stQ" placeholder="Find a setting" autocomplete="off" aria-label="Find a setting"></div>
+      <div class="sub">The same settings as the add-on's Configuration tab. Changes take effect as soon as you save them; there's no need to restart.</div></div>
+    <nav class="dtabs" id="stTabs" role="tablist"></nav>
+    <div class="dlg-body" id="stBody"><p class="hint">Loading…</p></div>
+    <div class="dlg-foot"><div><span class="st-status" id="stStatus" role="status"></span></div>
+      <div><button type="button" id="stUndo" disabled>Undo changes</button><button type="button" id="stClose">Close</button><button type="button" class="primary" id="stSave" disabled>Save</button></div></div>
   </form>
 </dialog>
 
@@ -1667,6 +1708,180 @@ async function moveTab(d) {
 document.getElementById("tLeft").addEventListener("click", () => moveTab(-1));
 document.getElementById("tRight").addEventListener("click", () => moveTab(1));
 
+// ---- Settings (the Configuration tab's options, applied without a restart) ----
+const stDlg = document.getElementById("stDlg");
+const ST = {meta: null, orig: {}, vals: {}, errors: {}, tab: "checks", q: ""};
+const LIST_TYPES = ["strs", "ints"];
+function stText(f, v) { return LIST_TYPES.includes(f.type) ? (v || []).join("\n") : (v ?? ""); }
+function stParse(f, raw) {
+  if (f.type === "bool") return !!raw;
+  if (f.type === "int") return raw === "" ? raw : (/^-?\d+$/.test(raw.trim()) ? Number(raw.trim()) : raw);
+  if (LIST_TYPES.includes(f.type)) {
+    const items = raw.split(/\n|,/).map(x => x.trim()).filter(Boolean);
+    return f.type === "ints" ? items.map(x => /^\d+$/.test(x) ? Number(x) : x) : items;
+  }
+  return raw;
+}
+const stSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function stChanged() { return ST.meta ? ST.meta.fields.filter(f => !stSame(ST.vals[f.key], ST.orig[f.key])).map(f => f.key) : []; }
+function stLocked(f) { return f.group === "access" && !ST.meta.can_admin; }
+function stCheck(f, v) {
+  if (f.type === "int" && (typeof v !== "number" || v < f.min || v > f.max)) return `Must be a whole number from ${f.min} to ${f.max}`;
+  if (f.type === "ints" && v.some(x => typeof x !== "number" || x < f.min || x > f.max)) return `Each must be a whole number from ${f.min} to ${f.max}`;
+  return "";
+}
+function stField(f) {
+  const v = ST.vals[f.key], id = "st_" + f.key, dis = stLocked(f) ? " disabled" : "";
+  const cls = ["st-f", f.type === "bool" ? "bool" : "", (LIST_TYPES.includes(f.type) || f.type === "bool") ? "wide" : "",
+    stSame(v, ST.orig[f.key]) ? "" : "changed", ST.errors[f.key] ? "bad" : ""].filter(Boolean).join(" ");
+  const err = ST.errors[f.key] ? `<small class="st-err">${esc(ST.errors[f.key])}</small>` : "";
+  const help = `<small>${esc(f.help)}</small>`;
+  if (f.type === "bool")
+    return `<label class="${cls}" data-f="${f.key}"><input type="checkbox" id="${id}"${v ? " checked" : ""}${dis}><span>${esc(f.label)}${help}${err}</span></label>`;
+  let input;
+  if (f.type === "choice")
+    input = `<select id="${id}"${dis}>${f.options.map(o => `<option${o === v ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+  else if (f.type === "int")
+    input = `<input id="${id}" type="number" inputmode="numeric" min="${f.min}" max="${f.max}" step="1" value="${esc(v)}"${dis}>`;
+  else if (LIST_TYPES.includes(f.type))
+    input = `<textarea id="${id}" rows="${Math.min(8, Math.max(3, (v || []).length + 1))}" spellcheck="false" placeholder="One per line"${dis}>${esc(stText(f, v))}</textarea>`;
+  else
+    input = `<input id="${id}" value="${esc(v)}" ${f.max_length ? `maxlength="${f.max_length}"` : ""} autocomplete="off" spellcheck="false"${f.type === "file" ? ' list="stSslFiles"' : ""}${dis}>`;
+  let sugg = "";
+  if (f.key === "notify_services") {
+    const have = new Set(v || []), more = (ST.meta.notify_services || []).filter(s => !have.has(s));
+    if (more.length) sugg = `<div class="st-sugg">${more.slice(0, 12).map(s => `<button type="button" data-add="${esc(s)}" title="Add ${esc(s)}">+ ${esc(s)}</button>`).join("")}</div>`;
+  }
+  return `<label class="${cls}" data-f="${f.key}" for="${id}">${esc(f.label)}${help}${input}${sugg}${err}</label>`;
+}
+function stNote(group) {
+  if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
+  if (group === "agent_port") return `<p class="st-note">The agent port is using <b>${esc(ST.meta.agent_port)}</b> now. Switching it takes effect straight away; agents keep using the address they were installed with, so update the addresses under <b>Agents</b> to match (<code>https://</code> or <code>http://</code>).</p>`;
+  if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each computer's next check or agent report.</p>`;
+  return "";
+}
+function stRenderTabs() {
+  // Updated in place: replacing the buttons mid-click (a field's change event fires as the tab is pressed) would lose the click.
+  const changed = new Set(stChanged()), q = ST.q.trim().toLowerCase(), nav = document.getElementById("stTabs");
+  if (nav.children.length !== ST.meta.groups.length)
+    nav.innerHTML = ST.meta.groups.map(g => `<button type="button" role="tab" class="dtab" data-tab="${g.key}">${esc(g.label)}<i class="dirty" title="Changed" hidden></i></button>`).join("");
+  for (const b of nav.children) {
+    const on = !q && b.dataset.tab === ST.tab;
+    b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on));
+    b.querySelector(".dirty").hidden = !ST.meta.fields.some(f => f.group === b.dataset.tab && (changed.has(f.key) || ST.errors[f.key]));
+  }
+  nav.hidden = !!q;
+}
+function stRender() {
+  if (!ST.meta) return;
+  const q = ST.q.trim().toLowerCase();
+  stRenderTabs();
+  let html;
+  if (q) {
+    const hit = f => (f.label + " " + f.help + " " + f.key).toLowerCase().includes(q);
+    html = ST.meta.groups.map(g => {
+      const fs = ST.meta.fields.filter(f => f.group === g.key && hit(f));
+      return fs.length ? `<div class="st-gt">${esc(g.label)}</div><div class="st-grid">${fs.map(stField).join("")}</div>` : "";
+    }).join("") || `<p class="hint">No setting matches "${esc(ST.q)}".</p>`;
+  } else {
+    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab).map(stField).join("")}</div>`;
+  }
+  html += `<datalist id="stSslFiles">${(ST.meta.ssl_files || []).map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
+  const body = document.getElementById("stBody"), focus = document.activeElement && document.activeElement.id, top = body.scrollTop;
+  body.innerHTML = html; body.scrollTop = top;
+  if (focus && focus.startsWith("st_")) { const el = document.getElementById(focus); if (el) el.focus(); }
+  if (stChanged().length || Object.keys(ST.errors).length || !document.getElementById("stStatus").classList.contains("ok")) stTotals();
+  else { document.getElementById("stSave").disabled = true; document.getElementById("stUndo").disabled = true; }
+}
+function stInput(e) {
+  const el = e.target, wrap = el.closest("[data-f]");
+  if (!wrap || !el.id || !el.id.startsWith("st_")) return;
+  const f = ST.meta.fields.find(x => x.key === wrap.dataset.f);
+  const v = stParse(f, f.type === "bool" ? el.checked : el.value);
+  ST.vals[f.key] = v;
+  const problem = stCheck(f, v);
+  if (problem) ST.errors[f.key] = problem; else delete ST.errors[f.key];
+  // Repaint the field's frame and the totals without redrawing the input being typed in.
+  wrap.classList.toggle("changed", !stSame(v, ST.orig[f.key]));
+  wrap.classList.toggle("bad", !!problem);
+  const old = wrap.querySelector(".st-err"); if (old) old.remove();
+  if (problem) wrap.insertAdjacentHTML("beforeend", `<small class="st-err">${esc(problem)}</small>`);
+  document.getElementById("stStatus").classList.remove("ok");
+  stRenderTabs(); stTotals();
+}
+function stTotals() {
+  const n = stChanged().length, errs = Object.keys(ST.errors).length, st = document.getElementById("stStatus");
+  document.getElementById("stSave").disabled = !n || errs > 0;
+  document.getElementById("stUndo").disabled = !n;
+  st.className = "st-status" + (errs ? " bad" : "");
+  st.textContent = errs ? (errs === 1 ? "One setting needs changing" : `${errs} settings need changing`) : n ? (n === 1 ? "1 unsaved change" : `${n} unsaved changes`) : "";
+}
+async function openSettings() {
+  ST.meta = null; ST.errors = {}; ST.q = ""; document.getElementById("stQ").value = "";
+  document.getElementById("stBody").innerHTML = `<p class="hint">Loading…</p>`;
+  document.getElementById("stTabs").innerHTML = "";
+  const st = document.getElementById("stStatus"); st.className = "st-status"; st.textContent = "";
+  stDlg.showModal();
+  try {
+    const r = await fetch("api/settings", {cache: "no-store"});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    ST.meta = d; ST.orig = structuredClone(d.values); ST.vals = structuredClone(d.values);
+    if (!d.groups.some(g => g.key === ST.tab)) ST.tab = d.groups[0].key;
+    stRender();
+  } catch (err) { document.getElementById("stBody").innerHTML = `<p class="failtxt">Couldn't load the settings (${esc(err.message)}).</p>`; }
+}
+async function saveSettings() {
+  const keys = stChanged(); if (!keys.length) return;
+  const btn = document.getElementById("stSave"), st = document.getElementById("stStatus");
+  btn.disabled = true; st.className = "st-status"; st.textContent = "Saving…";
+  try {
+    const values = Object.fromEntries(keys.map(k => [k, ST.vals[k]]));
+    const r = await fetch("api/settings", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({values})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      ST.errors = {...(d.errors || {})};
+      const first = ST.meta.fields.find(f => ST.errors[f.key]);
+      if (first && !ST.q) ST.tab = first.group;
+      stRender();
+      st.className = "st-status bad"; st.textContent = d.error || `Not saved (${r.status})`;
+      return;
+    }
+    ST.orig = structuredClone(d.values); ST.vals = structuredClone(d.values); ST.errors = {};
+    if (d.changed && d.changed.some(k => k.startsWith("agent_ssl") || k === "agent_certfile" || k === "agent_keyfile")) {
+      const m = await fetch("api/settings", {cache: "no-store"}).then(x => x.json()).catch(() => null);
+      if (m) ST.meta.agent_port = m.agent_port;
+    }
+    stRender();
+    st.className = "st-status ok";
+    st.textContent = "Saved and in use" + ((d.notes || []).length ? ": " + d.notes.join("; ") : "") + ".";
+    load();
+  } catch (err) { st.className = "st-status bad"; st.textContent = "Not saved: " + err.message; stTotals(); }
+}
+function closeSettings() {
+  if (stChanged().length && !confirm("Close without saving your changes?")) return;
+  stDlg.close();
+}
+document.getElementById("settingsBtn").addEventListener("click", openSettings);
+document.getElementById("stBody").addEventListener("input", stInput);
+document.getElementById("stBody").addEventListener("change", stInput);
+document.getElementById("stBody").addEventListener("click", e => {
+  const b = e.target.closest("button[data-add]"); if (!b) return;
+  e.preventDefault();
+  ST.vals.notify_services = [...(ST.vals.notify_services || []), b.dataset.add];
+  stRender();
+});
+document.getElementById("stTabs").addEventListener("click", e => {
+  const b = e.target.closest("[data-tab]"); if (!b) return;
+  ST.tab = b.dataset.tab; document.getElementById("stBody").scrollTop = 0; stRender();
+});
+document.getElementById("stQ").addEventListener("input", e => { ST.q = e.target.value; stRender(); });
+document.getElementById("stSave").addEventListener("click", saveSettings);
+document.getElementById("stUndo").addEventListener("click", () => { ST.vals = structuredClone(ST.orig); ST.errors = {}; stRender(); });
+document.getElementById("stClose").addEventListener("click", closeSettings);
+stDlg.addEventListener("cancel", e => { if (stChanged().length) { e.preventDefault(); closeSettings(); } });
+document.getElementById("stForm").addEventListener("submit", e => e.preventDefault());
+
 // ---- Export / import ----
 const bkDlg = document.getElementById("bkDlg");
 document.getElementById("backupBtn").addEventListener("click", () => {
@@ -1734,7 +1949,7 @@ async function load() {
     mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
     document.body.classList.add("loaded");
-    if (viewOnly) ["dlg", "agDlg", "bkDlg", "tabDlg"].forEach(id => { const d = document.getElementById(id); if (d && d.open) d.close(); });
+    if (viewOnly) ["dlg", "agDlg", "bkDlg", "tabDlg", "stDlg"].forEach(id => { const d = document.getElementById(id); if (d && d.open) d.close(); });
     document.getElementById("err").hidden = true;
     render();
     if (detDlg.open) renderDetActions();
@@ -3290,7 +3505,7 @@ function agExtNote() {
   const out = v.trim();
   el.hidden = !out;
   el.innerHTML = !out ? "" : /^http:/i.test(out)
-    ? `⚠ The outside address uses plain HTTP, so reports (and the agents' tokens) would cross the internet unencrypted. Turn on <b>agent_ssl</b> in the add-on's configuration and use <b>https://</b>.`
+    ? `⚠ The outside address uses plain HTTP, so reports (and the agents' tokens) would cross the internet unencrypted. Turn on <b>Agent port uses HTTPS</b> under Manage &rsaquo; Settings &rsaquo; Agent port and use <b>https://</b>.`
     : `For the outside address to work, forward that port from your firewall to Home Assistant's port ${agInfo.port}, or publish it through a reverse proxy. New servers still need your approval before their reports count, and each report is signed with that server's own token.`;
 }
 document.addEventListener("input", e => { if (e.target && e.target.id === "agServerExt") agExtNote(); });
@@ -3346,7 +3561,7 @@ function renderAgents() {
       <h5>Troubleshoot</h5><p>${o.trouble}</p>
     </div>`;
   const updWarn = !a.ssl && (a.auto_update?.windows || a.auto_update?.linux)
-    ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>agent_ssl</b> in the add-on's configuration is still recommended.</p>` : "";
+    ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>Agent port uses HTTPS</b> under Manage &rsaquo; Settings &rsaquo; Agent port is still recommended.</p>` : "";
   html += sect("2. Download and install", updWarn + `<div class="osgrid">${card({
       title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
       msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the computer appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,

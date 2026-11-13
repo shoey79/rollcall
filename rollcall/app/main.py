@@ -51,6 +51,7 @@ import syslogreadings
 import discovery
 import hadevice
 import msi as msilib
+import settingslib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -1150,6 +1151,27 @@ class HomeAssistant:
             log.warning("Couldn't apply the exported settings: %s", err)
             return "not applied; set them in the Configuration tab"
 
+    async def write_options(self, options: dict) -> str | None:
+        """Save the add-on's options (what the Configuration tab shows) through the Supervisor,
+        which checks them against config.yaml's schema. None if saved, else why not."""
+        if not self.enabled:
+            return "no Supervisor access"
+        try:
+            async with self.session.post(f"{SUPERVISOR_API}/addons/self/options", json={"options": options},
+                                         headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status < 400:
+                    return None
+                text = (await resp.text())[:400]
+                try:
+                    text = json.loads(text).get("message") or text
+                except (ValueError, AttributeError):
+                    pass
+                log.warning("Home Assistant didn't accept the settings (%s): %s", resp.status, text)
+                return f"Home Assistant didn't accept them: {text}"
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't save the settings: %s", err)
+            return f"couldn't reach Home Assistant ({err})"
+
     async def restart_self(self) -> bool:
         """Ask the Supervisor to restart this add-on (shortly, so the reply gets out first)."""
         if not self.enabled:
@@ -1878,6 +1900,51 @@ class Monitor:
     def _event(self, h: Host, old: str, new: str) -> dict:
         return {"name": h.name, "host": h.host, "ip": h.ip, "old_status": old,
                 "new_status": new, "entity_id": h.entity_id}
+
+    # -- settings changed while running ------------------------------------
+    def apply_options(self, changed: dict) -> list[str]:
+        """Use new settings straight away. Most are read from self.opts each time they're needed;
+        this updates the few that are kept elsewhere. Returns notes for the person who changed them."""
+        notes = []
+        old = dict(self.opts)
+        self.opts.update(changed)
+        now = time.time()
+        if {"interval", "retry_interval"} & changed.keys():
+            self.interval = int(self.opts["interval"])
+            self.retry_interval = int(self.opts["retry_interval"])
+            self.max_gap = max(self.interval, self.retry_interval) * 2 + 60
+            # Shorter intervals start now, rather than after each computer's current wait.
+            moved = 0
+            for i, h in enumerate(list(self.hosts.values())):
+                if h.checking or not h.last_check:
+                    continue
+                wait = min(self.retry_interval, self.interval) if h.status == AMBER else self.interval
+                due = max(h.last_check + wait, now + i * 0.2)
+                if due < h.next_due:
+                    h.next_due, moved = due, moved + 1
+            if moved:
+                notes.append(f"{moved} computer(s) will be checked sooner to match the new interval")
+        if "service_timeout" in changed:
+            self.svc_timeout = float(self.opts.get("service_timeout") or 5)
+        if "log_level" in changed:
+            logging.getLogger().setLevel(getattr(logging, str(self.opts["log_level"]).upper(), logging.INFO))
+        if "history_days" in changed and int(changed["history_days"]) < int(old.get("history_days") or 0):
+            self.store.prune(now - int(self.opts["history_days"]) * DAY)
+            self.logs.prune(now - int(self.opts["history_days"]) * DAY)
+            notes.append("older history has been removed")
+        if "software_updates" in changed and bool(changed["software_updates"]) != bool(old.get("software_updates", True)):
+            task = getattr(self, "_winget_task", None)
+            if task:
+                task.cancel()
+                self._winget_task = asyncio.create_task(self.winget_loop())
+        thresholds = {"cert_warn_days", "cert_crit_days", "agent_disk_warn", "agent_disk_crit", "agent_patch_days",
+                      "agent_laps_overdue_days", "agent_bitlocker_require", "agent_sql_backup_hours",
+                      "agent_exchange_queue_warn", "agent_failed_logons", "agent_event_watch", "agent_security_alert_ids",
+                      "agent_watch_services", "agent_ignore", "ups_runtime_warn_minutes", "ups_runtime_crit_minutes",
+                      "ups_load_warn", "printer_supply_warn", "agent_secret_scan"}
+        if thresholds & changed.keys():
+            notes.append("new limits apply from each computer's next check or agent report")
+        return notes
 
     # -- scheduling -------------------------------------------------------
     async def run(self) -> None:
@@ -3731,6 +3798,24 @@ class Access:
                 u.get("is_admin") or u.get("is_owner") or "system-admin" in (u.get("group_ids") or []))}
             log.debug("Loaded %d HA admin user(s)", len(self.admins))
 
+    def update(self, opts: dict) -> None:
+        """New admin_only_changes / editors settings, used from the next request."""
+        self.enabled = bool(opts.get("admin_only_changes", True))
+        self.editors = {str(e).strip().lower() for e in (opts.get("editors") or []) if str(e).strip()}
+        self.warned = False
+
+    async def is_admin(self, req) -> bool:
+        """A real Home Assistant admin (not just someone in `editors`): only they may change who can edit."""
+        if not SUPERVISOR_TOKEN:
+            return True  # running outside Home Assistant (development)
+        uid = req.headers.get("X-Remote-User-Id", "")
+        if not uid:
+            return False
+        await self._refresh()
+        if self.admins is not None and uid not in self.admins and time.time() - self.loaded_at > 30:
+            await self._refresh(force=True)
+        return self.admins is not None and uid in self.admins
+
     async def who(self, req) -> dict:
         uid = req.headers.get("X-Remote-User-Id", "")
         name = req.headers.get("X-Remote-User-Name", "")
@@ -3758,7 +3843,7 @@ class Access:
 # --------------------------------------------------------------------------
 # Web
 # --------------------------------------------------------------------------
-def build_app(monitor: Monitor, access: Access) -> web.Application:
+def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = None) -> web.Application:
     def editor_only(handler):
         async def wrapped(req):
             user = await access.who(req)
@@ -3792,6 +3877,50 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
                     if sv["key"] in SECURITY_KEYS:
                         sv["detail"] = SECURITY_HIDDEN
         return web.json_response(snap)
+
+    async def settings_get(req):
+        """The add-on's settings for Manage > Settings."""
+        notify = []
+        services = await monitor.ha.get_json("/services")
+        for d in services if isinstance(services, list) else []:
+            if isinstance(d, dict) and d.get("domain") == "notify":
+                notify = sorted(s for s in (d.get("services") or {}) if s not in ("send_message", "persistent_notification"))
+        return web.json_response({
+            "groups": [{"key": k, "label": v} for k, v in settingslib.GROUPS],
+            "fields": settingslib.fields(),
+            "values": settingslib.values(monitor.opts),
+            "can_admin": await access.is_admin(req),
+            "notify_services": notify,
+            "ssl_files": live.ssl_files() if live else [],
+            "agent_port": "HTTPS" if live and live.agent_listener and live.agent_listener.https else "HTTP",
+        })
+
+    async def settings_post(req):
+        if not live:
+            return web.json_response({"error": "Settings can't be changed here; use the Configuration tab."}, status=503)
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(text="invalid JSON")
+        changes = body.get("values") if isinstance(body, dict) else None
+        if not isinstance(changes, dict):
+            raise web.HTTPBadRequest(text="expected {\"values\": {...}}")
+        if set(settingslib.ACCESS_KEYS) & changes.keys() and not await access.is_admin(req):
+            same = all(monitor.opts.get(k) == changes[k] for k in settingslib.ACCESS_KEYS if k in changes)
+            if not same:
+                return web.json_response({"error": "Only Home Assistant admins can change who can make changes.",
+                                          "errors": {k: "Only Home Assistant admins can change this"
+                                                     for k in settingslib.ACCESS_KEYS if k in changes}}, status=403)
+            changes = {k: v for k, v in changes.items() if k not in settingslib.ACCESS_KEYS}
+        user = await access.who(req)
+        try:
+            result = await live.save(changes, user["display"] or "")
+        except ValueError as err:
+            problems = err.args[0] if err.args and isinstance(err.args[0], dict) else {}
+            return web.json_response({"error": "Some settings need changing first.", "errors": problems}, status=400)
+        except RuntimeError as err:
+            return web.json_response({"error": f"Not saved: {err}"}, status=502)
+        return web.json_response({"ok": True, **result, "values": settingslib.values(monitor.opts)})
 
     async def export_data(_req):
         data = await asyncio.to_thread(make_backup, os.environ.get("PM_VERSION"))
@@ -4621,6 +4750,8 @@ def build_app(monitor: Monitor, access: Access) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/views", views_get)
+    app.router.add_get("/api/settings", editor_only(settings_get))
+    app.router.add_post("/api/settings", editor_only(settings_post))
     app.router.add_get("/api/export", editor_only(export_data))
     app.router.add_post("/api/import", editor_only(import_data))
     app.router.add_post("/api/import/chunk", editor_only(import_chunk))
@@ -5058,6 +5189,178 @@ def agent_ssl_context(opts: dict) -> ssl.SSLContext | None:
     return ctx
 
 
+class AgentListener:
+    """The agent port, which can be switched between HTTP and HTTPS (or given a new
+    certificate) without restarting the add-on."""
+
+    def __init__(self, monitor: Monitor):
+        self.runner = web.AppRunner(build_agent_app(monitor), access_log=None)
+        self.site: web.TCPSite | None = None
+        self.ctx: ssl.SSLContext | None = None
+
+    @property
+    def https(self) -> bool:
+        return self.ctx is not None
+
+    async def start(self, ctx: ssl.SSLContext | None) -> None:
+        if not self.runner.server:
+            await self.runner.setup()
+        site = web.TCPSite(self.runner, "0.0.0.0", AGENT_PORT, ssl_context=ctx, reuse_address=True)
+        await site.start()
+        self.site, self.ctx = site, ctx
+        log.info("Agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
+
+    async def restart(self, ctx: ssl.SSLContext | None) -> None:
+        """Swap to a new listener. Agents retry anything refused in the moment between the two.
+        If the new one can't start, the old settings are put back."""
+        old = self.ctx
+        if self.site:
+            await self.site.stop()
+            self.site = None
+        try:
+            await self.start(ctx)
+        except Exception:
+            log.exception("Agent API could not restart on port %d; going back to the previous settings", AGENT_PORT)
+            await self.start(old)
+            raise
+
+
+async def notification_target(ha: HomeAssistant, opts: dict) -> str:
+    """Where tapping a phone notification goes: the notification_url setting, or this dashboard."""
+    url = str(opts.get("notification_url") or "").strip()
+    if not url:
+        slug = await ha.addon_slug() or "local_ping_monitor"
+        url = f"/{slug}"
+    return url if url.startswith(("/", "http://", "https://")) else "/" + url
+
+
+class LiveSettings:
+    """Changes the add-on's settings from the dashboard and puts them into effect without a restart.
+
+    The settings stay the add-on's options (what the Configuration tab shows): they're saved
+    through the Supervisor, so both places always agree and exports keep working. Changes saved
+    in the Configuration tab are noticed too, and applied the same way.
+    """
+    WATCH_SECONDS = 10
+
+    def __init__(self, monitor: Monitor, access: Access, agent_listener: AgentListener | None):
+        self.monitor, self.access, self.agent_listener = monitor, access, agent_listener
+        self.lock = asyncio.Lock()
+        self._mtime = self._options_mtime()
+
+    @staticmethod
+    def _options_mtime() -> float:
+        try:
+            return OPTIONS_PATH.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    @staticmethod
+    def _read_raw() -> dict:
+        try:
+            raw = json.loads(OPTIONS_PATH.read_text())
+            return raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def ssl_files(self) -> list[str]:
+        try:
+            return sorted(p.name for p in SSL_DIR.iterdir() if p.is_file() and not p.name.startswith("."))[:200]
+        except OSError:
+            return []
+
+    async def check_agent_port(self, merged: dict) -> tuple[str, str] | None:
+        """Problem with the agent HTTPS settings, if any (e.g. the certificate file is missing)."""
+        for key, dflt in (("agent_certfile", "fullchain.pem"), ("agent_keyfile", "privkey.pem")):
+            name = str(merged.get(key) or dflt)
+            if not (SSL_DIR / name).is_file():
+                return key, f"{name} isn't in Home Assistant's /ssl folder"
+        try:
+            await asyncio.to_thread(agent_ssl_context, merged)
+            return None
+        except (ssl.SSLError, OSError, ValueError) as err:
+            return "agent_keyfile", f"The certificate and key can't be used together ({err})"
+
+    async def apply(self, changed: dict) -> list[str]:
+        """Put changed settings into effect now."""
+        notes = self.monitor.apply_options(changed)
+        if {"admin_only_changes", "editors"} & changed.keys():
+            self.access.update(self.monitor.opts)
+            log.info("Who can make changes: %s", "HA admins" + (f" and {', '.join(sorted(self.access.editors))}"
+                     if self.access.editors else "") if self.access.enabled else "anyone who can open the panel")
+        if "notification_url" in changed:
+            self.monitor.click_url = await notification_target(self.monitor.ha, self.monitor.opts)
+            log.info("Phone notifications will open %s", self.monitor.click_url)
+        if set(settingslib.AGENT_PORT_KEYS) & changed.keys() and self.agent_listener:
+            o = self.monitor.opts
+            if o.get("agent_ssl") or self.agent_listener.https:
+                try:
+                    ctx = await asyncio.to_thread(agent_ssl_context, o)
+                    await self.agent_listener.restart(ctx)
+                    notes.append(f"the agent port now uses {'HTTPS' if ctx else 'HTTP'}; agents keep using the "
+                                 f"address they were given, so set {'https' if ctx else 'http'}:// addresses under Agents")
+                except Exception as err:  # noqa: BLE001
+                    notes.append(f"the agent port couldn't switch ({err}); restart the add-on")
+        return notes
+
+    async def save(self, changes: dict, who: str = "") -> dict:
+        """Check, save and apply changes from the dashboard. Raises ValueError with
+        {key: problem} for anything that isn't allowed."""
+        async with self.lock:
+            clean, errors = settingslib.clean(changes)
+            if errors:
+                raise ValueError(errors)
+            current = {**DEFAULTS, **self._read_raw()}
+            changed = {k: v for k, v in clean.items() if current.get(k) != v}
+            if not changed:
+                return {"changed": [], "notes": []}
+            merged = {**current, **changed}
+            if set(settingslib.AGENT_PORT_KEYS) & changed.keys() and merged.get("agent_ssl"):
+                problem = await self.check_agent_port(merged)
+                if problem:
+                    raise ValueError({problem[0]: problem[1]})
+            saved = {k: v for k, v in merged.items() if k in DEFAULTS}  # only options config.yaml knows
+            if self.monitor.ha.enabled:
+                err = await self.monitor.ha.write_options(saved)
+                if err:
+                    raise RuntimeError(err)
+            else:  # development, outside Home Assistant
+                tmp = OPTIONS_PATH.with_suffix(".tmp")
+                tmp.write_text(json.dumps(saved, indent=2))
+                tmp.replace(OPTIONS_PATH)
+            self._mtime = self._options_mtime()
+            notes = await self.apply(changed)
+            log.info("Settings changed from the dashboard%s: %s", f" by {who}" if who else "", ", ".join(sorted(changed)))
+            return {"changed": sorted(changed), "notes": notes}
+
+    async def watch(self) -> None:
+        """Apply settings saved in the Configuration tab (or by the Supervisor) without a restart."""
+        while True:
+            await asyncio.sleep(self.WATCH_SECONDS)
+            try:
+                mtime = self._options_mtime()
+                if not mtime or mtime == self._mtime:
+                    continue
+                async with self.lock:
+                    self._mtime = mtime
+                    raw = self._read_raw()
+                    if not raw:
+                        continue
+                    clean, errors = settingslib.clean({k: v for k, v in raw.items() if k in settingslib.LABELS})
+                    for key, problem in errors.items():
+                        log.warning("Configuration tab, %s: %s; keeping the current value", key, problem)
+                    changed = {k: v for k, v in clean.items() if self.monitor.opts.get(k) != v}
+                    if not changed:
+                        continue
+                    log.info("Configuration tab changes applied without a restart: %s", ", ".join(sorted(changed)))
+                    for note in await self.apply(changed):
+                        log.info("  %s", note)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("Couldn't apply changed settings")
+
+
 async def main() -> None:
     opts = load_options()
     logging.basicConfig(
@@ -5073,11 +5376,7 @@ async def main() -> None:
         monitor = Monitor(opts, store, ha)
         if monitor.imported:
             await ha.clear_option_hosts()
-        url = str(opts.get("notification_url") or "").strip()
-        if not url:
-            slug = await ha.addon_slug() or "local_ping_monitor"
-            url = f"/{slug}"
-        monitor.click_url = url if url.startswith(("/", "http://", "https://")) else "/" + url
+        monitor.click_url = await notification_target(ha, opts)
         log.info("Phone notifications will open %s", monitor.click_url)
         await detect_ping_mode()
         log.info("Checking hosts by %s", "ping" if PING_MODE == "icmp" else "TCP (ping isn't permitted)")
@@ -5097,18 +5396,18 @@ async def main() -> None:
                      if access.editors else "")
         else:
             log.info("admin_only_changes is off: anyone who can open the panel can make changes")
-        runner = web.AppRunner(build_app(monitor, access), access_log=None)
+        agent_listener: AgentListener | None = AgentListener(monitor)
+        try:
+            await agent_listener.start(agent_ssl_context(opts))
+        except Exception as err:  # noqa: BLE001
+            log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
+            agent_listener = None
+        live = LiveSettings(monitor, access, agent_listener)
+        monitor._settings_watch = asyncio.create_task(live.watch())
+        runner = web.AppRunner(build_app(monitor, access, live), access_log=None)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", PORT).start()
         log.info("Dashboard listening on port %d", PORT)
-        try:
-            ctx = agent_ssl_context(opts)
-            agent_runner = web.AppRunner(build_agent_app(monitor), access_log=None)
-            await agent_runner.setup()
-            await web.TCPSite(agent_runner, "0.0.0.0", AGENT_PORT, ssl_context=ctx).start()
-            log.info("Agent API listening on port %d (%s)", AGENT_PORT, "HTTPS" if ctx else "HTTP")
-        except Exception as err:  # noqa: BLE001
-            log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
         try:
             loop = asyncio.get_running_loop()
             await loop.create_datagram_endpoint(lambda: sysloglib.Receiver(monitor.on_syslog), local_addr=("0.0.0.0", SYSLOG_PORT))
