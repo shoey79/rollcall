@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.67.1 - 2026-11-13
+
+### Fixed
+- **Paused computers with agents or services could stay "waiting for it to go down" after restarting.** A computer with an agent counted as up for 10 minutes after each report even when it stopped answering ping, so a restart wasn't seen until the agent reported afterwards.
+  - While paused, a computer that normally answers ping now counts as gone down as soon as ping fails, and as back when ping answers again.
+  - Paused computers waiting to go down are checked every 5 seconds instead of 15, so quick restarts of virtual machines aren't missed.
+  - **Windows agent 1.0.37** also runs a minute after Windows starts, so a restart is reported straight away instead of up to 5 minutes later. It adds a second scheduled task, *Ping Monitor Agent (start-up)*, by itself, and two runs never overlap.
+
 ## 1.68.0 - 2026-11-13
 
 ### Added

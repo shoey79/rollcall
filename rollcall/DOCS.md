@@ -1007,8 +1007,9 @@ Choose **Pause** on a row, or in Details, before rebooting or working on a machi
 
 - When it has gone down and replies again, monitoring resumes by itself, with a "back online" message if `notify_recovery` is on.
 - If it isn't back by the time limit, it goes red and you're alerted.
-- While it's waiting for the machine to go down, it's checked every 15 seconds, so a quick reboot isn't missed.
-- With an agent, a restart is also spotted from the agent's uptime: if the computer booted after the pause began, it counts as having gone down and come back. This matters for computers checked by their agent, which count as up for 10 minutes after each report, so a reboot never shows as down.
+- While it's waiting for the machine to go down, it's checked every 5 seconds, so a quick reboot isn't missed.
+- A computer with an agent normally counts as up for 10 minutes after each report, even if ping fails. While it's paused, if it usually answers ping, a missed ping counts as it going down, and it's back when ping answers again.
+- A restart is also spotted from the agent's uptime: if the computer booted after the pause began, it counts as having gone down and come back. This covers computers that don't answer ping. The Windows agent (1.0.37 or later) also runs a minute after Windows starts, so this is noticed straight away rather than up to 5 minutes later.
 - If it never appeared to go down or restart, it resumes quietly at the time limit.
 - **Resume** ends the pause early.
 

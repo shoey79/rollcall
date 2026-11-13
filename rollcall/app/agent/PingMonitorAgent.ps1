@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.36'
+$AgentVersion = '1.0.37'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -2584,6 +2584,14 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $script:PushedServers = @($state.servers | Where-Object { $_ -match '^https?://[^\s,;]+$' })
 
     $extra = @($ExtraServices) + @($state.watch) | Where-Object { $_ } | Select-Object -Unique
+    if (-not ($ReportOnly -or $ShowReport)) {
+        # One run at a time (the start-up run and the regular one can meet just after a restart)
+        $script:RunLock = New-Object Threading.Mutex($false, 'Global\RollcallAgentRun')
+        $got = $false
+        try { $got = $script:RunLock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $got = $true }
+        if (-not $got) { Write-AgentLog 'Another run is still going; skipped this one'; return }
+        Register-StartupTask
+    }
     $report = Get-Report $state $extra
     if ($ReportOnly -or $ShowReport) { $report | ConvertTo-Json -Depth 10; return }
 
@@ -2674,8 +2682,24 @@ function Install-Agent {
     Write-Output "Rollcall agent $AgentVersion installed. It will appear in the dashboard's Agents list for approval within a minute."
 }
 
+# Also run once a minute after Windows starts, so Rollcall hears about a restart straight away
+# (a paused computer's pause ends when it's back) instead of up to 5 minutes later.
+function Register-StartupTask {
+    $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
+    if (-not $PSCommandPath -or $PSCommandPath -ne $dest -or -not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { return }
+    $name = "$TaskName (start-up)"
+    & schtasks.exe /Query /TN $name 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { return }
+    $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$dest`""
+    if ($IgnoreCertificate) { $cmd += ' -IgnoreCertificate' }
+    & schtasks.exe /Create /TN $name /TR $cmd /SC ONSTART /DELAY 0001:00 /RU SYSTEM /RL HIGHEST /F 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-AgentLog 'Added a start-up run, so restarts are reported straight away' }
+    else { Write-AgentLog "WARN Couldn't add the start-up run (schtasks exit code $LASTEXITCODE)" }
+}
+
 function Uninstall-Agent {
     & schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
+    & schtasks.exe /Delete /TN "$TaskName (start-up)" /F 2>$null | Out-Null
     if (Test-Path $DataPath) { Remove-Item -Path $DataPath -Recurse -Force }
     Write-Output 'Rollcall agent removed. Revoke it in the dashboard too if it was approved.'
 }

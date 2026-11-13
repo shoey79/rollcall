@@ -1378,6 +1378,7 @@ class Host:
     maint_until: float | None = None   # set while paused for maintenance
     maint_seen_down: bool = False      # has it stopped replying (or restarted) since the pause began?
     maint_started: float | None = None # when the pause began
+    ping_seen: float | None = None     # last time it really answered ping (not counted as up by its agent)
     maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
     schedule: dict | None = None       # None: monitored all the time
     expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
@@ -1996,6 +1997,7 @@ class Monitor:
                 h.latency = None
                 h.failures = 0 if ok else (1 if age is None or age <= stale else 2)  # never reported: amber, not a down alert
                 old = h.status
+                pinged = ok
                 reason = "agent_never" if age is None else "agent_late"
             else:
                 async with self.sem:
@@ -2012,6 +2014,9 @@ class Monitor:
                     else:
                         ok, latency = False, None
                 now = time.time()
+                pinged = ok
+                if pinged:
+                    h.ping_seen = now
                 # Automatic: a computer whose agent reported in the last 10 minutes is up even if it
                 # doesn't answer ping (e.g. a laptop reporting over the internet, or ICMP blocked).
                 h.via_agent = bool(not ok and h.check_by == "auto" and h.agent_id and h.agent_seen
@@ -2042,10 +2047,17 @@ class Monitor:
             if h.maint_until:
                 # Paused: keep pinging, but don't alert. End the pause once it has
                 # gone away and come back, or when the window runs out.
-                if not ok and not h.maint_seen_down:
+                alive = ok
+                if (h.check_by == "auto" and h.via_agent and h.ping_seen
+                        and h.ping_seen >= (h.maint_started or now) - 900):
+                    # It normally answers ping, so a missed ping means it's restarting, even though
+                    # its agent reported a few minutes ago; and it's back when ping answers again.
+                    alive = pinged
+                if not alive and not h.maint_seen_down:
                     h.maint_seen_down = True
                     self._save_maint()
-                if ok and h.maint_seen_down:
+                    log.info("%s: stopped answering during maintenance", h.name)
+                if alive and h.maint_seen_down:
                     new, reason = GREEN, "maint_back"
                 elif now >= h.maint_until:
                     new = GREEN if ok else RED
@@ -2089,7 +2101,7 @@ class Monitor:
                      or any(s.status == AMBER for s in h.services))
             h.next_due = now + (min(self.retry_interval, self.interval) if retry else self.interval)
             if h.maint_until and not h.maint_seen_down:
-                h.next_due = min(h.next_due, now + 15)  # paused until it's back: check often, so a quick restart isn't missed
+                h.next_due = min(h.next_due, now + 5)  # paused until it's back: check often, so a quick restart isn't missed
             nxt = schedule_state(h.schedule, now)[2] if h.schedule else None
             if nxt and now < nxt < h.next_due:
                 h.next_due = nxt + 1  # check as soon as its window opens or closes
