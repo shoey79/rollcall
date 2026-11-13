@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.69.2 - 2026-11-13
+
+### Changed
+- **Tabs are easier to tell apart:** each tab has its own outline, the selected one is highlighted with a blue outline and underline, and **+ New tab** has a dashed outline.
+
 ## 1.69.1 - 2026-11-13
 
 ### Fixed
