@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.71.1 - 2026-11-13
+
+### Fixed
+- **The Manage button moved to the left on some tabs**, mostly Overview, and on phones its menu could open off the screen. It now stays at the right on every tab, and the menu opens towards whichever side has room.
+
 ## 1.71.0 - 2026-11-13
 
 ### Changed

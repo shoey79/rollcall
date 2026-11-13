@@ -61,23 +61,21 @@ button:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 button:disabled{opacity:.5;cursor:default}
 button.danger{color:var(--red)}
 button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
-.menuwrap{position:relative;margin-left:auto}
+.menuwrap{position:relative;margin-left:auto}  /* right-hand edge, even when it wraps onto a line of its own */
+.tbgap{flex:1 1 0;min-width:0}  /* keeps the tab buttons and Manage at the right on every tab */
 #menuBtn{font-size:13px;padding:7px 14px;white-space:nowrap}
-.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:2px}
+.menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;max-width:calc(100vw - 24px);padding:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:2px}
 .menu button{border:none;background:transparent;text-align:left;padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);display:flex;align-items:center;gap:8px;justify-content:space-between}
 .menu button:hover,.menu button:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .menu button.danger{color:var(--red)}
 .menu hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
 #pauseTab,#resumeTab{font-size:13px;padding:7px 12px}
 body.home-on #pauseTab,body.home-on #resumeTab{display:none!important}
-#pauseTab:not([hidden])~.menuwrap,#resumeTab:not([hidden])~.menuwrap{margin-left:0}
-#pauseTab:not([hidden]){margin-left:auto}
-#pauseTab[hidden]+#resumeTab:not([hidden]){margin-left:auto}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 button.primary:hover{background:color-mix(in srgb,var(--accent) 85%,#000)}
 #addHost{font-size:13px;padding:7px 14px}
 body.view-only .edit-only{display:none !important}
-.viewonly{display:none;margin-left:auto;align-self:center;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:var(--card)}
+.viewonly{display:none;align-self:center;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 11px;background:var(--card)}
 body.view-only.loaded .viewonly{display:inline-block}
 .actions{display:flex;gap:6px}
 .empty button{margin-top:10px;font-size:13px;padding:7px 14px}
@@ -457,6 +455,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   <div class="toolbar">
     <input type="search" id="filter" placeholder="Filter by name, IP or service">
     <select id="sortMobile" aria-label="Sort by"></select>
+    <span class="tbgap"></span>
     <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
     <button id="pauseTab" class="edit-only" hidden title="Pause alerts for every computer shown in this tab"></button>
     <button id="resumeTab" class="edit-only" hidden title="Resume monitoring for every paused computer in this tab"></button>
@@ -1977,7 +1976,12 @@ document.getElementById("resetAll").addEventListener("click", () => resetUptime(
 const menuBtn = document.getElementById("menuBtn"), mainMenu = document.getElementById("mainMenu");
 function setMenu(open) {
   mainMenu.hidden = !open; menuBtn.setAttribute("aria-expanded", String(open));
-  if (open) mainMenu.querySelector("button").focus();
+  if (open) {
+    // Open towards whichever side has room, so it's never off the screen
+    mainMenu.style.left = ""; mainMenu.style.right = "";
+    if (mainMenu.getBoundingClientRect().left < 8) { mainMenu.style.left = "0"; mainMenu.style.right = "auto"; }
+    mainMenu.querySelector("button").focus();
+  }
 }
 menuBtn.addEventListener("click", e => { e.stopPropagation(); setMenu(mainMenu.hidden); });
 mainMenu.addEventListener("click", e => { if (e.target.closest("button")) setMenu(false); });
