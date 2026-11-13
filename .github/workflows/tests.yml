@@ -1,0 +1,38 @@
+# Runs on every push and pull request. The Windows job uses GitHub's Windows Server machines,
+# which have the real Windows PowerShell 5.1 that the Windows agent runs on.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Add-on and agents (Linux, PowerShell 7)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest aiohttp cryptography regex
+      - run: python -m pytest -q tests
+        env:
+          PWSH: pwsh
+
+  windows:
+    name: Windows agent (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest -q tests/test_agent_strict.py tests/test_secret_scan.py
