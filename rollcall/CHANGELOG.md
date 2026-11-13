@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.67.1 - 2026-11-13
+## 1.68.1 - 2026-11-13
 
 ### Fixed
 - **Paused computers with agents or services could stay "waiting for it to go down" after restarting.** A computer with an agent counted as up for 10 minutes after each report even when it stopped answering ping, so a restart wasn't seen until the agent reported afterwards.
