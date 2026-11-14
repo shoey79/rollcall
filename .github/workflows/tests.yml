@@ -36,3 +36,39 @@ jobs:
           python-version: "3.12"
       - run: pip install pytest
       - run: python -m pytest -q tests/test_agent_strict.py tests/test_secret_scan.py
+
+  msi-build:
+    name: Build a test agent installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get install -y -q msitools && pip install pyyaml aiohttp cryptography regex
+      - run: python tests/build_test_msi.py out/agent.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-msi
+          path: out/agent.msi
+
+  msi-windows:
+    name: Agent installer on Windows (silent and interactive)
+    needs: msi-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-msi
+          path: out
+      - run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/msi_check.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msi-results
+          path: |
+            out/*.png
+            out/*.log
