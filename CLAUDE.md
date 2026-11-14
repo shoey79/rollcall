@@ -32,6 +32,16 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
+- **Start-up allowance for "whenever it's on" computers** (`expect_off`): a server that is only on overnight
+  alerts on its services and agent checks as it boots. When one of these computers starts answering again,
+  hold back service and agent alerts for a few minutes, as timed schedules already do.
+  - Timed schedules have `schedule.grace` (minutes, default 15, 0–240), `Host.sched_started` and `in_grace` in the
+    check loop (main.py, around `if h.expect_off:`). For `expect_off`, `on` is simply "answers ping", so the host's
+    own ping never alerts, but `check_services` / `on_service_change` and the agent checks alert straight away.
+  - Set the start time when it goes from off to answering; while within the allowance, keep failed services at
+    "starting up" rather than red and don't notify. Then alert straight away for anything still down.
+  - Let the allowance be set for these computers too (same minutes box as timed schedules), default 15.
+  - Show "starting up" on the card while in the allowance, as for timed schedules.
 - **VPN status for Sophos XG/XGS firewalls** (not UTM: it's end of life): a down IPsec tunnel went unnoticed,
   though SNMP and syslog were on. Poll `sfosIPSecVpnTunnelTable` (SFOS-FIREWALL-MIB,
   `.1.3.6.1.4.1.2604.5.1.6.1.1.1`): connection name (`.1.2`), status (`.1.9`: 0 inactive, 1 active,
