@@ -25,6 +25,8 @@ Remove each line once it's released.
 
 - Rename the menu item **Manage > Add computer** to **Add device** (and its dialog title, docs and any other
   wording that says "Add computer" for the same thing).
+- Add an **Ombi** service tickbox (Home & automation, with Plex/Jellyfin): web check on its default port,
+  `http:5000/`; alias `ombi`; note "Ombi media request site".
 
 ## Requested features (not started)
 
