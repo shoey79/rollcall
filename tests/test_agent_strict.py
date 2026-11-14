@@ -110,11 +110,12 @@ def test_windows_agent_locks_its_folder_back_down(tmp_path):
         _Rollcall.reports = []
         subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # put back after this run's report
         acl = subprocess.run(["icacls", str(data / "agent.log")], capture_output=True, text=True).stdout
-        assert "Users" not in acl, acl
+        log = (data / "agent.log").read_text(errors="replace")[-3000:]
+        assert "BUILTIN\\Users" not in acl, acl + "\nagent log:\n" + log
         _Rollcall.reports = []
         subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # and reported with the next one
         got = [r.get("agent_integrity") for r in _Rollcall.reports if r.get("agent_integrity")]
-        assert got, "no agent_integrity in the report"
+        assert got, "no agent_integrity in the report\nagent log:\n" + (data / "agent.log").read_text(errors="replace")[-3000:]
         assert got[-1]["first"] is False
         assert any("Users" in w for w in got[-1]["what"]) and any("owned by" in w for w in got[-1]["what"]), got[-1]
     finally:
