@@ -32,6 +32,14 @@ exit 1
 """
 
 
+def _clean_env():
+    """Windows PowerShell 5.1 as a scheduled task sees it: without PowerShell 7's module paths, which
+    GitHub's runner passes down and which stop 5.1 loading its own modules."""
+    env = dict(os.environ)
+    env.pop("PSModulePath", None)
+    return env
+
+
 class _Rollcall(http.server.BaseHTTPRequestHandler):
     reports: list = []
 
@@ -70,7 +78,7 @@ def test_windows_agent_reports_even_when_programs_fail(tmp_path):
             # The real thing: Windows PowerShell 5.1 and the real schtasks.exe
             cmd = [PWSH, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(agent),
                    "-Server", server, "-EnrolKey", "testkey", "-DataPath", str(data)]
-            env = dict(os.environ)
+            env = _clean_env()
         else:
             bin_ = tmp_path / "bin"
             bin_.mkdir()
@@ -101,19 +109,20 @@ def test_windows_agent_locks_its_folder_back_down(tmp_path):
         shutil.copy(AGENT, agent)
         cmd = [PWSH, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(agent),
                "-Server", f"http://127.0.0.1:{srv.server_address[1]}", "-EnrolKey", "testkey", "-DataPath", str(data)]
-        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # first run: tidies up quietly
+        env = _clean_env()
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # first run: tidies up quietly
         acl = subprocess.run(["icacls", str(data)], capture_output=True, text=True).stdout
         assert "BUILTIN\\Users" not in acl and "Everyone" not in acl, acl
         # Open it up the way someone reading the log might
         subprocess.run(["icacls", str(data / "agent.log"), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
         subprocess.run(["icacls", str(data), "/setowner", os.environ["USERNAME"]], check=True, capture_output=True)
         _Rollcall.reports = []
-        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # put back after this run's report
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # put back after this run's report
         acl = subprocess.run(["icacls", str(data / "agent.log")], capture_output=True, text=True).stdout
         log = (data / "agent.log").read_text(errors="replace")[-3000:]
         assert "BUILTIN\\Users" not in acl, acl + "\nagent log:\n" + log
         _Rollcall.reports = []
-        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # and reported with the next one
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # and reported with the next one
         got = [r.get("agent_integrity") for r in _Rollcall.reports if r.get("agent_integrity")]
         assert got, "no agent_integrity in the report\nagent log:\n" + (data / "agent.log").read_text(errors="replace")[-3000:]
         assert got[-1]["first"] is False

@@ -69,8 +69,9 @@ def test_windows_agent_agrees_and_never_sends_them(corpus):
     script, folder = (str(x).replace("'", "''") for x in (AGENTS / "PingMonitorAgent.ps1", root))
     cmd = ("[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; "
            f"& '{script}' -SecretTest '{folder}'")
+    env = {k: v for k, v in os.environ.items() if not (WIN_PS and k == "PSModulePath")}
     run = subprocess.run([PWSH, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-                         capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace")
+                         capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace", env=env)
     assert run.returncode == 0, run.stderr[-3000:]
     start = run.stdout.find("[")
     assert start >= 0, run.stdout[-2000:] + run.stderr[-2000:]

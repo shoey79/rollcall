@@ -196,7 +196,9 @@ function Test-AgentFolderSecurity($State) {
         $found = New-Object System.Collections.ArrayList
         $items = @(Get-Item -LiteralPath $DataPath -Force) + @(Get-ChildItem -LiteralPath $DataPath -Force -Recurse -ErrorAction SilentlyContinue)
         foreach ($it in $items) {
-            $acl = Get-Acl -LiteralPath $it.FullName
+            # Straight from .NET (no module to load); Get-Acl if that's not there (PowerShell 7)
+            $acl = $null
+            try { $acl = $it.GetAccessControl() } catch { $acl = Get-Acl -LiteralPath $it.FullName }
             $name = if ($it.FullName -eq (Get-Item -LiteralPath $DataPath -Force).FullName) { 'the agent folder' } else { $it.Name }
             $owner = & $sidOf ($acl.GetOwner([Security.Principal.NTAccount]))
             if ($allowed -notcontains $owner) { [void]$found.Add("$name was owned by $($acl.Owner)") }
