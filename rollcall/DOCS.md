@@ -590,7 +590,7 @@ For computers looked after by people who aren't in IT, use **Download installer 
 - lets a newer .msi replace an older one, keeping the computer's approval;
 - rolls back and shows an error if the agent couldn't be installed.
 
-The computer then appears under Agents for approval as usual. For silent installs (Intune, MECM, Group Policy software installation): `msiexec /i RollcallAgent-<version>.msi /qn`.
+When installed by double-clicking, it ends on a **Rollcall agent installed** screen saying the computer will appear in Rollcall within a minute or two (or, if something went wrong, a screen saying how to get an install log). The computer then appears under Agents for approval as usual. For silent installs (Intune, MECM, Group Policy software installation), which show no screens: `msiexec /i RollcallAgent-<version>.msi /qn`.
 
 The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" (choose **More info → Run anyway**). You can sign it yourself after downloading, with `signtool`. Many email systems block .msi attachments, so share it with a link instead.
 

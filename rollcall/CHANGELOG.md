@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.73.0 - 2026-11-14
+
+### Added
+- **The agent installer (.msi) says when it's finished.** Installing it by double-clicking now ends on a **Rollcall agent installed** screen. It says the agent is running, that the computer will appear in Rollcall within a minute or two, and that a new computer needs approving under Manage > Agents.
+  - If the install fails, a screen says nothing was changed and how to get an install log.
+  - Silent installs (`/qn`, e.g. MECM or Intune) show no screens, as before.
+  - Download the installer again from Agents to get the new version.
+- Tests: GitHub builds a test installer and installs it on Windows both silently and interactively, checking the right screens appear.
+
 ## 1.72.3 - 2026-11-14
 
 ### Fixed
