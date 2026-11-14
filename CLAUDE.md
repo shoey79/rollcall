@@ -17,3 +17,11 @@ docs, changelogs, commit messages or test data:
   the person who raised it, e.g. `([#4](https://github.com/shoey79/rollcall/issues/4), thanks to
   [name](https://github.com/name) for the request)`. Their GitHub username is public, so it's fine to use.
 - Don't write a bare `@name` in commit messages (it notifies them); link the profile in the changelog instead.
+
+## Queued changes
+
+Small changes the owner has asked for, to include with the next bigger release (not on their own).
+Remove each line once it's released.
+
+- Rename the menu item **Manage > Add computer** to **Add device** (and its dialog title, docs and any other
+  wording that says "Add computer" for the same thing).
