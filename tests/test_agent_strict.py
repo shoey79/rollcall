@@ -113,19 +113,28 @@ def test_windows_agent_locks_its_folder_back_down(tmp_path):
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # first run: tidies up quietly
         acl = subprocess.run(["icacls", str(data)], capture_output=True, text=True).stdout
         assert "BUILTIN\\Users" not in acl and "Everyone" not in acl, acl
-        # Open it up the way someone reading the log might
-        subprocess.run(["icacls", str(data / "agent.log"), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
+        # Open it up the way Explorer does when someone clicks Continue to read the log: their account
+        # (and here Users too) added to the folder itself, passed down to everything inside
+        subprocess.run(["icacls", str(data), "/grant", f"{os.environ['USERNAME']}:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)R"],
+                       check=True, capture_output=True)
         subprocess.run(["icacls", str(data), "/setowner", os.environ["USERNAME"]], check=True, capture_output=True)
+        subprocess.run(["icacls", str(data / "agent.log"), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
         _Rollcall.reports = []
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # put back after this run's report
-        acl = subprocess.run(["icacls", str(data / "agent.log")], capture_output=True, text=True).stdout
         log = (data / "agent.log").read_text(errors="replace")[-3000:]
-        assert "BUILTIN\\Users" not in acl, acl + "\nagent log:\n" + log
+        for target in (data, data / "agent.log", data / "state.json"):
+            acl = subprocess.run(["icacls", str(target)], capture_output=True, text=True).stdout
+            assert "BUILTIN\\Users" not in acl and os.environ["USERNAME"].lower() not in acl.lower().split(str(tmp_path).lower())[-1], \
+                acl + "\nagent log:\n" + log
         _Rollcall.reports = []
-        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # and reported with the next one
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)   # reported with the next one
         got = [r.get("agent_integrity") for r in _Rollcall.reports if r.get("agent_integrity")]
         assert got, "no agent_integrity in the report\nagent log:\n" + (data / "agent.log").read_text(errors="replace")[-3000:]
         assert got[-1]["first"] is False
         assert any("Users" in w for w in got[-1]["what"]) and any("owned by" in w for w in got[-1]["what"]), got[-1]
+        # Fixed for good: the next run finds nothing more to put back
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
+        log = (data / "agent.log").read_text(errors="replace")
+        assert log.count("Put back the permissions") == 1, log[-3000:]
     finally:
         srv.shutdown()

@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.40'
+$AgentVersion = '1.0.41'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -174,9 +174,25 @@ function Save-State($State) {
 }
 
 function Protect-DataFolder {
-    # The token lives here: SYSTEM and Administrators only.
+    # The token lives here: SYSTEM and Administrators only. The folder's permissions are replaced
+    # whole, in one step (anything else on it, e.g. an account Explorer added when someone opened the
+    # folder, is dropped), then everything inside goes back to inheriting just that.
+    $ErrorActionPreference = 'Continue'
     try {
-        & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+        $sec = New-Object System.Security.AccessControl.DirectorySecurity
+        $sec.SetAccessRuleProtection($true, $false)
+        $admins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+        $sec.SetOwner($admins)
+        foreach ($sid in 'S-1-5-18', 'S-1-5-32-544') {
+            $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                        (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+        }
+        $dir = New-Object System.IO.DirectoryInfo($DataPath)
+        try { $dir.SetAccessControl($sec) } catch {
+            [System.IO.FileSystemAclExtensions]::SetAccessControl($dir, $sec)  # PowerShell 7 has it here instead
+        }
+        $null = & icacls.exe (Join-Path $DataPath '*') /setowner '*S-1-5-32-544' /T /C /Q 2>&1
+        $null = & icacls.exe (Join-Path $DataPath '*') /reset /T /C /Q 2>&1
     } catch { Write-AgentLog "WARN couldn't set folder permissions: $($_.Exception.Message)" }
 }
 
@@ -211,9 +227,7 @@ function Test-AgentFolderSecurity($State) {
         $State.perm_checked = $true
         if (-not $found.Count) { return }
         # Put it back: owner Administrators, SYSTEM and Administrators only, children inheriting just that
-        $null = & icacls.exe $DataPath /setowner '*S-1-5-32-544' /T /C /Q 2>&1
-        $null = & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q 2>&1
-        $null = & icacls.exe (Join-Path $DataPath '*') /reset /T /C /Q 2>&1
+        Protect-DataFolder
         $what = @($found | Select-Object -Unique | ForEach-Object { Limit-Text $_ 200 })
         $State.integrity = @{ at = ConvertTo-UtcString (Get-Date); what = $what; first = $first }
         Write-AgentLog ("WARN Put back the permissions on the agent's folder: " + ($what -join '; '))
