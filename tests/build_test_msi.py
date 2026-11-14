@@ -9,5 +9,6 @@ import main  # noqa: E402
 import msi  # noqa: E402
 
 script = main.build_agent_script("windows", "http://127.0.0.1:9", "testkey", False)   # nothing listens there
+Path(sys.argv[1]).parent.mkdir(parents=True, exist_ok=True)
 Path(sys.argv[1]).write_bytes(asyncio.run(msi.build(script, main._script_version() or "1.0.0")))
 print("built", sys.argv[1])
