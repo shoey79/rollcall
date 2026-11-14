@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: sudo apt-get install -y -q msitools && pip install pyyaml aiohttp cryptography regex
+      - run: sudo apt-get install -y -q msitools wixl && pip install pyyaml aiohttp cryptography regex
       - run: python tests/build_test_msi.py out/agent.msi
       - uses: actions/upload-artifact@v4
         with:
