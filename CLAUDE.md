@@ -25,3 +25,17 @@ Remove each line once it's released.
 
 - Rename the menu item **Manage > Add computer** to **Add device** (and its dialog title, docs and any other
   wording that says "Add computer" for the same thing).
+
+## Requested features (not started)
+
+Features the owner has asked for, to build when they say. Remove each once it's released.
+
+- **VPN status for Sophos firewalls**: a down IPsec tunnel went unnoticed, though SNMP and syslog were on.
+  - Sophos XG/XGS (SFOS): poll `sfosIPSecVpnTunnelTable` (SFOS-FIREWALL-MIB, `.1.3.6.1.4.1.2604.5.1.6.1.1.1`):
+    connection name (`.1.2`), status (`.1.9`: 0 inactive, 1 active, 2 partially active), activated (`.1.10`).
+    Show each tunnel in the device's details; alert only for tunnels that are meant to be up (activated,
+    not on-demand), with per-tunnel Ignore.
+  - Sophos UTM (SG/UTM 9): its MIB doesn't seem to include tunnel status. Options: match its IPsec
+    up/down syslog lines (get an anonymised sample from the owner first), or receive its notification
+    SNMP traps (would need a trap receiver).
+
