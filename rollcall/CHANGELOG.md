@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.72.0 - 2026-11-14
+
+### Added
+- **Agents keep their own files locked down** (Windows agent 1.0.40, Linux agent 1.0.18). Each run, the agent checks that its folder and files still belong only to SYSTEM and Administrators (root on Linux) and aren't open to anyone else, and puts back any change, e.g. after someone opened the folder up to read the log.
+  - A new **Agent files** check shows what was found and put back. It's amber for 24 hours, and visible to admins and editors only.
+  - The first check after updating only tidies up, without the amber, since hand-installed agents on Windows 10/11 are owned by whoever installed them.
+  - It runs after the report is sent, so it can never stop one.
+- Tests: on GitHub's Windows machines, opening the folder up is put back and reported.
+
 ## 1.71.1 - 2026-11-13
 
 ### Fixed
