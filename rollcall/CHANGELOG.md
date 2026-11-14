@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.72.1 - 2026-11-14
+
+### Changed
+- **Rollcall opens much faster when you come back to it.** Home Assistant rebuilds the panel every time you return to it.
+  - The browser now keeps its copy of the dashboard page and only checks it's still current, instead of downloading it again each time. An add-on update still shows straight away.
+  - The dashboard draws the last status it had in that browser tab at once, then refreshes it a moment later. That copy is kept only for the tab (cleared when it closes) and only if it's less than 30 minutes old.
+  - In testing, coming back took 0.15 seconds instead of over a second.
+
 ## 1.72.0 - 2026-11-14
 
 ### Added

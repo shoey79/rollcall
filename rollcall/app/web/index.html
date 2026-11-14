@@ -1936,11 +1936,36 @@ document.getElementById("bkImport").addEventListener("click", async e => {
   } catch (err) { st.textContent = "Import failed: " + err.message; e.target.disabled = false; }
 });
 
+// Coming back to Rollcall: Home Assistant rebuilds the page each time you open the panel, so the
+// last status is kept for this browser tab only (sessionStorage, cleared when the tab closes) and
+// drawn straight away, then refreshed from the add-on a moment later.
+const SNAP_KEY = "pm_snapshot";
+function saveSnapshot(statusText) {
+  try { sessionStorage.setItem(SNAP_KEY, JSON.stringify({t: Date.now(), status: statusText, views, icons: uploadedIcons})); } catch (e) {}
+}
+function showSnapshot() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SNAP_KEY) || "null");
+    if (!s || Date.now() - s.t > 30 * 60 * 1000) return false;  // older than 30 minutes: wait for fresh data
+    views = s.views || []; uploadedIcons = s.icons || [];
+    applyStatus(JSON.parse(s.status));
+    return true;
+  } catch (e) { return false; }
+}
 async function load() {
   try {
     const r = await fetch("api/status", {cache: "no-store"});
     if (!r.ok) throw new Error(r.status);
-    data = await r.json();
+    const text = await r.text();
+    applyStatus(JSON.parse(text));
+    saveSnapshot(text);
+  } catch (e) {
+    document.getElementById("err").hidden = false;
+  }
+}
+function applyStatus(fresh) {
+  {
+    data = fresh;
     const viewOnly = data.can_edit !== true;  // fail closed
     const pend = data.agents_pending || 0, badge = document.getElementById("pendBadge");
     badge.hidden = !pend; badge.textContent = pend;
@@ -1953,8 +1978,6 @@ async function load() {
     document.getElementById("err").hidden = true;
     render();
     if (detDlg.open) renderDetActions();
-  } catch (e) {
-    document.getElementById("err").hidden = false;
   }
 }
 
@@ -4199,6 +4222,7 @@ document.getElementById("sortMobile").addEventListener("change", e => {
   setSort(key, +dir);
 });
 renderHead();
+showSnapshot();  // the last view, at once, if this tab has one
 Promise.all([loadViews(), loadIcons()]).then(load);
 setInterval(load, 10000);
 setInterval(() => loadViews().then(render), 60000);  // pick up tabs other people have changed

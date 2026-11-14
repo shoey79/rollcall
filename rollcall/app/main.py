@@ -4002,9 +4002,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return wrapped
 
     async def index(_req):
-        # Always revalidate, so an add-on update shows the new page straight away.
-        return web.FileResponse(WEB_DIR / "index.html", headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
+        # The browser may keep a copy but must check it each time (a 304 when unchanged), so the
+        # page isn't downloaded again on every visit and an add-on update still shows straight away.
+        return web.FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     async def status(req):
         snap = monitor.snapshot()
