@@ -35,4 +35,13 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   `.1.3.6.1.4.1.2604.5.1.6.1.1.1`): connection name (`.1.2`), status (`.1.9`: 0 inactive, 1 active,
   2 partially active), activated (`.1.10`). Show each tunnel in the device's details; alert only for tunnels
   that are meant to be up (activated, not on-demand), with per-tunnel Ignore.
-
+- **Agents choose the internal or external address by subnet**: many agents now report through the external
+  address. Cause: both agents try the address that worked last first (`last_server` / `PreferredServer`), so one
+  failed internal attempt switches them to external for good.
+  - New setting under Agents: **internal networks** (a list of subnets, e.g. `10.0.1.0/24`; Home Assistant's
+    own networks could be suggested). Sent to agents with the addresses, as `servers` is now.
+  - Each run, the agent checks its own IPv4 addresses: on an internal network, try the internal address first,
+    then the external one if that fails; otherwise, external first. Don't stick to whichever worked last, so it
+    returns to the internal address on the next run.
+  - Show which address each agent reported through (internal / external) on the Agents page, so drift is visible.
+  - Both agents (Windows and Linux); keep the addresses the agent was installed with as the last fallback.
