@@ -38,6 +38,23 @@ try {
     [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
     $bmp.Save("$Out\installed-screen.png", [System.Drawing.Imaging.ImageFormat]::Png)
 } catch { Write-Host "Couldn't take a screenshot: $($_.Exception.Message)" }
+# Also print just the installer window into the log (base64 PNG between markers), so the screen can be
+# looked at without downloading attachments
+try {
+    Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r); public struct RECT { public int L, T, R, B; }'
+    $w = Get-Process msiexec -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+    $r = New-Object W.U+RECT
+    if ($w -and [W.U]::GetWindowRect($w.MainWindowHandle, [ref]$r) -and (Test-Path "$Out\installed-screen.png")) {
+        $full = [System.Drawing.Image]::FromFile("$Out\installed-screen.png")
+        $crop = New-Object System.Drawing.Bitmap ($r.R - $r.L), ($r.B - $r.T)
+        [System.Drawing.Graphics]::FromImage($crop).DrawImage($full, (New-Object System.Drawing.Rectangle 0, 0, $crop.Width, $crop.Height), $r.L, $r.T, $crop.Width, $crop.Height, [System.Drawing.GraphicsUnit]::Pixel)
+        $ms = New-Object IO.MemoryStream; $crop.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+        $b64 = [Convert]::ToBase64String($ms.ToArray())
+        Write-Host "WINDOW-PNG-BEGIN $($w.MainWindowTitle)"
+        for ($i = 0; $i -lt $b64.Length; $i += 1000) { Write-Host ("WINDOW-PNG " + $b64.Substring($i, [Math]::Min(1000, $b64.Length - $i))) }
+        Write-Host 'WINDOW-PNG-END'
+    }
+} catch { Write-Host "Couldn't capture the installer window: $($_.Exception.Message)" }
 Get-Process msiexec -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Stop-Process -Force
 if (-not $shown) { Fail 'the "installed" screen was not shown in an interactive install' }
 if (-not (Get-ScheduledTask -TaskName 'Ping Monitor Agent' -ErrorAction SilentlyContinue)) { Fail 'no scheduled task after the interactive install' }
