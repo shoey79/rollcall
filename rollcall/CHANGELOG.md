@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.72.3 - 2026-11-14
+
+### Fixed
+- **Agent folder permissions weren't fully put back** (Windows agent 1.0.41). When someone opens the folder in Explorer and clicks **Continue**, Windows adds their account to the folder itself, and that access is passed down to the files inside. The agent's repair only reset the files and re-granted SYSTEM and Administrators, so that account kept access, and the check stayed amber as each run found it again.
+  - The agent now replaces the folder's permissions whole, in one step (owner Administrators, SYSTEM and Administrators only), then resets everything inside to inherit just that.
+  - The Windows test now opens the folder the way Explorer does, and checks the access is gone and stays gone.
+
 ## 1.72.2 - 2026-11-14
 
 ### Added
