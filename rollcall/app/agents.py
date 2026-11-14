@@ -242,6 +242,10 @@ def normalize_report(r) -> dict:
     for k, n, ln in (("reboot_reasons", 8, 160), ("reboot_packages", 20, 160)):
         if k in r:
             r[k] = [str(x)[:ln] for x in (r[k] if isinstance(r[k], list) else []) if x][:n]
+    if "agent_integrity" in r:
+        g = _as_dict(r["agent_integrity"])
+        r["agent_integrity"] = {"at": str(g.get("at") or "")[:30], "first": g.get("first") is True,
+                                "what": [str(x)[:200] for x in (g.get("what") if isinstance(g.get("what"), list) else []) if x][:10]}
     if "last_patch_title" in r:
         r["last_patch_title"] = str(r["last_patch_title"] or "")[:200]
     for k in ("roles", "ips", "disks", "errors"):
@@ -1554,6 +1558,18 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         res = nic_state(nics, settings.get("nic_watch") or {})
         if res:
             checks.append(_check("nics", "Network", res[0], res[1], confirm=res[0] == CRIT))
+
+    gi = report.get("agent_integrity")
+    if gi and gi.get("at"):
+        # The agent found its own folder's permissions changed (e.g. opened up to read its log) and put them back
+        when = _ts(gi["at"])
+        what = "; ".join(gi.get("what") or []) or "permissions had been changed"
+        if gi.get("first"):
+            checks.append(_check("integrity", "Agent files", OK, f"Locked down when the agent updated ({what})"))
+        elif when and time.time() - when < 86400:
+            checks.append(_check("integrity", "Agent files", WARN, f"Put back at {time.strftime('%H:%M', time.localtime(when))}: {what}"))
+        else:
+            checks.append(_check("integrity", "Agent files", OK, f"Locked down (last put back {time.strftime('%d %b', time.localtime(when or 0))})"))
 
     rs = report.get("secrets")
     if rs and rs.get("on") and settings.get("secret_scan_on", True):  # turned off in Rollcall: gone straight away

@@ -87,3 +87,35 @@ def test_windows_agent_reports_even_when_programs_fail(tmp_path):
         assert "Report sent" in log
     finally:
         srv.shutdown()
+
+
+@pytest.mark.skipif(not WINDOWS or not PWSH, reason="Windows only: uses real NTFS permissions")
+def test_windows_agent_locks_its_folder_back_down(tmp_path):
+    """Someone opens the agent's folder up (e.g. to read its log): the next run puts it back and tells Rollcall."""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Rollcall)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        data = tmp_path / "data"
+        data.mkdir()
+        agent = data / "PingMonitorAgent.ps1"
+        shutil.copy(AGENT, agent)
+        cmd = [PWSH, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(agent),
+               "-Server", f"http://127.0.0.1:{srv.server_address[1]}", "-EnrolKey", "testkey", "-DataPath", str(data)]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # first run: tidies up quietly
+        acl = subprocess.run(["icacls", str(data)], capture_output=True, text=True).stdout
+        assert "BUILTIN\\Users" not in acl and "Everyone" not in acl, acl
+        # Open it up the way someone reading the log might
+        subprocess.run(["icacls", str(data / "agent.log"), "/grant", "*S-1-5-32-545:R"], check=True, capture_output=True)
+        subprocess.run(["icacls", str(data), "/setowner", os.environ["USERNAME"]], check=True, capture_output=True)
+        _Rollcall.reports = []
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # put back after this run's report
+        acl = subprocess.run(["icacls", str(data / "agent.log")], capture_output=True, text=True).stdout
+        assert "Users" not in acl, acl
+        _Rollcall.reports = []
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600)   # and reported with the next one
+        got = [r.get("agent_integrity") for r in _Rollcall.reports if r.get("agent_integrity")]
+        assert got, "no agent_integrity in the report"
+        assert got[-1]["first"] is False
+        assert any("Users" in w for w in got[-1]["what"]) and any("owned by" in w for w in got[-1]["what"]), got[-1]
+    finally:
+        srv.shutdown()

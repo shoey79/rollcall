@@ -104,7 +104,7 @@ AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
-SECURITY_KEYS = ("agent_security", "agent_domain", "agent_secrets")
+SECURITY_KEYS = ("agent_security", "agent_domain", "agent_secrets", "agent_integrity")
 UPS_LIMIT_KEYS = {"runtime_warn": (0, 600), "runtime_crit": (0, 600), "load_warn": (1, 100)}
 
 
@@ -2537,7 +2537,7 @@ class Monitor:
         return None
 
     AGENT_CHECK_KEYS = ("agent", "disk", "services", "updates", "iis", "ad", "dhcp", "hyperv", "printers",
-                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain", "nics", "secrets")
+                        "defender", "security", "events", "immich", "storage", "hardware", "backups", "laps", "bitlocker", "certs", "tasks", "sql", "gpo", "sysvol", "exchange", "domain", "nics", "secrets", "integrity")
 
     async def _unlink(self, h: Host, report: dict | None = None) -> None:
         """Take an agent's checks and sensors off a dashboard entry it was wrongly linked to.

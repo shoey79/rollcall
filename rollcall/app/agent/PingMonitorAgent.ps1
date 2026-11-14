@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.39'
+$AgentVersion = '1.0.40'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -129,7 +129,7 @@ function New-Token {
 }
 
 function Read-State {
-    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null; secrets_sent = $null; secret_scan = $null; reboot_pkgs = $null }
+    $state = @{ token = $null; last_run = $null; cursors = @{}; watch = @(); patch = $null; amd_raid = $null; veeam = $null; veeam_cursor = $null; vbo = $null; vbo_checked = $null; apps_sent = $null; secrets_sent = $null; secret_scan = $null; reboot_pkgs = $null; integrity = $null; perm_checked = $false }
     if (Test-Path $StatePath) {
         try {
             $raw = Get-Content $StatePath -Raw | ConvertFrom-Json
@@ -158,6 +158,8 @@ function Read-State {
                 $state.patch = @{ checked = $raw.patch.checked; date = $raw.patch.date; kb = $raw.patch.kb; source = $raw.patch.source
                     title = $(if ($raw.patch.PSObject.Properties['title']) { [string]$raw.patch.title } else { $null }) }
             }
+            if ($raw.integrity -and $raw.integrity.at) { $state.integrity = @{ at = [string]$raw.integrity.at; first = [bool]$raw.integrity.first; what = @($raw.integrity.what | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
+            if ($raw.perm_checked) { $state.perm_checked = $true }
             if ($raw.reboot_pkgs) { $state.reboot_pkgs = @{ boot = [string]$raw.reboot_pkgs.boot; checked = $raw.reboot_pkgs.checked; list = @($raw.reboot_pkgs.list | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
@@ -176,6 +178,44 @@ function Protect-DataFolder {
     try {
         & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     } catch { Write-AgentLog "WARN couldn't set folder permissions: $($_.Exception.Message)" }
+}
+
+# Each run: the agent's folder and everything in it must still belong to SYSTEM or Administrators,
+# give nobody else access and not inherit permissions from above (someone may have opened it up to
+# read the log). Anything else is put back, and Rollcall is told what was found. Called after the
+# report is sent, and can never fail a run.
+function Test-AgentFolderSecurity($State) {
+    $ErrorActionPreference = 'Continue'
+    if ($env:OS -ne 'Windows_NT') { return }
+    try {
+        $allowed = @('S-1-5-18', 'S-1-5-32-544')
+        $sidOf = {
+            param($Ref)
+            try { return $Ref.Translate([Security.Principal.SecurityIdentifier]).Value } catch { return [string]$Ref }
+        }
+        $found = New-Object System.Collections.ArrayList
+        $items = @(Get-Item -LiteralPath $DataPath -Force) + @(Get-ChildItem -LiteralPath $DataPath -Force -Recurse -ErrorAction SilentlyContinue)
+        foreach ($it in $items) {
+            $acl = Get-Acl -LiteralPath $it.FullName
+            $name = if ($it.FullName -eq (Get-Item -LiteralPath $DataPath -Force).FullName) { 'the agent folder' } else { $it.Name }
+            $owner = & $sidOf ($acl.GetOwner([Security.Principal.NTAccount]))
+            if ($allowed -notcontains $owner) { [void]$found.Add("$name was owned by $($acl.Owner)") }
+            if ($name -eq 'the agent folder' -and -not $acl.AreAccessRulesProtected) { [void]$found.Add('the agent folder took permissions from the folder above it') }
+            $who = @($acl.Access | Where-Object { $allowed -notcontains (& $sidOf $_.IdentityReference) } | ForEach-Object { [string]$_.IdentityReference } | Select-Object -Unique)
+            if ($who.Count) { [void]$found.Add("$($who -join ', ') had access to $name") }
+            if ($found.Count -ge 10) { break }
+        }
+        $first = -not $State.perm_checked  # the first check after updating to 1.0.40: just tidying up
+        $State.perm_checked = $true
+        if (-not $found.Count) { return }
+        # Put it back: owner Administrators, SYSTEM and Administrators only, children inheriting just that
+        $null = & icacls.exe $DataPath /setowner '*S-1-5-32-544' /T /C /Q 2>&1
+        $null = & icacls.exe $DataPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /Q 2>&1
+        $null = & icacls.exe (Join-Path $DataPath '*') /reset /T /C /Q 2>&1
+        $what = @($found | Select-Object -Unique | ForEach-Object { Limit-Text $_ 200 })
+        $State.integrity = @{ at = ConvertTo-UtcString (Get-Date); what = $what; first = $first }
+        Write-AgentLog ("WARN Put back the permissions on the agent's folder: " + ($what -join '; '))
+    } catch { Write-AgentLog "WARN Couldn't check the agent folder's permissions: $($_.Exception.Message)" }
 }
 
 # Thin wrappers around external tools, so they're easy to stub when testing.
@@ -2460,6 +2500,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         if ($State.apps_sent -ne $report.apps_hash) { $report.apps = $apps }  # only when it changed, or Rollcall asked
     } catch { Add-CollectorError 'installed software' $_ }
     try { $report.secrets = Measure-Step 'password scan' { Get-SecretReport $State } } catch { Add-CollectorError 'password scan' $_ }
+    if ($State.integrity) { $report.agent_integrity = $State.integrity }  # its folder's permissions had been changed (put back)
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
@@ -2702,6 +2743,9 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }
     }
     Register-StartupTask
+    $wasChecked = [bool]$state.perm_checked
+    Test-AgentFolderSecurity $state
+    if ($state.integrity -or $state.perm_checked -ne $wasChecked) { try { Save-State $state } catch { } }
     # After the report, so it never slows reports down; the findings go with the next one
     try {
         $st = Invoke-SecretScan $state

@@ -27,6 +27,7 @@ Then approve the server in the Rollcall dashboard (Agents).
 
 Other options: --uninstall, --report (print the report, send nothing).
 """
+import stat
 import argparse
 import hashlib
 import hmac
@@ -47,7 +48,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.17"
+AGENT_VERSION = "1.0.18"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -930,6 +931,8 @@ def build_report(state, conf):
                 r["apps"] = apps
     with step("password scan"):
         r["secrets"] = secret_report(state)
+    if state.get("integrity"):
+        r["agent_integrity"] = state["integrity"]  # its own files' permissions had been changed (put back)
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()
@@ -1355,6 +1358,54 @@ def secret_report(state):
 
 
 # --------------------------------------------------------------------------
+# Keeping the agent's own files locked down
+# --------------------------------------------------------------------------
+# The agent's token, settings and script must stay root's alone: anyone who could change the script
+# could run commands as root. Each run puts back any change and tells Rollcall what it found.
+def check_own_permissions(state):
+    if os.geteuid() != 0:
+        return []
+    want = [(DATA_DIR, 0o700, True), (CONFIG_PATH, 0o600, True), (INSTALL_PATH, 0o700, True),
+            (os.path.dirname(INSTALL_PATH), 0o755, False), (os.path.dirname(CONFIG_PATH), 0o755, False),
+            (os.path.join(UNIT_DIR, UNIT + ".service"), 0o644, False), (os.path.join(UNIT_DIR, UNIT + ".timer"), 0o644, False)]
+    try:
+        want += [(os.path.join(DATA_DIR, n), None, False) for n in os.listdir(DATA_DIR)]
+    except OSError:
+        pass
+    found = []
+    for path, mode, exact in want:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        name = path.replace(PREFIX, "", 1) if PREFIX else path
+        if st.st_uid != 0:
+            try:
+                owner = __import__("pwd").getpwuid(st.st_uid).pw_name
+            except (KeyError, ImportError):
+                owner = str(st.st_uid)
+            found.append("%s was owned by %s" % (name, owner))
+            try:
+                os.lchown(path, 0, 0)
+            except OSError:
+                pass
+        cur = stat.S_IMODE(st.st_mode)
+        if mode is not None and ((exact and cur != mode) or (not exact and cur & 0o022)):
+            new = mode if exact else cur & ~0o022
+            found.append("%s could be %s by others (%s)" % (name, "changed" if cur & 0o022 else "read", oct(cur)[2:]))
+            try:
+                os.chmod(path, new)
+            except OSError:
+                pass
+    first = not state.get("perm_checked")  # the first check after updating to 1.0.18: just tidying up
+    state["perm_checked"] = True
+    if found:
+        state["integrity"] = {"at": utc(time.time()), "what": found[:10], "first": first}
+        log("WARN Put back the permissions on the agent's files: " + "; ".join(found[:10]))
+    return found
+
+
+# --------------------------------------------------------------------------
 # Talking to the add-on
 # --------------------------------------------------------------------------
 ACTIVE = {"server": None, "preferred": None, "pushed": []}
@@ -1523,6 +1574,12 @@ def agent_run(conf, report_only=False):
             self_update(body["agent_update"], state["token"], server, ignore)
         except Exception as err:  # noqa: BLE001
             log("WARN Agent update: %s" % err)
+    try:  # after the report, so nothing here can stop one
+        was = state.get("perm_checked")
+        if check_own_permissions(state) or not was:
+            save_json(STATE_PATH, state)
+    except Exception as err:  # noqa: BLE001
+        log("WARN Checking the agent's permissions: %s" % err)
     try:  # after the report, so it never slows reports down; findings go with the next one
         st = secret_scan(state)
         if st and st.get("finished"):
