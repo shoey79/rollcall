@@ -133,8 +133,9 @@ def test_windows_agent_locks_its_folder_back_down(tmp_path):
         assert got[-1]["first"] is False
         assert any("Users" in w for w in got[-1]["what"]) and any("owned by" in w for w in got[-1]["what"]), got[-1]
         # Fixed for good: the next run finds nothing more to put back
+        before = (data / "agent.log").read_text(errors="replace").count("Put back the permissions")
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         log = (data / "agent.log").read_text(errors="replace")
-        assert log.count("Put back the permissions") == 1, log[-3000:]
+        assert log.count("Put back the permissions") == before, log[-3000:]
     finally:
         srv.shutdown()
