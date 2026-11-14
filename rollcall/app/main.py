@@ -3277,6 +3277,7 @@ class Monitor:
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "secret_ack": self._ack_time(h, "secrets"),
+                "integrity_ack": self._ack_time(h, "integrity"),
                 "secret_scan_on": self.secret_scan_config({**(self.agents.agents.get(h.agent_id) or {}), "host_key": h.key})["on"],
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
@@ -4265,8 +4266,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         except (json.JSONDecodeError, ValueError):
             body = {}
         kind = body.get("kind")
-        if kind not in ("events", "security", "secrets"):
-            return web.json_response({"error": "kind must be events, security or secrets"}, status=400)
+        if kind not in ("events", "security", "secrets", "integrity"):
+            return web.json_response({"error": "kind must be events, security, secrets or integrity"}, status=400)
         user = await access.who(req)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
         return web.json_response({"ok": True})

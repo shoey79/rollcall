@@ -2181,7 +2181,8 @@ function renderDetails(d) {
   const T = {};
   const flush = next => { if (html) T[curTab] = (T[curTab] || "") + html; html = ""; curTab = next; };
   html += sect("Checks", `<div class="checklist">${(d.checks || []).map(x =>
-    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${(x.status === "amber" || x.status === "red" && x.key === "security") && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
+    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${(x.status === "amber" || x.status === "red" && x.key === "security") && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>`
+      : x.key === "integrity" && x.status === "amber" ? `<button type="button" class="mini edit-only ackbtn" data-ack="integrity" title="Back to green until the agent finds another change">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
   const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
   html += sect("System", `<div class="kv">
     <div><span>Operating system</span>${esc(r.os || "—")}</div>
@@ -2584,6 +2585,18 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
      <td>${x.id ? ignBtn("event", String(x.id), "event ID " + x.id) : ""}</td></tr>`)) ||
     `<p class="empty-note">No new errors in the last 24 hours.</p>`);
   flush("security");
+  if (r.agent_integrity && r.agent_integrity.at && d.security_visible) {
+    // The agent found its own folder's permissions changed and put them back
+    const gi = r.agent_integrity, a = (st.ack || {}).integrity, chk = (d.checks || []).find(x => x.key === "integrity");
+    const at = Date.parse(gi.at) / 1000, acked = a && a.at >= at;
+    html += sect("Agent files", `${chk && chk.status !== "amber" ? `<p style="margin:0 0 6px">${esc(chk.detail)}</p>` : `<p style="margin:0 0 6px">The agent found these changes and put them back:</p>`}
+      <ul class="rebootpk">${(gi.what || []).map(w => `<li>${esc(w)}</li>`).join("")}</ul>
+      ${chk && chk.status === "amber" ? `<div class="ackbar"><span>Put back at ${when(gi.at)}. Was this you?</span>
+        <button type="button" class="mini primary edit-only" data-ack="integrity">Acknowledge</button></div>`
+      : acked ? `<div class="ackbar ok"><span>Acknowledged${a.by ? " by " + esc(a.by) : ""} at ${when(new Date(a.at * 1000).toISOString())}. Another change turns it amber again.</span>
+        <button type="button" class="mini edit-only" data-unack="integrity">Undo</button></div>` : ""}
+      <p class="hint">Each run, the agent checks its folder and files still belong only to SYSTEM and Administrators (root on Linux), and puts back any change, e.g. after someone opened the folder to read the log.</p>`);
+  }
   if (d.security_visible) {
     const fl = (hist.failed_logons || []).slice().reverse();
     html += ackBar("security", "security alert(s) (events or failed-logon bursts)");

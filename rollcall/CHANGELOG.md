@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.72.2 - 2026-11-14
+
+### Added
+- **Acknowledge for the Agent files check.** When an agent has put its folder's permissions back, press **Acknowledge** on the check, or in the Security tab's new *Agent files* section, to turn it green straight away instead of waiting 24 hours. A later change turns it amber again; **Undo** brings it back.
+
 ## 1.72.1 - 2026-11-14
 
 ### Changed

@@ -1564,8 +1564,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         # The agent found its own folder's permissions changed (e.g. opened up to read its log) and put them back
         when = _ts(gi["at"])
         what = "; ".join(gi.get("what") or []) or "permissions had been changed"
+        acked = float(settings.get("integrity_ack") or 0)
         if gi.get("first"):
             checks.append(_check("integrity", "Agent files", OK, f"Locked down when the agent updated ({what})"))
+        elif when and acked >= when:
+            checks.append(_check("integrity", "Agent files", OK, f"Acknowledged: put back at {time.strftime('%H:%M %d %b', time.localtime(when))} ({what})"))
         elif when and time.time() - when < 86400:
             checks.append(_check("integrity", "Agent files", WARN, f"Put back at {time.strftime('%H:%M', time.localtime(when))}: {what}"))
         else:
