@@ -114,7 +114,7 @@ Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit op
 
 ### Adding and editing computers
 
-![Adding a computer: name, address and the services to check](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/add.png)
+![Adding a device: name, address and the services to check](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/add.png)
 
 - **Manage → Add device** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
 - **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
@@ -474,6 +474,8 @@ Rollcall reads the device at every check while it answers ping. The **SNMP** tab
   - Sophos UTM isn't supported: it's end of life and doesn't have this table.
 - **Dell iDRAC** (detected automatically): the server's overall health from the iDRAC, under **System**. A non-critical problem is amber; critical or non-recoverable is red. iDRAC7 and later also give storage health and whether the server is powered on (powered off is amber). An iDRAC6 only reports overall health and has no network interfaces to list, so it shows no Ports.
 - **Sophos RED** (Remote Ethernet Device): each RED shows in **Ports** as `reds1`, `reds2` and so on, marked RED. The firewall always reports a RED's interface as up, even with the RED unplugged, so Rollcall goes by what it receives instead. A connected RED sends a keepalive every 15 seconds, so a RED interface that has received nothing since the previous check (at least 45 seconds earlier) shows **Disconnected**. Tick **Alert** on it to go red and be told when that happens, and when it's back. It takes up to two checks to notice (about 10 minutes with the default 5-minute interval).
+
+![A Sophos firewall over SNMP: its IPsec connections, one down and one partly up, and its RED connected](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/firewall.png)
 - **Restarts**: amber for an hour after the device restarts. If it was planned or expected, choose **Acknowledge** next to it (SNMP tab or Overview, admins and editors). That clears the warning for that restart only; a later restart still shows. Devices that don't report their own uptime (many switches, APC cards) count a restart of their SNMP service or management card too.
 - **Acknowledging a problem:** any other problem SNMP finds can be acknowledged from **Checks** in the SNMP details, e.g. a server that's meant to be powered off, or a known non-critical fault waiting for a part. It's greyed out and stops counting, so the device can go green, for as long as it stays the same or better (its figures may change, e.g. a UPS's runtime). If it gets worse (amber to red, e.g. non-critical to critical) it shows and alerts again, and the acknowledgement is dropped. If it clears and later comes back, it alerts again too. **Undo** takes an acknowledgement back.
 
@@ -657,6 +659,8 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Only Home Assistant admins and Rollcall editors can acknowledge.
 
 **Graphs over time.** Rollcall keeps the disk space, network traffic, CPU and memory from each agent report, so you can see how they change, e.g. for capacity planning. **Graph** opens a graph under the item, with ranges of 24 hours, 7 days, 30 days, 90 days and a year. Hover for the figures at that time.
+
+![A server's D: drive over a year: used space against its size, with when it'll be full at that rate](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/graphs.png)
 
 - **Disks** (Storage tab): used space against the disk's size. Underneath, how fast it's growing and, if it is, roughly when it'll be full at that rate. The rate is worked out from the daily averages over the last 30 days, or the range shown if that's longer, once there are at least 3 days of history.
 - **Network adapters** (Network tab): received and sent traffic for each connected adapter that carries traffic. That's physical adapters, and virtual ones with an address, such as a Hyper-V host's vEthernet: up to 6 per computer. **Peak** shows the busiest figure in each period instead of the average. Each figure is the average between two agent reports (every few minutes), so a short burst reads lower than it was.
