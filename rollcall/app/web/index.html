@@ -1241,6 +1241,7 @@ function ackedList() {
 document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("ackd")) ackedOpen = e.target.open; }, true);
 // What Acknowledge does for an alert on the Overview (null: nothing to acknowledge, e.g. not responding)
 const TIME_ACK = ["events", "security", "secrets", "integrity", "domain"];
+const NO_ACK = ["defender"];  // e.g. a threat: cleared on the computer itself, then the next report shows it
 function ackFor(a) {
   const c = a.check;
   if (!c || a.h.off_schedule) return null;
@@ -1249,7 +1250,7 @@ function ackFor(a) {
   if (c.kind === "snmp") return {url: "/snmp/ack", body: {all: true}, tip: "Acknowledge what SNMP shows now: it alerts again if anything gets worse, or clears and comes back"};
   if (!c.agent) return null;
   const k = checkKey(c);
-  if (k === "agent") return null;
+  if (k === "agent" || NO_ACK.includes(k)) return null;
   if (TIME_ACK.includes(k)) return {url: "/agent/ack", body: {kind: k}, tip: "Back to green until something new happens"};
   return {url: "/agent/ack", body: {kind: "check", check: k}, tip: "Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back"};
 }
@@ -2265,7 +2266,7 @@ function renderDetails(d) {
       : x.key === "integrity" && x.status === "amber" ? `<button type="button" class="mini edit-only ackbtn" data-ack="integrity" title="Back to green until the agent finds another change">Acknowledge</button>`
       : x.key === "domain" && x.status === "amber" && domainNew() ? `<button type="button" class="mini edit-only ackbtn" data-ack="domain" title="Back to green until someone else is added to a privileged group">Acknowledge</button>`
       : x.acked ? `<small>acknowledged: counts as OK while it stays like this</small><button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" data-undo="1">Undo</button>`
-      : (x.status === "amber" || x.status === "red") && !TIME_ACK.includes(x.key) && x.key !== "agent" ? `<button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" title="Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
+      : (x.status === "amber" || x.status === "red") && !TIME_ACK.includes(x.key) && !NO_ACK.includes(x.key) && x.key !== "agent" ? `<button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" title="Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
   const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
   html += sect("System", `<div class="kv">
     <div><span>Operating system</span>${esc(r.os || "—")}</div>

@@ -1421,6 +1421,7 @@ class HomeAssistant:
 # Monitor
 # --------------------------------------------------------------------------
 TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
+NO_ACK = ("defender",)  # cleared on the computer itself (a threat removed), then the next report shows it
 TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
                  "secrets": "passwords found up to then", "integrity": "changes to the agent's files up to then",
                  "domain": "privileged group changes up to then"}
@@ -3430,6 +3431,8 @@ class Monitor:
             acks.pop(check, None)
         else:
             sv = next((s for s in h.agent_checks if s.key == f"agent_{check}"), None)
+            if check in NO_ACK:
+                raise ValueError("that's cleared on the computer itself, e.g. a threat Defender has to remove")
             if check in TIME_ACK_KINDS or check == "agent" or not sv or sv.status not in (AMBER, RED):
                 raise ValueError("that check has nothing to acknowledge")
             acks[check] = {"status": sv.status, "at": time.time(), "by": who or "", "detail": sv.detail[:300]}

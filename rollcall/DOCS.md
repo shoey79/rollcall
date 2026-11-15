@@ -652,6 +652,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 - **Something that happened** (alert-worthy events, security alerts, passwords found in files, changes to the agent's files, and additions to privileged groups such as Domain Admins): everything up to now is acknowledged, so it's green again straight away instead of after 24 hours. Anything new turns it amber again.
 - **Something that's still the case** (a pending reboot, a stopped app pool, a backup that hasn't run, a disk filling up, an SNMP warning): it counts as OK while it stays as it is or better. If it gets worse (amber to red) it alerts again, and if it clears and later comes back it alerts again too.
 - **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
+- **Defender:** a threat is cleared on the computer itself; the next agent report then clears the alert. There's no Acknowledge for it.
 
 Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Only Home Assistant admins and Rollcall editors can acknowledge.
 
