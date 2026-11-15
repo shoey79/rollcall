@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.77.0 - 2026-11-15
+
+### Fixed
+- **SNMP devices without a network interface table**, such as a Dell iDRAC6, failed with "the device didn't list its interfaces". They're now monitored without a Ports list.
+
+### Added
+- **Dell iDRAC server health** over SNMP, detected automatically. The server's overall health shows under **System**: non-critical is amber, critical or non-recoverable is red. iDRAC7 and later also give storage health and the power state (powered off is amber). An iDRAC6 gives overall health only.
+
 ## 1.76.0 - 2026-11-15
 
 ### Added

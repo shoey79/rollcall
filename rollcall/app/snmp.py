@@ -560,6 +560,34 @@ UPS_ENTERPRISES = {"534", "705", "3808", "5491", "4555", "476", "850", "13891", 
 SFOS_VPN = "1.3.6.1.4.1.2604.5.1.6.1.1.1.1"
 SFOS_VPN_STATUS = {0: "down", 1: "up", 2: "partly up"}   # sfosIPSecVpnConnStatus
 SFOS_VPN_TYPE = {1: "host to host", 2: "site to site", 3: "tunnel interface"}
+# Dell iDRAC: overall health. iDRAC7 and later: IDRAC-MIB-SMIv2; iDRAC6: DELL-RAC-MIB (status only)
+DELL_STATUS = {1: "other", 2: "unknown", 3: "OK", 4: "non-critical", 5: "critical", 6: "non-recoverable"}
+DELL_POWER = {1: "other", 2: "unknown", 3: "off", 4: "on"}
+IDRAC = "1.3.6.1.4.1.674.10892.5.2"     # .1 globalSystemStatus, .3 globalStorageStatus, .4 systemPowerState
+DRAC6 = "1.3.6.1.4.1.674.10892.2.2.1.0"  # drsGlobalSystemStatus
+
+
+async def read_dell(s: "Session") -> dict | None:
+    # Asked separately: over SNMP v1 one unknown name fails the whole request
+    try:
+        got = await s.get([f"{IDRAC}.1.0", f"{IDRAC}.3.0", f"{IDRAC}.4.0"])
+    except SnmpError:
+        got = {}
+    if not isinstance(got.get(f"{IDRAC}.1.0"), int):
+        try:
+            got = await s.get([DRAC6])
+        except SnmpError:
+            got = {}
+    sysst = got.get(f"{IDRAC}.1.0")
+    if isinstance(sysst, int):
+        return {"system": DELL_STATUS.get(sysst, str(sysst)), "storage": DELL_STATUS.get(got.get(f"{IDRAC}.3.0"), None),
+                "power": DELL_POWER.get(got.get(f"{IDRAC}.4.0"), None), "mib": "idrac"}
+    old = got.get(DRAC6)
+    if isinstance(old, int):
+        return {"system": DELL_STATUS.get(old, str(old)), "storage": None, "power": None, "mib": "drac6"}
+    return None
+
+
 RED_PORT = re.compile(r"^reds\d+$", re.I)
 RED_MIN_GAP = 45  # seconds between polls for a RED's keepalives (every 15 s) to have arrived
 
@@ -834,7 +862,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out = {"descr": str(sysv.get(f"{SYS}.1.0") or ""), "object_id": str(sysv.get(f"{SYS}.2.0") or ""),
                "uptime_s": (sysv.get(f"{SYS}.3.0") or 0) // 100 if isinstance(sysv.get(f"{SYS}.3.0"), int) else None,
                "name": str(sysv.get(f"{SYS}.5.0") or ""), "location": str(sysv.get(f"{SYS}.6.0") or ""),
-               "ports": [], "poe": None, "nas": None, "ups": None, "printer": None, "vpn": None, "uptime_source": "snmp"}
+               "ports": [], "poe": None, "nas": None, "ups": None, "printer": None, "vpn": None, "dell": None, "uptime_source": "snmp"}
         # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
         # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
         # Asked once per device: some switches (e.g. Netgear smart switches) stall their SNMP service
@@ -860,9 +888,9 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         IF, IFX, PSE, MAIN = "1.3.6.1.2.1.2.2.1", "1.3.6.1.2.1.31.1.1.1", "1.3.6.1.2.1.105.1.1.1", "1.3.6.1.2.1.105.1.3.1.1"
         disc = discovery if discovery and time.time() - discovery.get("at", 0) < 6 * 3600 and discovery.get("ports") is not None else None
         if disc is None:
+            # A device that answers but has no interface table (e.g. a Dell iDRAC6, which only has
+            # its system group and Dell's own MIB) just has no ports
             types = await timed("ports", s.walk(f"{IF}.3"), optional=False)
-            if not types:
-                raise SnmpError("the device didn't list its interfaces")
             opers = await timed("ports", s.walk(f"{IF}.8"))
             phys = [i for i, t in types.items() if t in IF_TYPES_PHYSICAL and opers.get(i) != 6]  # 6 = notPresent
             names = await timed("port names", get_many(s, [f"{IFX}.1.{i}" for i in phys] + [f"{IF}.2.{i}" for i in phys]))
@@ -964,6 +992,10 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
             got = await timed("VPN", read_sophos_vpn(s))
             if got:
                 out["vpn"] = got
+        if oid.startswith("1.3.6.1.4.1.674.") or re.search(r"idrac|\bdrac\b|remote access controller", text, re.I):
+            got = await timed("server health", read_dell(s))
+            if got:
+                out["dell"] = got
         if reader:
             got = await timed("UPS", reader(s))
             if got:
@@ -1122,6 +1154,16 @@ def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = 
             if a not in shown:
                 add("crit" if a in ("output overloaded", "shutdown pending", "shutdown imminent", "charger failed",
                                     "general fault", "fan failure", "fuse failure", "output off", "UPS system off") else "warn", "UPS", a)
+    dell = d.get("dell")
+    if dell:
+        for part, what in (("system", "Server health"), ("storage", "Storage health")):
+            st = dell.get(part)
+            if st in ("critical", "non-recoverable"):
+                add("crit", what, st)
+            elif st == "non-critical":
+                add("warn", what, st)
+        if dell.get("power") == "off":
+            add("warn", "Server", "powered off")
     vpn = d.get("vpn")
     if vpn:
         ign = {x.lower() for x in vpn_ignore or ()}

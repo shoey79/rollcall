@@ -2731,6 +2731,10 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
 // mCfg: what each graph shows, filled while the details are built; mOpen: which are open, and their range.
 const mCfg = {}, mOpen = {}, mCache = {}, mDraw = {};
 const M_RANGES = [["24h", "24 h"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["1y", "1 year"]];
+function dellSt(s) {
+  const cls = s === "OK" ? "green" : s === "non-critical" ? "amber" : s === "critical" || s === "non-recoverable" ? "red" : "unknown";
+  return `<span style="white-space:nowrap"><span class="dot ${cls}"></span> ${esc(s || "—")}</span>`;
+}
 function mBtn(id, cfg) {
   mCfg[id] = cfg;
   const on = !!mOpen[detKey + "|" + id];
@@ -3462,7 +3466,8 @@ function renderSnmp(x) {
   }
   html += sect("System", `<div class="kv">
     <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
-    ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
+    ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}
+    ${d.dell ? `<div><span>Server health</span>${dellSt(d.dell.system)}${d.dell.storage ? ` · storage ${dellSt(d.dell.storage)}` : ""}${d.dell.power ? ` · powered ${esc(d.dell.power)}` : ""}${d.dell.mib === "drac6" ? ` <small class="muted">(iDRAC6 reports overall health only)</small>` : ""}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
     <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests${d.per && d.per < 25 ? `, ${d.per} rows at a time` : ""}</div></div>` +
     (d.timing ? `<p class="hint" style="margin-top:8px">Time per part: ${Object.entries(d.timing).map(([k, v]) => `${esc(k)} ${v} ms`).join(", ")}</p>` : ""));
   body.innerHTML = html;

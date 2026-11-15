@@ -192,3 +192,30 @@ def test_red_checks_close_together_keep_comparing_with_an_older_reading():
     assert d4["ports"][0]["rx_idle"] is False
     d5 = _red(10, 400, d4)           # counter went back (firewall restarted): traffic, not a disconnect
     assert d5["ports"][0]["rx_idle"] is False
+
+
+# --- Dell iDRAC health ---------------------------------------------------------------------------
+
+class _FakeSnmp:
+    def __init__(self, values, v1=False):
+        self.values, self.v1 = values, v1
+
+    async def get(self, oids):
+        if self.v1 and any(o not in self.values for o in oids):
+            raise snmp.SnmpError("noSuchName")       # SNMP v1: one unknown name fails the lot
+        return {o: self.values[o] for o in oids if o in self.values}
+
+
+def test_idrac7_and_later_health_storage_and_power():
+    s = _FakeSnmp({f"{snmp.IDRAC}.1.0": 3, f"{snmp.IDRAC}.3.0": 4, f"{snmp.IDRAC}.4.0": 3})
+    d = asyncio.run(snmp.read_dell(s))
+    assert d == {"system": "OK", "storage": "non-critical", "power": "off", "mib": "idrac"}
+    worst, items = snmp.evaluate({"uptime_s": 99999, "ports": [], "dell": d}, set(), None)
+    assert worst == "warn" and {i["what"] for i in items} == {"Storage health", "Server"}
+
+
+def test_idrac6_over_snmp_v1():
+    d = asyncio.run(snmp.read_dell(_FakeSnmp({snmp.DRAC6: 5}, v1=True)))
+    assert d["system"] == "critical" and d["mib"] == "drac6"
+    assert snmp.evaluate({"uptime_s": 99999, "ports": [], "dell": d}, set(), None)[0] == "crit"
+    assert asyncio.run(snmp.read_dell(_FakeSnmp({}, v1=True))) is None
