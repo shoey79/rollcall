@@ -3435,11 +3435,19 @@ function renderSnmp(x) {
   }
   const ports = d.ports || [], watch = new Set(x.watch || []);
   if (ports.length) {
-    const upN = ports.filter(p => p.up).length;
+    const upN = ports.filter(p => p.red ? p.admin_up && p.rx_idle !== true : p.up).length;
     html += sect(`Ports (${upN} of ${ports.length} up)`, `<p class="hint" style="margin:0 0 6px">Tick <b>Alert</b> for ports that should always be up, such as uplinks, servers and access points: they go red if they drop. Other ports are just shown.</p>` +
       tbl(["Port", "Description", "Status", "Errors in / out", "Alert"], ports.map(p => {
+        const w = watch.has(p.index);
+        if (p.red) {  // Sophos RED: always "up", so judged by whether anything arrived since the last check
+          const st = !p.admin_up ? "Disabled" : p.rx_idle === true ? "Disconnected" : p.rx_idle === false ? "Connected" : "Checking (needs two polls)";
+          const bad = w && p.admin_up && p.rx_idle === true;
+          return `<tr class="${bad ? "bad" : ""}"><td><b>${esc(p.name)}</b> <small class="pill">RED</small></td><td>${esc(p.alias || "")}</td><td><span class="dot ${!p.admin_up ? "unknown" : p.rx_idle === false ? "green" : p.rx_idle === true ? (w ? "red" : "unknown") : "unknown"}"></span> ${st}<br><small class="muted">by its keepalives, not the interface status</small></td>
+          <td class="num">${p.in_errors ?? "—"} / ${p.out_errors ?? "—"}</td>
+          <td><input type="checkbox" data-watch="${p.index}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when RED ${esc(p.name)} disconnects"></td></tr>`;
+        }
         const st = !p.admin_up ? "Disabled" : p.up ? `Up${p.speed_mbps ? " · " + (p.speed_mbps >= 1000 ? p.speed_mbps / 1000 + " Gb/s" : p.speed_mbps + " Mb/s") : ""}` : "Down";
-        const w = watch.has(p.index), bad = w && p.admin_up && !p.up;
+        const bad = w && p.admin_up && !p.up;
         return `<tr class="${bad ? "bad" : ""}"><td><b>${esc(p.name)}</b></td><td>${esc(p.alias || "")}</td><td><span class="dot ${!p.admin_up ? "unknown" : p.up ? "green" : w ? "red" : "unknown"}"></span> ${st}</td>
           <td class="num">${p.in_errors ?? "—"} / ${p.out_errors ?? "—"}</td>
           <td><input type="checkbox" data-watch="${p.index}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when port ${esc(p.name)} goes down"></td></tr>`;

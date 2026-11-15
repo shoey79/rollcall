@@ -160,3 +160,35 @@ def test_linux_agent_chooses_by_its_own_address_not_the_last_one_that_worked():
     assert ag.server_list("http://192.168.1.9:8100")[0] == "https://rollcall.example.local:8100"
     ag.ACTIVE["route"] = None                               # not set: the old behaviour
     assert ag.server_list("http://192.168.1.9:8100")[0] == "https://rollcall.example.local:8100"
+
+
+# --- Sophos RED: always "up", so judged by its keepalives ------------------------------------------
+
+def _red(octets, polled, prev=None):
+    d = {"polled": polled, "uptime_s": 99999, "uptime_source": "system",
+         "ports": [{"index": 7, "name": "reds1", "alias": "", "admin_up": True, "up": True, "red": True, "in_octets": octets}]}
+    snmp.red_activity(d, prev)
+    return d
+
+
+def test_red_disconnected_when_nothing_arrives_between_checks():
+    d1 = _red(1000, 0)
+    assert d1["ports"][0]["rx_idle"] is None                         # not known from one reading
+    d2 = _red(1000, 300, d1)
+    assert d2["ports"][0]["rx_idle"] is True
+    worst, items = snmp.evaluate(d2, {7}, None)
+    assert worst == "crit" and items[0]["what"] == "RED reds1"
+    assert snmp.evaluate(d2, set(), None)[0] == "ok"                 # not ticked: just shown
+    d3 = _red(1064, 600, d2)
+    assert d3["ports"][0]["rx_idle"] is False and snmp.evaluate(d3, {7}, None)[0] == "ok"
+
+
+def test_red_checks_close_together_keep_comparing_with_an_older_reading():
+    d1 = _red(1000, 0)
+    d2 = _red(1000, 20, d1)          # 20 s later: a keepalive may not have come yet
+    d3 = _red(1000, 40, d2)
+    assert d3["ports"][0]["rx_idle"] is None
+    d4 = _red(1064, 50, d3)          # 50 s after the first reading, and it has moved
+    assert d4["ports"][0]["rx_idle"] is False
+    d5 = _red(10, 400, d4)           # counter went back (firewall restarted): traffic, not a disconnect
+    assert d5["ports"][0]["rx_idle"] is False

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.76.0 - 2026-11-15
+
+### Added
+- **Sophos RED status.** The firewall always reports a RED's interface (`reds1`, ...) as up, even with the RED unplugged, so the Ports list couldn't tell. Rollcall now reads how much each RED interface has received. A connected RED sends a keepalive every 15 seconds, so one that has received nothing since the previous check shows **Disconnected**. Tick **Alert** on it to be told when it drops and when it's back.
+
 ## 1.75.0 - 2026-11-15
 
 ### Added

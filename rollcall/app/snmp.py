@@ -560,6 +560,30 @@ UPS_ENTERPRISES = {"534", "705", "3808", "5491", "4555", "476", "850", "13891", 
 SFOS_VPN = "1.3.6.1.4.1.2604.5.1.6.1.1.1.1"
 SFOS_VPN_STATUS = {0: "down", 1: "up", 2: "partly up"}   # sfosIPSecVpnConnStatus
 SFOS_VPN_TYPE = {1: "host to host", 2: "site to site", 3: "tunnel interface"}
+RED_PORT = re.compile(r"^reds\d+$", re.I)
+RED_MIN_GAP = 45  # seconds between polls for a RED's keepalives (every 15 s) to have arrived
+
+
+def red_activity(d: dict, prev: dict | None) -> None:
+    """Mark each Sophos RED interface with whether it received anything since the previous comparison
+    (rx_idle True: nothing, so the RED isn't connected). Each is compared with a reading at least
+    RED_MIN_GAP seconds old (rx_ref, rx_ref_at), so frequent polls don't see a quiet gap between keepalives."""
+    before = {p["index"]: p for p in (prev or {}).get("ports") or [] if p.get("red")}
+    now = d.get("polled") or 0
+    for p in d.get("ports") or []:
+        if not p.get("red"):
+            continue
+        b, cur = before.get(p["index"]) or {}, p.get("in_octets")
+        ref, ref_at = b.get("rx_ref"), b.get("rx_ref_at") or 0
+        if cur is None:
+            p["rx_idle"] = None
+        elif ref is None:
+            p["rx_idle"], p["rx_ref"], p["rx_ref_at"] = None, cur, now   # first reading since the add-on started
+        elif now - ref_at < RED_MIN_GAP:
+            p["rx_idle"], p["rx_ref"], p["rx_ref_at"] = b.get("rx_idle"), ref, ref_at  # too soon: keep the last answer
+        else:
+            # a counter that went backwards (the firewall restarted) counts as traffic
+            p["rx_idle"], p["rx_ref"], p["rx_ref_at"] = cur == ref, cur, now
 
 
 async def read_sophos_vpn(s: "Session") -> dict | None:
@@ -853,8 +877,12 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                 disc["at"] = time.time() - 6 * 3600 + 600  # try again in 10 minutes rather than 6 hours
         out["discovery"] = disc
 
+        # Sophos RED interfaces (reds1, reds2...) always read as up, even with the RED unplugged, so the
+        # bytes they've received are read too: a connected RED sends a keepalive every 15 seconds.
+        reds = [i for i, meta in disc["ports"].items() if RED_PORT.match(meta["name"])]
         live = await timed("ports", get_many(s, [f"{c}.{i}" for i in disc["ports"]
-                                                   for c in (f"{IF}.7", f"{IF}.8", f"{IFX}.15", f"{IF}.14", f"{IF}.20")]))
+                                                   for c in (f"{IF}.7", f"{IF}.8", f"{IFX}.15", f"{IF}.14", f"{IF}.20")]
+                                             + [f"{c}.{i}" for i in reds for c in (f"{IFX}.6", f"{IF}.10")]))
         if disc["ports"] and not any(k.startswith(f"{IF}.8.") for k in live):
             raise SnmpError("no SNMP reply for the port states")
         for i, meta in disc["ports"].items():
@@ -862,7 +890,9 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
                 "index": int(i), "name": meta["name"], "descr": meta["descr"], "alias": meta["alias"],
                 "admin_up": live.get(f"{IF}.7.{i}") == 1, "up": live.get(f"{IF}.8.{i}") == 1,
                 "speed_mbps": live.get(f"{IFX}.15.{i}"),
-                "in_errors": live.get(f"{IF}.14.{i}"), "out_errors": live.get(f"{IF}.20.{i}")})
+                "in_errors": live.get(f"{IF}.14.{i}"), "out_errors": live.get(f"{IF}.20.{i}"),
+                **({"red": True, "in_octets": live.get(f"{IFX}.6.{i}") if live.get(f"{IFX}.6.{i}") is not None else live.get(f"{IF}.10.{i}")}
+                   if i in reds else {})})
         out["ports"].sort(key=lambda p: p["index"])
 
         # PoE (POWER-ETHERNET-MIB), if the switch has it: only the columns used
@@ -983,6 +1013,13 @@ def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = 
         if p["index"] not in watch:
             continue
         label = f"Port {p['name']}" + (f" ({p['alias']})" if p["alias"] else "")
+        if p.get("red"):
+            label = f"RED {p['name']}" + (f" ({p['alias']})" if p["alias"] else "")
+            if not p["admin_up"]:
+                add("warn", label, "disabled")
+            elif p.get("rx_idle"):
+                add("crit", label, "disconnected (nothing received since the last check)")
+            continue
         if not p["admin_up"]:
             add("warn", label, "disabled")
         elif not p["up"]:

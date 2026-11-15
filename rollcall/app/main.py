@@ -2296,7 +2296,7 @@ class Monitor:
             elif s.kind == "snmp" and new == RED and h.vpn_polled:
                 await self._vpn_more_down(h, s)
             if s.kind == "snmp":
-                down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith("VPN ")}
+                down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith(("VPN ", "RED "))}
                 if new == RED and not turned_red and h.vpn_polled and self.opts.get("notify_recovery"):
                     for what in sorted(h.vpn_alerted - down):  # back up while another is still down
                         await self.notify(f"🟢 {h.name}: {what} back up", f"{h.name}: {what} is up again.",
@@ -2370,6 +2370,7 @@ class Monitor:
             d["per_cap"], d["per_cap_at"] = d["per"], now
         elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
+        snmplib.red_activity(d, prev)
         h.snmp_data, h.snmp_polled = d, now
         worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(h), h.snmp_restart_ack,
                                                vpn_ignore=set(h.snmp_vpn_ignore))
@@ -2479,7 +2480,7 @@ class Monitor:
     async def _vpn_more_down(self, h: Host, s: Service) -> None:
         """A firewall already alerting: another of its VPN connections has gone down (seen on two polls
         in a row, like the first), so it gets its own alert rather than going unnoticed."""
-        down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith("VPN ")}
+        down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith(("VPN ", "RED "))}
         for what in sorted((down & h.vpn_down_prev) - h.vpn_alerted):
             msg = f"{h.name} ({h.ip or h.host}): {what} is down."
             tag = f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}"
