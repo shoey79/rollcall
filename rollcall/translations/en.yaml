@@ -29,6 +29,48 @@ configuration:
   notify_recovery:
     name: Notify when things come back
     description: Also send a notification when something that was down is working again.
+  email_send:
+    name: "Send email with"
+    description: "\"smtp\": any mail server, such as an internal relay (e.g. an Exchange receive connector that allows Home Assistant's address) or one that needs a user name and password. \"microsoft365\": Microsoft 365 through Microsoft Graph, with an app registration. \"off\": no email."
+  email_to:
+    name: "Send email to"
+    description: "Addresses that get email alerts and the daily summary."
+  email_from:
+    name: "Send email from"
+    description: "The sender address. For Microsoft 365, the mailbox the app sends as."
+  email_recovery:
+    name: "Email when things come back"
+    description: "Also email when something that was red is working again."
+  email_digest_time:
+    name: "Daily summary at"
+    description: "When to email a summary of everything that's amber or red, as HH:MM in Home Assistant's time zone, e.g. 08:00. Leave blank for none. Red alerts are emailed as they happen."
+  smtp_host:
+    name: "SMTP server"
+    description: "The mail server's name or address, e.g. mail.example.local."
+  smtp_port:
+    name: "SMTP port"
+    description: "Usually 25 for an internal relay, 587 with STARTTLS, or 465 with SSL."
+  smtp_security:
+    name: "SMTP security"
+    description: "\"starttls\" (port 587, or 25 if the relay offers it), \"ssl\" (port 465), or \"none\" for a relay on your own network that doesn't offer encryption."
+  smtp_check_certificate:
+    name: "Check the server's certificate"
+    description: "Turn off for an internal mail server whose certificate Home Assistant doesn't trust, such as Exchange's own self-signed one. The connection is still encrypted."
+  smtp_username:
+    name: "SMTP user name"
+    description: "Leave blank for a relay that doesn't need signing in."
+  smtp_password:
+    name: "SMTP password"
+    description: "Only needed with a user name. Stored with the add-on's settings and never shown again."
+  m365_tenant_id:
+    name: "Microsoft 365 tenant ID"
+    description: "Your directory (tenant) ID, from Microsoft Entra ID."
+  m365_client_id:
+    name: "Microsoft 365 application (client) ID"
+    description: "From the app registration that has the Mail.Send application permission (with admin consent)."
+  m365_client_secret:
+    name: "Microsoft 365 client secret"
+    description: "The app registration's client secret. Stored with the add-on's settings and never shown again."
   log_level:
     name: Log level
     description: How much the add-on writes to its Log tab. "info" is right for everyday use; "debug" helps when troubleshooting.

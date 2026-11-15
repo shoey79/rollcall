@@ -31,7 +31,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent)
 7. [Agent addresses and updates](#agent-addresses-and-updates)
-8. [Alerts and quiet times](#alerts-and-quiet-times): notifications, acknowledging, pausing, schedules
+8. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
 9. [Administration](#administration): settings, who can change things, export and import, security
 10. [Reference](#reference): every option, ports, sensors and events, files
 11. [Troubleshooting](#troubleshooting)
@@ -1045,6 +1045,34 @@ The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-a
 - **Recovery** ("back up") notifications are sent if `notify_recovery` is on.
 - **Red notifies; amber doesn't.** Most problems go red only if they're still there at the next check, so a single blip doesn't alert.
 
+### Email alerts
+
+Set up under **Manage → Settings → Email alerts**. One list of addresses gets everything.
+
+- **Red alerts are emailed as they happen**: anything that sends a red notification, such as a computer down, a failed backup or a Defender threat that wasn't removed. Alerts that arrive within a minute of each other come in one email.
+- **Recovery** emails are sent if **Email when things come back** is on.
+- **A daily summary** at `email_digest_time` (08:00 by default, in Home Assistant's time zone) lists everything that isn't responding, red, amber or paused, plus the amber alerts and events since the last summary. Leave the time blank for no summary. If Home Assistant was off at that time, the summary is sent when it starts, up to an hour late; after that, that day is skipped.
+- **Pauses, schedules and "never alert" apply** to email the same as to notifications.
+- **Send a test email** (on the Email alerts tab) tries the settings on the screen before you save them and shows the mail server's answer if it fails.
+
+Choose how Rollcall sends with **Send email using**:
+
+**An internal relay** (`smtp`, no user name). For example, an Exchange receive connector that allows Home Assistant's address to relay. Set **SMTP server** and **SMTP port** (usually 25). Leave **SMTP security** on `starttls` if the relay offers it, or `none` if it doesn't. If the relay uses Exchange's own self-signed certificate, turn off **Check the server's certificate**; the connection is still encrypted.
+
+**A mail server that needs signing in** (`smtp` with a user name). Usually port 587 with `starttls`, or 465 with `ssl`. Fill in **SMTP user name** and **SMTP password**. For a mailbox with multi-factor sign-in, use an app password if the provider offers one, or use Microsoft 365 below.
+
+**Microsoft 365** (`microsoft365`). Sends through Microsoft Graph, so no SMTP sign-in or relay is needed:
+
+1. In the Microsoft Entra admin center, go to **App registrations → New registration**. Name it (e.g. `Rollcall`), single tenant, no redirect URI.
+2. **API permissions → Add a permission → Microsoft Graph → Application permissions → Mail.Send**, then **Grant admin consent**.
+3. **Certificates & secrets → New client secret**. Copy the secret's **Value** (not its ID) straight away; it's only shown once.
+4. In Rollcall, fill in **Microsoft 365 tenant ID** (Directory (tenant) ID on the app's Overview page), **Microsoft 365 application (client) ID** and **Microsoft 365 client secret**.
+5. Set **Send email from** to the mailbox Rollcall sends as, e.g. `rollcall@example.local`. A shared mailbox works and needs no licence.
+
+Mail.Send lets the app send as any mailbox in the organisation. To limit it to Rollcall's mailbox, add an [application access policy](https://learn.microsoft.com/en-us/graph/auth-limit-mailbox-access) in Exchange Online PowerShell. Client secrets expire (up to 24 months); when one does, the test email says so, and you add a new one.
+
+**Passwords and secrets** are stored with the add-on's other settings, shown as "Saved" afterwards and never sent back to the browser. **Export** leaves them out, so enter them again after an import.
+
 ### Acknowledging
 
 Some amber states clear themselves after a while. **Acknowledge** clears them now. A new occurrence still alerts.
@@ -1123,7 +1151,7 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 
 **Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
 
-- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP passwords.
+- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP passwords. The email password and Microsoft 365 client secret are left out.
 - **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
 
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.
@@ -1164,6 +1192,18 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `notify_recovery` | true | Also notify when something comes back |
 | `notification_url` | blank | Where tapping a notification goes; blank opens this dashboard |
 | `maintenance_minutes` | 30 | Default time limit when pausing a computer |
+| **Email alerts** | | |
+| `email_send` | off | `off`, `smtp` or `microsoft365` |
+| `email_to` | `[]` | Addresses that get email alerts and the daily summary |
+| `email_from` | blank | Sender address; for Microsoft 365, the mailbox the app sends as |
+| `email_recovery` | true | Also email when something that was red works again |
+| `email_digest_time` | 08:00 | When to send the daily summary (HH:MM); blank for none |
+| `smtp_host` | blank | Mail server name or address |
+| `smtp_port` | 25 | 25 for a relay, 587 with STARTTLS, 465 with SSL |
+| `smtp_security` | starttls | `starttls`, `ssl` or `none` |
+| `smtp_check_certificate` | true | Turn off for a server with a self-signed certificate |
+| `smtp_username` / `smtp_password` | blank | Only for a server that needs signing in |
+| `m365_tenant_id` / `m365_client_id` / `m365_client_secret` | blank | Microsoft 365 app registration with Mail.Send |
 | **Certificates and UPSs** | | |
 | `cert_warn_days` | 30 | Certificate checks go amber this many days before expiry |
 | `cert_crit_days` | 7 | …and red (with a notification) this many days before, or once expired |

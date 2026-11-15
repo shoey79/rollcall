@@ -28,7 +28,7 @@ def test_types_and_ranges():
         f = fields[key]
         if isinstance(rule, list):
             assert f["type"] in ("strs", "ints"), key
-            assert (rule[0] == "int") == (f["type"] == "ints"), key
+            assert (rule[0].rstrip("?") == "int") == (f["type"] == "ints"), key
             continue
         rule = rule.rstrip("?")
         if m := re.fullmatch(r"int\((\d+),(\d+)\)", rule):
@@ -39,6 +39,8 @@ def test_types_and_ranges():
             assert f["type"] == "bool", key
         elif rule == "str":
             assert f["type"] in ("str", "file"), key
+        elif rule == "password":
+            assert f["type"] == "password", key
         else:
             raise AssertionError(f"{key}: unexpected rule {rule}")
 

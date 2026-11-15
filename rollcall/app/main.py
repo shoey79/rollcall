@@ -46,6 +46,8 @@ import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
 import metrics as metricslib
+import emailer as emaillib
+from html import escape as html_escape
 import certcheck
 import sipcheck
 import syslogreadings
@@ -148,6 +150,20 @@ DEFAULTS = {
     "log_level": "info",
     "maintenance_minutes": 30,
     "notification_url": "",
+    "email_send": "off",
+    "email_to": [],
+    "email_from": "",
+    "email_recovery": True,
+    "email_digest_time": "08:00",
+    "smtp_host": "",
+    "smtp_port": 25,
+    "smtp_security": "starttls",
+    "smtp_check_certificate": True,
+    "smtp_username": "",
+    "smtp_password": "",
+    "m365_tenant_id": "",
+    "m365_client_id": "",
+    "m365_client_secret": "",
     "admin_only_changes": True,
     "editors": [],
     "cert_warn_days": 30,
@@ -1550,6 +1566,7 @@ class Monitor:
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
         self.metrics = metricslib.Metrics(store.db)
+        self.email = emaillib.Emailer(lambda: self.opts, {}, lambda: None)
         self.syslog_unknown: dict[str, dict] = {}
         self.scan: discovery.Scan | None = None
         self.discovery = self._load_discovery()
@@ -2076,6 +2093,7 @@ class Monitor:
             if now - last_publish >= 60:
                 last_publish = now
                 self.rollout_watch(now)
+                await self.email_summary_tick(now)
                 for h in list(self.hosts.values()):
                     if h.status != UNKNOWN and not h.removed:
                         await self.publish(h)
@@ -2583,11 +2601,17 @@ class Monitor:
         h = self.hosts.get(tag[len("ping_monitor_"):].split("__")[0])
         return bool(h and h.no_alerts)
 
-    async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False) -> None:
+    async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False,
+                     level: str | None = None) -> None:
         """critical: sent to the Home Assistant app as a critical alert, which gets through a silenced
-        phone (a computer marked Critical, for problems only, never "back up")."""
+        phone (a computer marked Critical, for problems only, never "back up").
+        level, for email: red (emailed now), ok (back up), amber or event (in the daily summary), info.
+        Left out, it's ok for a 🟢 title, info for ⬆️, else red."""
         if self._quiet(tag):
             return
+        if level is None:
+            level = "ok" if title.startswith("🟢") else "info" if title.startswith("⬆") else "red"
+        self.email.alert(title, message, level)
         for svc in self.opts.get("notify_services") or []:
             svc = svc.strip().removeprefix("notify.")
             if not svc:
@@ -3160,6 +3184,54 @@ class Monitor:
         asyncio.get_event_loop().create_task(self.notify(f"⚠️ {os_name.capitalize()} agent update stopped", msg,
                                                          f"ping_monitor_rollout_{os_name}"))
 
+    async def email_summary_tick(self, now: float) -> None:
+        """At email_digest_time (Home Assistant's time zone), once a day: the daily summary email."""
+        at = str(self.opts.get("email_digest_time") or "").strip()
+        if not at or not emaillib.configured(self.opts):
+            return
+        local = datetime.fromtimestamp(now, TZ) if TZ else datetime.fromtimestamp(now)
+        day = local.strftime("%Y-%m-%d")
+        hh, mm = (int(x) for x in at.split(":"))
+        if (local.hour, local.minute) < (hh, mm) or self.agent_settings.get("email_summary_day") == day:
+            return
+        if (local.hour * 60 + local.minute) - (hh * 60 + mm) > 60:
+            self.agent_settings["email_summary_day"] = day  # started well after the time: skip today's
+            self._save_agent_settings()
+            return
+        self.agent_settings["email_summary_day"] = day
+        self._save_agent_settings()
+        sections, summary = self.summary_sections()
+        try:
+            await self.email.digest(sections, summary)
+        except emaillib.EmailError as e:
+            log.warning("Couldn't send the daily summary email: %s", e)
+
+    def summary_sections(self) -> tuple[list, str]:
+        """What needs attention now, for the daily summary: [(heading, [(colour, what, detail)])], and a line of totals."""
+        down, red, amber, paused = [], [], [], []
+        for h in sorted(self.hosts.values(), key=lambda x: x.name.lower()):
+            if h.removed:
+                continue
+            if h.maint_until or (h.status == MAINT and not h.off_schedule):
+                paused.append(("grey", h.name, "paused" if h.maint_until else "starting up"))
+                continue
+            if h.off_schedule:
+                continue
+            if h.status == RED:
+                down.append(("red", h.name, f"not responding ({h.ip or h.host})" + (f" since {datetime.fromtimestamp(h.last_change, TZ).strftime('%d %b %H:%M')}" if h.last_change and TZ else "")))
+                continue
+            for s in h.services + h.agent_checks:
+                if s.status == RED:
+                    red.append(("red", f"{h.name} · {s.label}", s.detail or ""))
+                elif s.status == AMBER:
+                    amber.append(("amber", f"{h.name} · {s.label}", s.detail or ""))
+        sections = [x for x in (("Not responding", down), ("Red", red), ("Amber", amber), ("Paused", paused)) if x[1]]
+        total = len([h for h in self.hosts.values() if not h.removed])
+        up = len([h for h in self.hosts.values() if not h.removed and h.status in (GREEN, DEGRADED)])
+        summary = (f"{up} of {total} devices up. " + (f"{len(down)} not responding, {len(red)} red and {len(amber)} amber checks."
+                                                     if down or red or amber else "Everything else is OK."))
+        return sections, summary
+
     def rollout_watch(self, now: float) -> None:
         """Once a minute: stop a rollout whose first computer went quiet after updating, even when
         no other agent of that kind is left to ask for the update (e.g. only one agent)."""
@@ -3379,7 +3451,8 @@ class Monitor:
             else:
                 title, msg = f"🟠 {h.name}: backup overdue", f"{job} hasn't completed successfully for {why.split('for ')[-1]}."
             await self.notify(title, msg, f"ping_monitor_{h.key}__backup_{slugify(str(j.get('name')))}",
-                              critical=h.critical and level == agentlib.CRIT)  # a failed backup, not a late one
+                              critical=h.critical and level == agentlib.CRIT,  # a failed backup, not a late one
+                              level="red" if level == agentlib.CRIT else "amber")
         if changed:
             self._save_agent_settings()
 
@@ -3809,7 +3882,7 @@ class Monitor:
             for e in [e for e in notable["events"] if e.get("alert")][:5]:
                 what = f"event {e.get('id')}" if e.get("id") else "journal"
                 await self.notify(f"⚠️ {h.name}: {e.get('source')} {what}",
-                                  f"{e.get('level')}: {e.get('message')}", self._tag(h))
+                                  f"{e.get('level')}: {e.get('message')}", self._tag(h), level="event")
                 sent += 1
         if self.opts.get("agent_security_alerts", True):
             for i in [i for i in notable["security"] if i.get("alert")][:8]:
@@ -3830,13 +3903,13 @@ class Monitor:
                 else:
                     title, msg = i.get("what") or f"event {eid}", f"{acct} ({by})"
                 icon, _, text = title.partition(" ") if title[:1] in "🔒🗑🛡👤" else ("🔐", "", title)
-                await self.notify(f"{icon} {h.name}: {text}", msg, self._tag(h))
+                await self.notify(f"{icon} {h.name}: {text}", msg, self._tag(h), level="event")
                 sent += 1
         for d in notable["detections"][:5]:
             ok = d.get("action_success", True)
             await self.notify(f"🦠 {h.name}: Defender detected {d.get('threat')}",
                               f"{d.get('resource') or ''} ({'dealt with' if ok else 'NOT removed: check this server'})",
-                              self._tag(h))
+                              self._tag(h), level="event" if ok else "red")
             sent += 1
         if sent:
             log.info("%s: sent %d agent alert(s)", h.name, sent)
@@ -4294,6 +4367,31 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         except RuntimeError as err:
             return web.json_response({"error": f"Not saved: {err}"}, status=502)
         return web.json_response({"ok": True, **result, "values": settingslib.values(monitor.opts)})
+
+    async def email_test(req):
+        """Send a test email with the settings in the dialog (saved or not), so they can be tried first."""
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        vals = body.get("values") if isinstance(body, dict) and isinstance(body.get("values"), dict) else {}
+        vals = {k: v for k, v in vals.items() if k.startswith(("email_", "smtp_", "m365_"))}
+        cleaned, errors = settingslib.clean(vals)
+        if errors:
+            return web.json_response({"error": "Fix these first: " + "; ".join(f"{k}: {v}" for k, v in errors.items())}, status=400)
+        opts = {**monitor.opts, **cleaned}
+        user = await access.who(req)
+        sections, summary = monitor.summary_sections()
+        text = (f"This is a test from Rollcall, sent by {user['display'] or 'someone'} from the Settings.\n\n"
+                f"Red alerts will arrive like this as they happen, and a daily summary at {opts.get('email_digest_time') or '(not set)'}.\n\n{summary}")
+        page = emaillib._page("Rollcall test email", f"<p>This is a test from Rollcall, sent by {html_escape(user['display'] or 'someone')} from the Settings.</p>"
+                              f"<p>Red alerts will arrive like this as they happen, and a daily summary at <b>{html_escape(opts.get('email_digest_time') or '(not set)')}</b>.</p>"
+                              f"<p style='color:#4b5563'>{html_escape(summary)}</p>", str(opts.get("notification_url") or ""))
+        try:
+            await monitor.email.send("Rollcall test email", text, page, opts)
+        except emaillib.EmailError as e:
+            return web.json_response({"error": str(e)}, status=502)
+        return web.json_response({"ok": True, "to": opts["email_to"]})
 
     async def export_data(_req):
         data = await asyncio.to_thread(make_backup, os.environ.get("PM_VERSION"))
@@ -5321,6 +5419,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/rollout", editor_only(agents_rollout))
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
     app.router.add_post("/api/agents/networks", editor_only(agents_networks))
+    app.router.add_post("/api/email/test", editor_only(email_test))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app
@@ -5459,6 +5558,8 @@ def make_backup(version: str | None) -> bytes:
         try:
             raw = json.loads(OPTIONS_PATH.read_text())
             raw.pop("hosts", None)
+            for k in ("smtp_password", "m365_client_secret"):  # passwords stay on this install
+                raw.pop(k, None)
             z.writestr("options.json", json.dumps(raw, indent=2))
         except (OSError, ValueError):
             pass

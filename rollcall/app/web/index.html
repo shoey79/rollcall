@@ -1823,8 +1823,10 @@ function stField(f) {
     input = `<input id="${id}" type="number" inputmode="numeric" min="${f.min}" max="${f.max}" step="1" value="${esc(v)}"${dis}>`;
   else if (LIST_TYPES.includes(f.type))
     input = `<textarea id="${id}" rows="${Math.min(8, Math.max(3, (v || []).length + 1))}" spellcheck="false" placeholder="One per line"${dis}>${esc(stText(f, v))}</textarea>`;
+  else if (f.type === "password")
+    input = `<input id="${id}" type="password" value="${esc(v)}" maxlength="${f.max_length}" autocomplete="new-password" placeholder="${v ? "" : "Not set"}"${dis}>`;
   else
-    input = `<input id="${id}" value="${esc(v)}" ${f.max_length ? `maxlength="${f.max_length}"` : ""} autocomplete="off" spellcheck="false"${f.type === "file" ? ' list="stSslFiles"' : ""}${dis}>`;
+    input = `<input id="${id}" value="${esc(v)}" ${f.max_length ? `maxlength="${f.max_length}"` : ""} autocomplete="off" spellcheck="false"${f.type === "file" ? ' list="stSslFiles"' : ""}${f.key === "email_digest_time" ? ' placeholder="e.g. 08:00 (blank: none)"' : ""}${dis}>`;
   let sugg = "";
   if (f.key === "notify_services") {
     const have = new Set(v || []), more = (ST.meta.notify_services || []).filter(s => !have.has(s));
@@ -1832,7 +1834,22 @@ function stField(f) {
   }
   return `<label class="${cls}" data-f="${f.key}" for="${id}">${esc(f.label)}${help}${input}${sugg}${err}</label>`;
 }
+// Email: only the fields for the way it's sent
+function stShown(f) {
+  const mode = ST.vals.email_send;
+  if (f.key.startsWith("smtp_")) return mode === "smtp";
+  if (f.key.startsWith("m365_")) return mode === "microsoft365";
+  if (f.group === "email" && f.key !== "email_send") return mode !== "off";
+  return true;
+}
 function stNote(group) {
+  if (group === "email") {
+    const mode = ST.vals.email_send;
+    const how = mode === "microsoft365" ? `<p class="st-note"><b>Microsoft 365 set-up:</b> in Microsoft Entra ID, register an app, add the Microsoft Graph <b>Mail.Send</b> <i>application</i> permission and grant admin consent, then create a client secret. Fill in the tenant ID, the app's client ID and the secret below, and put the mailbox it sends as under <b>Send email from</b>. To stop it sending as any mailbox, limit it with an Exchange application access policy (or RBAC for Applications) to that one mailbox.</p>`
+      : mode === "smtp" ? `<p class="st-note"><b>Mail server:</b> for an internal relay, such as an Exchange receive connector that allows anonymous relay from Home Assistant's address, leave the user name blank (port 25). For a mail service that needs signing in, fill in the user name and password, usually on port 587 with STARTTLS.</p>` : "";
+    return `<p class="st-note">Red alerts are emailed as they happen; several within a minute arrive as one email. Amber checks and event alerts (e.g. an account locked out) go in the daily summary, which lists everything that needs attention. Phone notifications carry on as before.</p>` + how +
+      (mode !== "off" ? `<div class="st-note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="mini primary" id="stEmailTest">Send a test email</button><span id="stEmailTestNote" class="hint" style="margin:0">Uses the settings as they are here, even before you save them.</span></div>` : "");
+  }
   if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
   if (group === "agent_port") return `<p class="st-note">The agent port is using <b>${esc(ST.meta.agent_port)}</b> now. Switching it takes effect straight away; agents keep using the address they were installed with, so update the addresses under <b>Agents</b> to match (<code>https://</code> or <code>http://</code>).</p>`;
   if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each computer's next check or agent report.</p>`;
@@ -1862,7 +1879,7 @@ function stRender() {
       return fs.length ? `<div class="st-gt">${esc(g.label)}</div><div class="st-grid">${fs.map(stField).join("")}</div>` : "";
     }).join("") || `<p class="hint">No setting matches "${esc(ST.q)}".</p>`;
   } else {
-    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab).map(stField).join("")}</div>`;
+    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab && stShown(f)).map(stField).join("")}</div>`;
   }
   html += `<datalist id="stSslFiles">${(ST.meta.ssl_files || []).map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
   const body = document.getElementById("stBody"), focus = document.activeElement && document.activeElement.id, top = body.scrollTop;
@@ -1877,6 +1894,7 @@ function stInput(e) {
   const f = ST.meta.fields.find(x => x.key === wrap.dataset.f);
   const v = stParse(f, f.type === "bool" ? el.checked : el.value);
   ST.vals[f.key] = v;
+  if (f.key === "email_send" && e.type === "change") { delete ST.errors[f.key]; stRender(); return; }
   const problem = stCheck(f, v);
   if (problem) ST.errors[f.key] = problem; else delete ST.errors[f.key];
   // Repaint the field's frame and the totals without redrawing the input being typed in.
@@ -1943,7 +1961,21 @@ function closeSettings() {
 document.getElementById("settingsBtn").addEventListener("click", openSettings);
 document.getElementById("stBody").addEventListener("input", stInput);
 document.getElementById("stBody").addEventListener("change", stInput);
-document.getElementById("stBody").addEventListener("click", e => {
+document.getElementById("stBody").addEventListener("click", async e => {
+  const tb = e.target.closest("#stEmailTest");
+  if (tb) {
+    const note = document.getElementById("stEmailTestNote");
+    tb.disabled = true; note.className = "hint"; note.textContent = "Sending…";
+    const values = Object.fromEntries(ST.meta.fields.filter(f => f.group === "email").map(f => [f.key, ST.vals[f.key]]));
+    try {
+      const r = await fetch("api/email/test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({values})});
+      const j = await r.json().catch(() => ({}));
+      note.className = "hint " + (r.ok ? "ok" : "bad");
+      note.textContent = r.ok ? `✓ Sent to ${(j.to || []).join(", ")}. If it doesn't arrive, check junk mail and the mail server's log.` : "Not sent: " + (j.error || r.status);
+    } catch (err) { note.className = "hint bad"; note.textContent = "Not sent: " + err.message; }
+    tb.disabled = false;
+    return;
+  }
   const b = e.target.closest("button[data-add]"); if (!b) return;
   e.preventDefault();
   ST.vals.notify_services = [...(ST.vals.notify_services || []), b.dataset.add];

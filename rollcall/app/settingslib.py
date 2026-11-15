@@ -11,6 +11,7 @@ import re
 GROUPS = [
     ("checks", "Checking"),
     ("alerts", "Notifications"),
+    ("email", "Email alerts"),
     ("limits", "Certificates, UPS and printers"),
     ("agents", "Agents"),
     ("logs", "Agent log alerts"),
@@ -34,6 +35,20 @@ _SPEC: dict[str, tuple] = {
     "persistent_notification": ("alerts", "bool", None),
     "notify_recovery": ("alerts", "bool", None),
     "notification_url": ("alerts", "str", 500),
+    "email_send": ("email", "choice", ("off", "smtp", "microsoft365")),
+    "email_to": ("email", "strs", None),
+    "email_from": ("email", "str", 200),
+    "email_recovery": ("email", "bool", None),
+    "email_digest_time": ("email", "str", 5),
+    "smtp_host": ("email", "str", 200),
+    "smtp_port": ("email", "int", (1, 65535)),
+    "smtp_security": ("email", "choice", ("starttls", "ssl", "none")),
+    "smtp_check_certificate": ("email", "bool", None),
+    "smtp_username": ("email", "str", 200),
+    "smtp_password": ("email", "password", 200),
+    "m365_tenant_id": ("email", "str", 100),
+    "m365_client_id": ("email", "str", 100),
+    "m365_client_secret": ("email", "password", 200),
     "cert_warn_days": ("limits", "int", (1, 365)),
     "cert_crit_days": ("limits", "int", (0, 365)),
     "ups_runtime_warn_minutes": ("limits", "int", (0, 600)),
@@ -80,6 +95,20 @@ LABELS: dict[str, tuple[str, str]] = {
     "notify_services": ("Phone or other notifications", "Home Assistant notify services to alert, without the \"notify.\" part, e.g. mobile_app_my_phone."),
     "persistent_notification": ("Home Assistant bell notification", "Show a notification in Home Assistant's sidebar while something is down."),
     "notify_recovery": ("Notify when things come back", "Also send a notification when something that was down is working again."),
+    "email_send": ("Send email with", "\"smtp\": any mail server, such as an internal relay (e.g. an Exchange receive connector that allows Home Assistant's address) or one that needs a user name and password. \"microsoft365\": Microsoft 365 through Microsoft Graph, with an app registration. \"off\": no email."),
+    "email_to": ("Send email to", "Addresses that get email alerts and the daily summary."),
+    "email_from": ("Send email from", "The sender address. For Microsoft 365, the mailbox the app sends as."),
+    "email_recovery": ("Email when things come back", "Also email when something that was red is working again."),
+    "email_digest_time": ("Daily summary at", "When to email a summary of everything that's amber or red, as HH:MM in Home Assistant's time zone, e.g. 08:00. Leave blank for none. Red alerts are emailed as they happen."),
+    "smtp_host": ("SMTP server", "The mail server's name or address, e.g. mail.example.local."),
+    "smtp_port": ("SMTP port", "Usually 25 for an internal relay, 587 with STARTTLS, or 465 with SSL."),
+    "smtp_security": ("SMTP security", "\"starttls\" (port 587, or 25 if the relay offers it), \"ssl\" (port 465), or \"none\" for a relay on your own network that doesn't offer encryption."),
+    "smtp_check_certificate": ("Check the server's certificate", "Turn off for an internal mail server whose certificate Home Assistant doesn't trust, such as Exchange's own self-signed one. The connection is still encrypted."),
+    "smtp_username": ("SMTP user name", "Leave blank for a relay that doesn't need signing in."),
+    "smtp_password": ("SMTP password", "Only needed with a user name. Stored with the add-on's settings and never shown again."),
+    "m365_tenant_id": ("Microsoft 365 tenant ID", "Your directory (tenant) ID, from Microsoft Entra ID."),
+    "m365_client_id": ("Microsoft 365 application (client) ID", "From the app registration that has the Mail.Send application permission (with admin consent)."),
+    "m365_client_secret": ("Microsoft 365 client secret", "The app registration's client secret. Stored with the add-on's settings and never shown again."),
     "log_level": ("Log level", "How much the add-on writes to its Log tab. \"info\" is right for everyday use; \"debug\" helps when troubleshooting."),
     "maintenance_minutes": ("Default pause length (minutes)", "The time limit offered when you pause a computer for a reboot or maintenance."),
     "notification_url": ("Notification link", "Where tapping a notification goes. Leave blank to open the Rollcall dashboard."),
@@ -119,6 +148,7 @@ LABELS: dict[str, tuple[str, str]] = {
 ACCESS_KEYS = ("admin_only_changes", "editors")      # only real Home Assistant admins may change these
 AGENT_PORT_KEYS = ("agent_ssl", "agent_certfile", "agent_keyfile")
 MAX_ITEMS, MAX_ITEM_LEN = 500, 200
+EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
 _FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,199}(/[A-Za-z0-9][A-Za-z0-9._ -]{0,199}){0,3}$")
 
 
@@ -132,14 +162,18 @@ def fields() -> list[dict]:
             f["min"], f["max"] = extra
         elif kind == "choice":
             f["options"] = list(extra)
-        elif kind == "str":
+        elif kind in ("str", "password"):
             f["max_length"] = extra
         out.append(f)
     return out
 
 
+MASK = "••••••••"  # a saved password, as the dialog shows it; sent back unchanged, it's kept
+
+
 def values(opts: dict) -> dict:
-    return {k: opts.get(k) for k in _SPEC}
+    """The current values, for the dialog. Passwords are never sent: a saved one shows as MASK."""
+    return {k: (MASK if opts.get(k) else "") if _SPEC[k][1] == "password" else opts.get(k) for k in _SPEC}
 
 
 def _whole(v, lo: int, hi: int) -> int:
@@ -180,11 +214,23 @@ def clean(changes: dict) -> tuple[dict, dict]:
                 if v not in extra:
                     raise ValueError("Must be one of " + ", ".join(extra))
                 out[key] = v
+            elif kind == "password":
+                if v == MASK:
+                    continue  # unchanged
+                v = "" if v is None else v
+                if not isinstance(v, str) or len(v) > extra or not v.isprintable():
+                    raise ValueError(f"Must be up to {extra} ordinary characters")
+                out[key] = v
             elif kind == "str":
                 v = "" if v is None else v
                 if not isinstance(v, str) or len(v) > extra or not v.isprintable():
                     raise ValueError(f"Must be up to {extra} ordinary characters")
-                out[key] = v.strip()
+                v = v.strip()
+                if key == "email_digest_time" and v and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", v):
+                    raise ValueError("Must be a time like 08:00, or blank for none")
+                if key == "email_from" and v and not EMAIL_RE.match(v):
+                    raise ValueError("Must be an email address")
+                out[key] = v
             elif kind == "file":
                 v = v.strip() if isinstance(v, str) else ""
                 if not _FILE_RE.match(v) or ".." in v:
@@ -213,6 +259,8 @@ def clean(changes: dict) -> tuple[dict, dict]:
                             continue
                         if len(item) > MAX_ITEM_LEN or not item.isprintable():
                             raise ValueError(f"Entries must be up to {MAX_ITEM_LEN} ordinary characters")
+                        if key == "email_to" and not EMAIL_RE.match(item):
+                            raise ValueError(f"{item[:60]} isn't an email address")
                     if item not in seen:
                         seen.add(item)
                         items.append(item)
