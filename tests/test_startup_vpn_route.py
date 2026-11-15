@@ -103,7 +103,7 @@ def test_second_tunnel_down_gets_its_own_alert():
     s = main.Service(key="snmp", **main.parse_check("snmp")[0])
     m = types.SimpleNamespace(notify=None)
 
-    async def notify(title, msg, tag=None, critical=False):
+    async def notify(title, msg, tag=None, critical=False, level=None, cat=None):
         sent.append(title)
     m.notify = notify
     h.snmp_items = [{"level": "crit", "what": "VPN Site3_Link", "detail": "down"}]

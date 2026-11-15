@@ -153,8 +153,12 @@ DEFAULTS = {
     "email_send": "off",
     "email_to": [],
     "email_from": "",
+    "email_red": True,
     "email_recovery": True,
+    "email_warnings": False,
+    "email_digest": True,
     "email_digest_time": "08:00",
+    **{f"email_about_{c}": True for c in emaillib.CATEGORIES},
     "smtp_host": "",
     "smtp_port": 25,
     "smtp_security": "starttls",
@@ -1436,6 +1440,7 @@ class HomeAssistant:
 # --------------------------------------------------------------------------
 # Monitor
 # --------------------------------------------------------------------------
+SECURITY_CHECKS = ("security", "defender", "secrets", "integrity", "domain")  # emailed under "Security"
 TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
 NO_ACK = ("defender",)  # cleared on the computer itself (a threat removed), then the next report shows it
 TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
@@ -2330,7 +2335,7 @@ class Monitor:
                 if new == RED and not turned_red and h.vpn_polled and self.opts.get("notify_recovery"):
                     for what in sorted(h.vpn_alerted - down):  # back up while another is still down
                         await self.notify(f"🟢 {h.name}: {what} back up", f"{h.name}: {what} is up again.",
-                                          f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}")
+                                          f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}", cat="network")
                 # Down when it went red: covered by that alert. Back up: alerts again if it drops again.
                 # First poll since the add-on started, already red: those were alerted before the restart.
                 h.vpn_alerted = set() if new != RED else down if turned_red or not h.vpn_polled else h.vpn_alerted & down
@@ -2502,7 +2507,7 @@ class Monitor:
                 await self.notify(
                     f"✅ {h.name} is back online",
                     f"{h.name} ({h.ip or h.host}) is responding again. Maintenance ended and monitoring has resumed.",
-                    tag,
+                    tag, level="ok", cat="devices",
                 )
             return
         if new == RED and old != RED:
@@ -2516,7 +2521,7 @@ class Monitor:
                 "agent_never": "Its agent hasn't reported yet.",
             }.get(reason, "No reply to ping on two consecutive checks.")
             msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
-            await self.notify(f"🔴 {h.name} is down", msg, tag, critical=h.critical)
+            await self.notify(f"🔴 {h.name} is down", msg, tag, critical=h.critical, cat="devices")
             await self.persist(tag, f"Rollcall: {h.name} is down", msg)
         elif old == RED and new in (GREEN, DEGRADED):
             await self.dismiss(tag)
@@ -2525,7 +2530,7 @@ class Monitor:
                 await self.notify(
                     f"🟢 {h.name} is back up",
                     f"{h.name} ({h.ip or h.host}) is responding again{dur}.",
-                    tag,
+                    tag, cat="devices",
                 )
             h.down_since = None
 
@@ -2536,7 +2541,7 @@ class Monitor:
         for what in sorted((down & h.vpn_down_prev) - h.vpn_alerted):
             msg = f"{h.name} ({h.ip or h.host}): {what} is down."
             tag = f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}"
-            await self.notify(f"🟠 {h.name}: {what} down", msg, tag, critical=h.critical)
+            await self.notify(f"🟠 {h.name}: {what} down", msg, tag, critical=h.critical, cat="network")
             h.vpn_alerted.add(what)
 
     async def on_service_change(self, h: Host, s: Service, old: str, new: str) -> None:
@@ -2546,19 +2551,20 @@ class Monitor:
             "entity_id": svc_entity(h, s), "host_entity_id": h.entity_id,
         })
         tag = f"ping_monitor_{svc_key(h, s)}"
+        cat = self._email_cat(s)
         if new == RED and s.kind == "cert":
             msg = f"{h.name} ({h.ip or h.host}) port {s.port}: certificate {s.detail}"
-            await self.notify(f"🟠 {h.name}: certificate expiring", msg, tag)
+            await self.notify(f"🟠 {h.name}: certificate expiring", msg, tag, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} certificate", msg)
             return
         if old == RED and new == GREEN and s.kind == "cert":
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
-                await self.notify(f"🟢 {h.name}: certificate renewed", f"{h.name} port {s.port}: {s.detail}.", tag)
+                await self.notify(f"🟢 {h.name}: certificate renewed", f"{h.name} port {s.port}: {s.detail}.", tag, cat=cat)
             return
         if new == RED and s.kind == "syslog":
             msg = f"{h.name} ({h.ip or h.host}) logged {s.detail}"
-            await self.notify(f"🟠 {h.name}: syslog alert", msg, tag)
+            await self.notify(f"🟠 {h.name}: syslog alert", msg, tag, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} syslog", msg)
             return
         if old == RED and new == GREEN and s.kind == "syslog":
@@ -2566,32 +2572,32 @@ class Monitor:
             return
         if new == RED and s.kind == "snmp":
             msg = f"{h.name} ({h.ip or h.host}): {s.detail}."
-            await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag, critical=h.critical)
+            await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag, critical=h.critical, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} SNMP", msg)
             return
         if old == RED and new == GREEN and s.kind == "snmp":
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
-                await self.notify(f"🟢 {h.name}: OK again", f"{h.name}: {s.detail}.", tag)
+                await self.notify(f"🟢 {h.name}: OK again", f"{h.name}: {s.detail}.", tag, cat=cat)
             return
         if new == RED and s.kind == "ha":
             msg = f"{s.label} on {h.name} is {s.detail} ({s.entity})."
-            await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag, critical=h.critical)
+            await self.notify(f"🟠 {h.name}: {s.label} {str(s.detail).split(' (')[0]}", msg, tag, critical=h.critical, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} {s.label}", msg)
         elif old == RED and new == GREEN and s.kind == "ha":
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
-                await self.notify(f"🟢 {h.name}: {s.label} OK", f"{s.label} on {h.name} is back to {s.detail}.", tag)
+                await self.notify(f"🟢 {h.name}: {s.label} OK", f"{s.label} on {h.name} is back to {s.detail}.", tag, cat=cat)
         elif new == RED:
             msg = (f"{h.name} ({h.ip or h.host}) is up, but {s.label} ({s.desc}) "
                    f"is not responding: {s.detail}.")
-            await self.notify(f"🟠 {h.name}: {s.label} is down", msg, tag, critical=h.critical)
+            await self.notify(f"🟠 {h.name}: {s.label} is down", msg, tag, critical=h.critical, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} {s.label} is down", msg)
         elif old == RED and new == GREEN:
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
                 await self.notify(f"🟢 {h.name}: {s.label} is back up",
-                                  f"{s.label} ({s.desc}) on {h.name} is responding again.", tag)
+                                  f"{s.label} ({s.desc}) on {h.name} is responding again.", tag, cat=cat)
 
     def _quiet(self, tag: str | None) -> bool:
         """Notifications for a computer set to never alert are dropped here, in one place.
@@ -2601,8 +2607,16 @@ class Monitor:
         h = self.hosts.get(tag[len("ping_monitor_"):].split("__")[0])
         return bool(h and h.no_alerts)
 
+    @staticmethod
+    def _email_cat(s: "Service") -> str:
+        """Which email category (Settings, Email alerts) a check's alerts belong to."""
+        if s.kind == "agent":
+            k = s.key.removeprefix("agent_")
+            return "backups" if k == "backups" else "security" if k in SECURITY_CHECKS else "agents"
+        return "network" if s.kind in ("snmp", "syslog", "vpn") else "services"
+
     async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False,
-                     level: str | None = None) -> None:
+                     level: str | None = None, cat: str | None = None) -> None:
         """critical: sent to the Home Assistant app as a critical alert, which gets through a silenced
         phone (a computer marked Critical, for problems only, never "back up").
         level, for email: red (emailed now), ok (back up), amber or event (in the daily summary), info.
@@ -2611,7 +2625,7 @@ class Monitor:
             return
         if level is None:
             level = "ok" if title.startswith("🟢") else "info" if title.startswith("⬆") else "red"
-        self.email.alert(title, message, level)
+        self.email.alert(title, message, level, cat)
         for svc in self.opts.get("notify_services") or []:
             svc = svc.strip().removeprefix("notify.")
             if not svc:
@@ -3182,12 +3196,12 @@ class Monitor:
                f"Retry or Update the rest under Manage > Agents.")
         log.warning("%s agent %s update stopped: %s", os_name.capitalize(), r["version"], msg)
         asyncio.get_event_loop().create_task(self.notify(f"⚠️ {os_name.capitalize()} agent update stopped", msg,
-                                                         f"ping_monitor_rollout_{os_name}"))
+                                                         f"ping_monitor_rollout_{os_name}", cat="updates"))
 
     async def email_summary_tick(self, now: float) -> None:
         """At email_digest_time (Home Assistant's time zone), once a day: the daily summary email."""
         at = str(self.opts.get("email_digest_time") or "").strip()
-        if not at or not emaillib.configured(self.opts):
+        if not at or not self.opts.get("email_digest", True) or not emaillib.configured(self.opts):
             return
         local = datetime.fromtimestamp(now, TZ) if TZ else datetime.fromtimestamp(now)
         day = local.strftime("%Y-%m-%d")
@@ -3209,6 +3223,7 @@ class Monitor:
     def summary_sections(self) -> tuple[list, str]:
         """What needs attention now, for the daily summary: [(heading, [(colour, what, detail)])], and a line of totals."""
         down, red, amber, paused = [], [], [], []
+        want = lambda cat: self.opts.get(f"email_about_{cat}", True)  # noqa: E731  (what's ticked under Email about)
         for h in sorted(self.hosts.values(), key=lambda x: x.name.lower()):
             if h.removed:
                 continue
@@ -3218,9 +3233,13 @@ class Monitor:
             if h.off_schedule:
                 continue
             if h.status == RED:
+                if not want("devices"):
+                    continue
                 down.append(("red", h.name, f"not responding ({h.ip or h.host})" + (f" since {datetime.fromtimestamp(h.last_change, TZ).strftime('%d %b %H:%M')}" if h.last_change and TZ else "")))
                 continue
             for s in h.services + h.agent_checks:
+                if s.status in (RED, AMBER) and not want(self._email_cat(s)):
+                    continue
                 if s.status == RED:
                     red.append(("red", f"{h.name} · {s.label}", s.detail or ""))
                 elif s.status == AMBER:
@@ -3452,7 +3471,7 @@ class Monitor:
                 title, msg = f"🟠 {h.name}: backup overdue", f"{job} hasn't completed successfully for {why.split('for ')[-1]}."
             await self.notify(title, msg, f"ping_monitor_{h.key}__backup_{slugify(str(j.get('name')))}",
                               critical=h.critical and level == agentlib.CRIT,  # a failed backup, not a late one
-                              level="red" if level == agentlib.CRIT else "amber")
+                              level="red" if level == agentlib.CRIT else "amber", cat="backups")
         if changed:
             self._save_agent_settings()
 
@@ -3473,7 +3492,7 @@ class Monitor:
         await self.notify(f"⬆️ {h.name}: Immich v{im['latest']} available",
                           f"{h.name} is running Immich v{im.get('version')}. Release notes: "
                           f"https://github.com/immich-app/immich/releases/tag/v{im['latest']}",
-                          f"ping_monitor_{h.key}__immich_update")
+                          f"ping_monitor_{h.key}__immich_update", cat="updates")
 
     def acks_summary(self, h: Host) -> list:
         """What's acknowledged on this device, for the Overview's Acknowledged list (with Undo)."""
@@ -3853,16 +3872,17 @@ class Monitor:
         if s.key == "agent_backups":
             return  # each failed job gets its own notification (_backup_alerts)
         tag = f"ping_monitor_{svc_key(h, s)}"
+        cat = self._email_cat(s)
         if new == RED:
             if s.key == "agent_agent" and h.status == RED:
                 return  # the "down" alert already covers it
-            await self.notify(f"🟠 {h.name}: {s.label}", s.detail or "", tag, critical=h.critical)
+            await self.notify(f"🟠 {h.name}: {s.label}", s.detail or "", tag, critical=h.critical, cat=cat)
             await self.persist(tag, f"Rollcall: {h.name} {s.label}", s.detail or "")
         elif old == RED:
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
                 word = "OK" if new == GREEN else "no longer critical"
-                await self.notify(f"🟢 {h.name}: {s.label} {word}", s.detail or "", tag)
+                await self.notify(f"🟢 {h.name}: {s.label} {word}", s.detail or "", tag, cat=cat)
 
     @staticmethod
     def _pretty_account(value) -> str:
@@ -3882,7 +3902,7 @@ class Monitor:
             for e in [e for e in notable["events"] if e.get("alert")][:5]:
                 what = f"event {e.get('id')}" if e.get("id") else "journal"
                 await self.notify(f"⚠️ {h.name}: {e.get('source')} {what}",
-                                  f"{e.get('level')}: {e.get('message')}", self._tag(h), level="event")
+                                  f"{e.get('level')}: {e.get('message')}", self._tag(h), level="event", cat="agents")
                 sent += 1
         if self.opts.get("agent_security_alerts", True):
             for i in [i for i in notable["security"] if i.get("alert")][:8]:
@@ -3903,13 +3923,13 @@ class Monitor:
                 else:
                     title, msg = i.get("what") or f"event {eid}", f"{acct} ({by})"
                 icon, _, text = title.partition(" ") if title[:1] in "🔒🗑🛡👤" else ("🔐", "", title)
-                await self.notify(f"{icon} {h.name}: {text}", msg, self._tag(h), level="event")
+                await self.notify(f"{icon} {h.name}: {text}", msg, self._tag(h), level="event", cat="security")
                 sent += 1
         for d in notable["detections"][:5]:
             ok = d.get("action_success", True)
             await self.notify(f"🦠 {h.name}: Defender detected {d.get('threat')}",
                               f"{d.get('resource') or ''} ({'dealt with' if ok else 'NOT removed: check this server'})",
-                              self._tag(h), level="event" if ok else "red")
+                              self._tag(h), level="event" if ok else "red", cat="security")
             sent += 1
         if sent:
             log.info("%s: sent %d agent alert(s)", h.name, sent)
@@ -4383,12 +4403,12 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         user = await access.who(req)
         sections, summary = monitor.summary_sections()
         text = (f"This is a test from Rollcall, sent by {user['display'] or 'someone'} from the Settings.\n\n"
-                f"Red alerts will arrive like this as they happen, and a daily summary at {opts.get('email_digest_time') or '(not set)'}.\n\n{summary}")
+                f"{emaillib.describe(opts)}\n\n{summary}")
         page = emaillib._page("Rollcall test email", f"<p>This is a test from Rollcall, sent by {html_escape(user['display'] or 'someone')} from the Settings.</p>"
-                              f"<p>Red alerts will arrive like this as they happen, and a daily summary at <b>{html_escape(opts.get('email_digest_time') or '(not set)')}</b>.</p>"
+                              f"<p>{html_escape(emaillib.describe(opts))}</p>"
                               f"<p style='color:#4b5563'>{html_escape(summary)}</p>", str(opts.get("notification_url") or ""))
         try:
-            await monitor.email.send("Rollcall test email", text, page, opts)
+            await monitor.email.send("Rollcall test email", text + monitor.email._footer_text(), page, opts)
         except emaillib.EmailError as e:
             return web.json_response({"error": str(e)}, status=502)
         return web.json_response({"ok": True, "to": opts["email_to"]})

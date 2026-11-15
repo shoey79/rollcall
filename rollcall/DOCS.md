@@ -1047,15 +1047,32 @@ The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-a
 
 ### Email alerts
 
-Set up under **Manage → Settings → Email alerts**. One list of addresses gets everything.
+Set up under **Manage → Settings → Email alerts**. One list of addresses gets everything. Alerts that arrive within a minute of each other come in one email.
 
-- **Red alerts are emailed as they happen**: anything that sends a red notification, such as a computer down, a failed backup or a Defender threat that wasn't removed. Alerts that arrive within a minute of each other come in one email.
-- **Recovery** emails are sent if **Email when things come back** is on.
-- **A daily summary** at `email_digest_time` (08:00 by default, in Home Assistant's time zone) lists everything that isn't responding, red, amber or paused, plus the amber alerts and events since the last summary. Leave the time blank for no summary. If Home Assistant was off at that time, the summary is sent when it starts, up to an hour late; after that, that day is skipped.
-- **Pauses, schedules and "never alert" apply** to email the same as to notifications.
-- **Send a test email** (on the Email alerts tab) tries the settings on the screen before you save them and shows the mail server's answer if it fails.
+**What to email** (tick any):
 
-Choose how Rollcall sends with **Send email using**:
+- **Red alerts** (on): problems as they happen, such as a computer down, a check gone red, a failed backup or a Defender threat that wasn't removed.
+- **When things come back** (on): when something that was red works again.
+- **Amber warnings and events** (off): as they happen, e.g. a late or missed backup, Windows log and security events, or a threat Defender removed. Left off, these go in the daily summary instead.
+- **Daily summary** (on), at **Daily summary at** (08:00 by default, in Home Assistant's time zone): everything that isn't responding, red, amber or paused, plus the warnings and events not already emailed. If Home Assistant was off at that time, it's sent when it starts, up to an hour late; after that, that day is skipped.
+
+**Email about** (all on to start with): untick any you don't want emailed. Phone notifications aren't affected.
+
+| Tick | Covers |
+|---|---|
+| Devices not responding | A computer or device that stops replying, and when it's back |
+| Service checks | Ports, websites, certificates, SIP and Home Assistant sensors |
+| SNMP and syslog | Firewalls, VPNs and REDs, switches, iDRACs and syslog alerts |
+| Agent checks and log events | Disks, services, Windows updates and the other agent checks, and Windows or Linux log events |
+| Backups | Backup jobs that failed, were missed or are overdue |
+| Security | Security events, Defender, passwords found in files, privileged group changes and agent file changes |
+| Updates | A new app version (e.g. Immich), or an agent update rollout that stopped |
+
+These also decide what's in the daily summary.
+
+**Pauses, schedules and "never alert"** apply to email the same as to notifications. **Send a test email** tries the settings on the screen before you save them; it says what you'll get with the ticks as they are, or shows the mail server's answer if it fails.
+
+Choose how Rollcall sends with **Send email with**:
 
 **An internal relay** (`smtp`, no user name). For example, an Exchange receive connector that allows Home Assistant's address to relay. Set **SMTP server** and **SMTP port** (usually 25). Leave **SMTP security** on `starttls` if the relay offers it, or `none` if it doesn't. If the relay uses Exchange's own self-signed certificate, turn off **Check the server's certificate**; the connection is still encrypted.
 
@@ -1196,8 +1213,12 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `email_send` | off | `off`, `smtp` or `microsoft365` |
 | `email_to` | `[]` | Addresses that get email alerts and the daily summary |
 | `email_from` | blank | Sender address; for Microsoft 365, the mailbox the app sends as |
+| `email_red` | true | Email red alerts as they happen |
 | `email_recovery` | true | Also email when something that was red works again |
-| `email_digest_time` | 08:00 | When to send the daily summary (HH:MM); blank for none |
+| `email_warnings` | false | Email amber warnings and events as they happen, instead of in the daily summary |
+| `email_digest` | true | Send the daily summary |
+| `email_digest_time` | 08:00 | When to send the daily summary (HH:MM) |
+| `email_about_devices`, `_services`, `_network`, `_agents`, `_backups`, `_security`, `_updates` | true | What to email about; see [Email alerts](#email-alerts) |
 | `smtp_host` | blank | Mail server name or address |
 | `smtp_port` | 25 | 25 for a relay, 587 with STARTTLS, 465 with SSL |
 | `smtp_security` | starttls | `starttls`, `ssl` or `none` |

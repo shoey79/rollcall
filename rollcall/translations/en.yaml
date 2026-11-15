@@ -38,12 +38,42 @@ configuration:
   email_from:
     name: "Send email from"
     description: "The sender address. For Microsoft 365, the mailbox the app sends as."
+  email_red:
+    name: "Red alerts"
+    description: "Problems as they happen: a device down, a check gone red, a failed backup."
   email_recovery:
-    name: "Email when things come back"
-    description: "Also email when something that was red is working again."
+    name: "When things come back"
+    description: "When something that was red is working again."
+  email_warnings:
+    name: "Amber warnings and events"
+    description: "As they happen: late backups, log and security events, threats Defender removed. Untick to get them in the daily summary instead."
+  email_digest:
+    name: "Daily summary"
+    description: "Once a day: everything that's amber or red, plus warnings and events not already emailed."
   email_digest_time:
     name: "Daily summary at"
-    description: "When to email a summary of everything that's amber or red, as HH:MM in Home Assistant's time zone, e.g. 08:00. Leave blank for none. Red alerts are emailed as they happen."
+    description: "HH:MM in Home Assistant's time zone, e.g. 08:00."
+  email_about_devices:
+    name: "Devices not responding"
+    description: "A computer or device that stops replying, and when it's back."
+  email_about_services:
+    name: "Service checks"
+    description: "Ports, websites, certificates, SIP and Home Assistant sensors."
+  email_about_network:
+    name: "SNMP and syslog"
+    description: "Firewalls, VPNs, switches, iDRACs and syslog alerts."
+  email_about_agents:
+    name: "Agent checks and log events"
+    description: "Disks, services, Windows updates and the other agent checks, and Windows or Linux log events."
+  email_about_backups:
+    name: "Backups"
+    description: "Backup jobs that failed, were missed or are overdue."
+  email_about_security:
+    name: "Security"
+    description: "Security events, Defender, passwords found in files, privileged group changes and agent file changes."
+  email_about_updates:
+    name: "Updates"
+    description: "A new app version, or an agent update rollout that stopped."
   smtp_host:
     name: "SMTP server"
     description: "The mail server's name or address, e.g. mail.example.local."

@@ -174,6 +174,7 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+.st-sub{grid-column:1/-1;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .st-f{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--text)}
 .st-f small{font-weight:400;color:var(--muted);line-height:1.4}
 .st-f input:not([type=checkbox]),.st-f select,.st-f textarea{font:inherit;font-size:14px;font-weight:400;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
@@ -1810,7 +1811,8 @@ function stCheck(f, v) {
 }
 function stField(f) {
   const v = ST.vals[f.key], id = "st_" + f.key, dis = stLocked(f) ? " disabled" : "";
-  const cls = ["st-f", f.type === "bool" ? "bool" : "", (LIST_TYPES.includes(f.type) || f.type === "bool") ? "wide" : "",
+  const tick = f.type === "bool" && f.group === "email" && f.key.startsWith("email_");   // the email choices: two to a row
+  const cls = ["st-f", f.type === "bool" ? "bool" : "", (LIST_TYPES.includes(f.type) || (f.type === "bool" && !tick)) ? "wide" : "",
     stSame(v, ST.orig[f.key]) ? "" : "changed", ST.errors[f.key] ? "bad" : ""].filter(Boolean).join(" ");
   const err = ST.errors[f.key] ? `<small class="st-err">${esc(ST.errors[f.key])}</small>` : "";
   const help = `<small>${esc(f.help)}</small>`;
@@ -1839,15 +1841,17 @@ function stShown(f) {
   const mode = ST.vals.email_send;
   if (f.key.startsWith("smtp_")) return mode === "smtp";
   if (f.key.startsWith("m365_")) return mode === "microsoft365";
+  if (f.key === "email_digest_time") return mode !== "off" && !!ST.vals.email_digest;
   if (f.group === "email" && f.key !== "email_send") return mode !== "off";
   return true;
 }
+const ST_EMAIL_HEADS = {email_red: "What to email", email_about_devices: "Email about", smtp_host: "Mail server", m365_tenant_id: "Microsoft 365"};
 function stNote(group) {
   if (group === "email") {
     const mode = ST.vals.email_send;
     const how = mode === "microsoft365" ? `<p class="st-note"><b>Microsoft 365 set-up:</b> in Microsoft Entra ID, register an app, add the Microsoft Graph <b>Mail.Send</b> <i>application</i> permission and grant admin consent, then create a client secret. Fill in the tenant ID, the app's client ID and the secret below, and put the mailbox it sends as under <b>Send email from</b>. To stop it sending as any mailbox, limit it with an Exchange application access policy (or RBAC for Applications) to that one mailbox.</p>`
       : mode === "smtp" ? `<p class="st-note"><b>Mail server:</b> for an internal relay, such as an Exchange receive connector that allows anonymous relay from Home Assistant's address, leave the user name blank (port 25). For a mail service that needs signing in, fill in the user name and password, usually on port 587 with STARTTLS.</p>` : "";
-    return `<p class="st-note">Red alerts are emailed as they happen; several within a minute arrive as one email. Amber checks and event alerts (e.g. an account locked out) go in the daily summary, which lists everything that needs attention. Phone notifications carry on as before.</p>` + how +
+    return `<p class="st-note">Tick what you want emailed. Alerts that arrive within a minute of each other come in one email. Phone notifications carry on as before.</p>` + how +
       (mode !== "off" ? `<div class="st-note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="mini primary" id="stEmailTest">Send a test email</button><span id="stEmailTestNote" class="hint" style="margin:0">Uses the settings as they are here, even before you save them.</span></div>` : "");
   }
   if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
@@ -1879,7 +1883,8 @@ function stRender() {
       return fs.length ? `<div class="st-gt">${esc(g.label)}</div><div class="st-grid">${fs.map(stField).join("")}</div>` : "";
     }).join("") || `<p class="hint">No setting matches "${esc(ST.q)}".</p>`;
   } else {
-    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab && stShown(f)).map(stField).join("")}</div>`;
+    const heads = ST.tab === "email" ? ST_EMAIL_HEADS : {};
+    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab && stShown(f)).map(f => (heads[f.key] ? `<div class="st-sub">${heads[f.key]}</div>` : "") + stField(f)).join("")}</div>`;
   }
   html += `<datalist id="stSslFiles">${(ST.meta.ssl_files || []).map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
   const body = document.getElementById("stBody"), focus = document.activeElement && document.activeElement.id, top = body.scrollTop;
@@ -1894,7 +1899,7 @@ function stInput(e) {
   const f = ST.meta.fields.find(x => x.key === wrap.dataset.f);
   const v = stParse(f, f.type === "bool" ? el.checked : el.value);
   ST.vals[f.key] = v;
-  if (f.key === "email_send" && e.type === "change") { delete ST.errors[f.key]; stRender(); return; }
+  if ((f.key === "email_send" || f.key === "email_digest") && e.type === "change") { delete ST.errors[f.key]; stRender(); return; }
   const problem = stCheck(f, v);
   if (problem) ST.errors[f.key] = problem; else delete ST.errors[f.key];
   // Repaint the field's frame and the totals without redrawing the input being typed in.

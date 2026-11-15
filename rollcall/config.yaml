@@ -41,8 +41,18 @@ options:
   email_send: "off"
   email_to: []
   email_from: ""
+  email_red: true
   email_recovery: true
+  email_warnings: false
+  email_digest: true
   email_digest_time: "08:00"
+  email_about_devices: true
+  email_about_services: true
+  email_about_network: true
+  email_about_agents: true
+  email_about_backups: true
+  email_about_security: true
+  email_about_updates: true
   smtp_host: ""
   smtp_port: 25
   smtp_security: starttls
@@ -111,8 +121,18 @@ schema:
   email_to:
     - str?
   email_from: str?
+  email_red: bool?
   email_recovery: bool?
+  email_warnings: bool?
+  email_digest: bool?
   email_digest_time: str?
+  email_about_devices: bool?
+  email_about_services: bool?
+  email_about_network: bool?
+  email_about_agents: bool?
+  email_about_backups: bool?
+  email_about_security: bool?
+  email_about_updates: bool?
   smtp_host: str?
   smtp_port: int(1,65535)?
   smtp_security: list(starttls|ssl|none)?

@@ -165,7 +165,6 @@ def test_a_burst_of_red_alerts_is_one_email_and_amber_waits_for_the_summary(monk
         m.alert("🔴 SRV01 is down", "No reply from 192.168.1.20", "red")
         m.alert("🟠 DC01: Disk", "C: 2% free", "red")
         m.alert("⚠️ DC01: Kernel-Power event 41", "Critical: rebooted", "event")
-        m.alert("⬆️ SRV02: update available", "", "info")
         await asyncio.sleep(0.2)
         assert len(sent) == 1 and sent[0][0] == "Rollcall: 2 alerts (SRV01 is down, …)"
         assert "DC01: Disk" in sent[0][1] and "Kernel-Power" not in sent[0][1]
@@ -184,3 +183,35 @@ def test_nothing_sent_when_off():
     assert not m.queue
     with pytest.raises(E.EmailError, match="turned off"):
         asyncio.run(m.send("t", "t", "<p>t</p>"))
+
+
+def test_ticked_choices_decide_what_is_emailed(monkeypatch):
+    sent = []
+    monkeypatch.setattr(E, "GROUP_SECONDS", 0.05)
+
+    async def run():
+        opts = {**BASE, "email_about_backups": False, "email_recovery": False}
+        m = mailer(opts)
+
+        async def fake_send(subject, text, html_body, opts=None):
+            sent.append(subject)
+        m.send = fake_send
+        m.alert("🔴 BK01: backup failed", "Job failed", "red", "backups")       # backups unticked
+        m.alert("🟢 SRV01 is back up", "", "ok", "devices")                    # recovery unticked
+        m.alert("⚠️ DC01: event 41", "rebooted", "event", "agents")           # waits for the summary
+        await asyncio.sleep(0.2)
+        assert sent == [] and len(m.recent) == 1
+        opts["email_warnings"] = True                                          # warnings as they happen
+        m.alert("🟠 BK02: backup overdue", "late", "amber", "backups")         # still unticked
+        m.alert("⚠️ DC01: event 6008", "unexpected shutdown", "event", "agents")
+        m.alert("⬆️ SRV02: Immich v2 available", "", "info", "updates")
+        await asyncio.sleep(0.2)
+        assert sent == ["Rollcall: 2 alerts (DC01: event 6008, …)"] and len(m.recent) == 1
+        opts["email_red"], opts["email_about_updates"] = False, False
+        m.alert("🔴 SRV01 is down", "x", "red", "devices")
+        m.alert("⬆️ SRV02: Immich v3 available", "", "info", "updates")
+        await asyncio.sleep(0.2)
+        assert len(sent) == 1
+        assert E.describe(opts) == "You'll get amber warnings and events as they happen, about devices not responding, " \
+            "service checks, SNMP and syslog, agent checks and security."
+    asyncio.run(run())

@@ -22,10 +22,32 @@ from urllib.parse import quote
 
 log = logging.getLogger("rollcall.email")
 
+CATEGORIES = ("devices", "services", "network", "agents", "backups", "security", "updates")
+DOT = {"ok": "#16a34a", "red": "#dc2626", "amber": "#d97706", "event": "#d97706", "info": "#2563eb"}
 GROUP_SECONDS = 60      # alerts arriving within this long of the first go in one email
 MASK = "••••••••"       # a saved password, as the Settings dialog shows it
 LOGIN = os.environ.get("PM_M365_LOGIN", "https://login.microsoftonline.com")   # overridable for testing
 GRAPH = os.environ.get("PM_M365_GRAPH", "https://graph.microsoft.com")
+
+
+CAT_LABELS = {"devices": "devices not responding", "services": "service checks", "network": "SNMP and syslog",
+              "agents": "agent checks", "backups": "backups", "security": "security",
+              "updates": "updates"}
+
+
+def describe(opts: dict) -> str:
+    """One sentence on what these settings email, for the test email."""
+    now = [w for k, d, w in (("email_red", True, "red alerts"), ("email_warnings", False, "amber warnings and events")) if opts.get(k, d)]
+    when = [" and ".join(now) + " as they happen"] if now else []
+    if opts.get("email_recovery", True):
+        when.append("an email when things come back")
+    if opts.get("email_digest", True) and opts.get("email_digest_time"):
+        when.append(f"a daily summary at {opts['email_digest_time']}")
+    about = [CAT_LABELS[c] for c in CATEGORIES if opts.get(f"email_about_{c}", True)]
+    if not when or not about:
+        return "With these settings nothing else will be emailed."
+    j = lambda xs: xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]  # noqa: E731
+    return f"You'll get {j(when)}, about {'everything' if len(about) == len(CATEGORIES) else j(about)}."
 
 
 class EmailError(Exception):
@@ -61,26 +83,36 @@ class Emailer:
         self.last_error = ""
 
     # -- what gets sent -------------------------------------------------------------------
-    def alert(self, title: str, message: str, level: str) -> None:
-        """Called for every notification. level: red (emailed now), ok (its "back up"), amber, event or
-        info (in the next digest)."""
+    def alert(self, title: str, message: str, level: str, cat: str | None = None) -> None:
+        """Called for every notification. level: red, ok (its "back up"), amber, event or info.
+        cat: what it's about (CATEGORIES), each of which can be ticked off in Settings.
+        Red, back up (email_recovery) and info are emailed now; amber and events too with
+        email_warnings, otherwise they wait for the daily summary."""
         opts = self._opts()
-        if not configured(opts):
+        if not configured(opts) or (cat and not opts.get(f"email_about_{cat}", True)):
             return
         now = time.time()
-        if level == "red" or (level == "ok" and opts.get("email_recovery", True)):
+        if level == "red":
+            send_now = opts.get("email_red", True)
+        elif level == "ok":
+            send_now = opts.get("email_recovery", True)
+        elif level in ("amber", "event"):
+            send_now = opts.get("email_warnings", False)
+            if not send_now:
+                self.recent = [r for r in self.recent if r[0] > now - 86400][-200:] + [(now, title, message)]
+        else:
+            send_now = level == "info"
+        if send_now:
             self.queue.append((now, title, message, level))
             if not self._flush_task or self._flush_task.done():
                 self._flush_task = asyncio.get_event_loop().create_task(self._flush_later())
-        elif level in ("amber", "event"):
-            self.recent = [r for r in self.recent if r[0] > now - 86400][-200:] + [(now, title, message)]
 
     async def _flush_later(self) -> None:
         await asyncio.sleep(GROUP_SECONDS)
         items, self.queue = self.queue, []
         if not items:
             return
-        problems = [i for i in items if i[3] == "red"]
+        problems = [i for i in items if i[3] != "ok"]
         names = [_plain(i[1]) for i in items]
         if len(items) == 1:
             subject = f"Rollcall: {names[0]}"
@@ -91,7 +123,7 @@ class Emailer:
         text = "\n".join(f"{w}  {'BACK UP ' if lv == 'ok' else ''}{ti}\n      {m}" for w, lv, ti, m in rows)
         body = "".join(
             f'<tr><td style="{TD};color:#6b7280;white-space:nowrap">{w}</td><td style="{TD}">'
-            f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{"#16a34a" if lv == "ok" else "#dc2626"};margin-right:6px"></span>'
+            f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{DOT.get(lv, "#dc2626")};margin-right:6px"></span>'
             f'<b>{html.escape(ti)}</b><br><span style="color:#4b5563">{html.escape(m)}</span></td></tr>' for w, lv, ti, m in rows)
         try:
             await self.send(subject, text + self._footer_text(), _page("Rollcall alerts", f'<table style="border-collapse:collapse;width:100%">{body}</table>', self._link()))
