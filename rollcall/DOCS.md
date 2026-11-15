@@ -655,15 +655,16 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 
 Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
-**Veeam backups.** On a Veeam server the agent adds a **Backups** check and tab:
+**Veeam backups.** On a Veeam server, or a computer backed up by Veeam Agent, the agent adds a **Backups** check and tab:
 
-- **Backup & Replication** (v12/13): every job's result is read from the *Veeam Backup* event log (backup, replication, backup copy, agent jobs and others).
+- **Backup & Replication** (v12/13): every job's result is read from the *Veeam Backup* event log (backup, replication, backup copy, agent backup jobs managed by the backup server, and others).
   - A failed job is red, with one notification per failed run giving Veeam's reason. A failure Veeam will retry, or a warning, is amber.
   - **Backup copy jobs** that copy several source jobs log each copy as `<copy job>\<source job>`, and the copy job itself only logs when one of its own sessions ends. So a failed result for the copy job itself (e.g. a failed retry) counts as superseded once copies have finished since it and none of them failed. Its row then shows *Last run failed; N copy sessions have succeeded since*.
   - **Retired a job on purpose?** **Forget** on its row removes it from the list and its alerts straight away, which is tidier than **Ignore** when you're reorganising jobs. If a job with the same Veeam ID runs again, it comes back on its own. Forgotten jobs are listed under the table with **Bring back**. Jobs that haven't run for 60 days are forgotten automatically.
   - A copy job like that is also judged by its copies for being overdue: its **Last success** is the latest successful copy, and each copy has its own overdue check, so the copy job's own occasional entries don't make it look overdue.
   - Rollcall learns how often each job runs. A job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or silently stopped.
   - Jobs with no run for 60 days are dropped.
+- **Veeam Agent for Microsoft Windows** on the computer itself: each session's result, from the *Veeam Agent* event log. It works whether the agent is standalone or managed by a backup server, through an agent backup job or a backup policy. A **backup policy** (managed by the agent) writes nothing to the backup server's log, so put a Rollcall agent on the computers it protects to see their results. A failure Veeam Agent will retry is amber; one it won't is red. Overdue runs are spotted the same way as above.
 - **Backup for Microsoft 365:** each job's last status, from its PowerShell module, every 30 minutes (loading the module is slow). Failed is red; Warning, Stopped or Disconnected is amber; an enabled job more than 2 hours past its next scheduled run is amber ("missed"). Disabled jobs are listed but not checked.
 - **Ignore** on a job in the Backups tab (`backup:<job name>`) leaves it out, e.g. a weekly test job.
 

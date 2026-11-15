@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.74.1 - 2026-11-15
+
+### Fixed
+- **Veeam agent backup jobs weren't listed** (Windows agent 1.0.43). Jobs that back up computers through Veeam Agent and are managed by the backup server write their result to the backup server's event log differently: without quotes round the job name (*Agent Backup job Laptops finished with Success*). Rollcall skipped those lines, so these jobs never appeared, and didn't alert when they failed or stopped running. They now show in the Backups tab with their last result, when they finished, last success, and the usual failed and overdue alerts.
+
+### Added
+- **Veeam Agent results on the computer itself.** A computer backed up by Veeam Agent for Microsoft Windows now gets its own Backups tab, read from its *Veeam Agent* event log. It works for standalone agents and for ones managed by a backup server, through an agent backup job or a **backup policy**.
+  - A backup policy doesn't record anything in the backup server's log, so this is how to see those results.
+  - A failure Veeam Agent will retry is amber; one it won't is red. A computer whose backups stop running goes amber once it's overdue.
+
 ## 1.74.0 - 2026-11-15
 
 ### Added
