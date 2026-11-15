@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.42'
+$AgentVersion = '1.0.43'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -149,6 +149,8 @@ function Read-State {
             if ($raw.amd_raid) { $state.amd_raid = [string]$raw.amd_raid }
             if ($raw.veeam) { $state.veeam = [string]$raw.veeam }
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
+            if ($raw.veeam_agent) { $state.veeam_agent = [string]$raw.veeam_agent }
+            if ($raw.veeam_agent_cursor) { $state.veeam_agent_cursor = [int64]$raw.veeam_agent_cursor }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
             if ($raw.secrets_sent) { $state.secrets_sent = [string]$raw.secrets_sent }
@@ -1907,8 +1909,11 @@ function Get-VeeamJobs($State) {
             try { $vals = @(([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_) { [string]$_.'#text' } else { '' } }) } catch { continue }
             if ($vals.Count -lt 3) { continue }
             $desc = [string]$vals[$vals.Count - 1]
-            if ($desc -notmatch "^(?<type>.+?) job '(?<name>.+)' finished with (?<res>\w+)\.?\s*(?<detail>.*)$") { continue }
-            $jname = $Matches['name']; $jtype = $Matches['type']; $jdetail = $Matches['detail']; $jres = $Matches['res']
+            # Most say "Backup job 'Name' finished with Success."; agent backup jobs (event 790) leave
+            # out the quotes: "Agent Backup job Name finished with Success."
+            if ($desc -notmatch "^(?<type>.+?) job (?:'(?<name>.+)'|(?<bare>.+?)) finished with (?<res>\w+)\.?\s*(?<detail>.*)$") { continue }
+            $jname = if ($Matches['name']) { $Matches['name'] } else { $Matches['bare'] }
+            $jtype = $Matches['type']; $jdetail = $Matches['detail']; $jres = $Matches['res']
             if ($vals.Count -gt 6 -and [string]$vals[6]) { $jname = [string]$vals[6] }  # the job's own spelling
             $res = switch ([string]$vals[2]) { '0' { 'Success' } '1' { 'Warning' } '2' { 'Failed' } default { $jres } }
             $id = if ([string]$vals[1] -match '^[0-9a-fA-F-]{36}$') { [string]$vals[1] } else { $jname }
@@ -1929,6 +1934,64 @@ function Get-VeeamJobs($State) {
     return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
         [ordered]@{ source = 'Backup & Replication'; id = $k; name = $j.name; type = $j.type; result = $j.result; finished = $j.finished
             retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.session; runs = @($j.runs) } })
+}
+
+function Get-VeeamAgentJobs($State) {
+    # Veeam Agent for Microsoft Windows on this computer (standalone, or managed by a backup server
+    # through a backup policy or agent backup job): each session writes event 190 "Veeam Agent
+    # 'Name' finished with Success." (191 when it failed and will be retried) to its own log.
+    $jobs = @{}
+    if ($State.veeam_agent) {
+        try {
+            foreach ($p in ($State.veeam_agent | ConvertFrom-Json).PSObject.Properties) {
+                $v = $p.Value
+                $jobs[$p.Name] = @{ name = [string]$v.name; result = [string]$v.result; finished = (ConvertTo-IsoText $v.finished)
+                    retry = [bool]$v.retry; detail = [string]$v.detail; last_success = (ConvertTo-IsoText $v.last_success)
+                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }) }
+            }
+        } catch { }
+    }
+    $hasLog = $false
+    try { $hasLog = [bool](Get-WinEvent -ListLog 'Veeam Agent' -ErrorAction Stop) } catch { }
+    if (-not $hasLog -and -not $jobs.Count) { return $null }
+    if ($hasLog) {
+        $xp = if ($State.veeam_agent_cursor) { "*[System[(EventID=190 or EventID=191) and EventRecordID>$([int64]$State.veeam_agent_cursor)]]" }
+              else { "*[System[(EventID=190 or EventID=191) and TimeCreated[timediff(@SystemTime) <= $(30 * 86400000)]]]" }
+        $events = @()
+        try { $events = @(Get-WinEvent -LogName 'Veeam Agent' -FilterXPath $xp -MaxEvents 2000 -ErrorAction Stop | Sort-Object RecordId) }
+        catch { if (-not ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -like 'No events were found*')) { throw } }
+        foreach ($e in $events) {
+            if ($e.RecordId -gt [int64]$State.veeam_agent_cursor) { $State.veeam_agent_cursor = [int64]$e.RecordId }
+            $texts = @()
+            try { $texts = @(([xml]$e.ToXml()).Event.EventData.Data | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_) { [string]$_.'#text' } else { '' } }) } catch { }
+            try { $texts += [string]$e.Message } catch { }
+            $m = $null
+            foreach ($x in $texts) {
+                if ($x -match "Veeam Agent (?:'(?<name>[^']+)'|(?<bare>.+?)) finished with (?<res>\w+)") { $m = $Matches; break }
+            }
+            if (-not $m) { continue }
+            $jname = if ($m['name']) { $m['name'] } else { $m['bare'] }
+            $res = switch -regex ([string]$m['res']) { '^Succe' { 'Success' } '^Warn' { 'Warning' } '^(Fail|Err)' { 'Failed' } default { [string]$m['res'] } }
+            if ($e.Id -eq 191) { $res = 'Failed' }
+            elseif ($e.Level -eq 2) { $res = 'Failed' } elseif ($e.Level -eq 3 -and $res -eq 'Success') { $res = 'Warning' }
+            $detail = ''
+            foreach ($x in $texts) { if ($x -match 'Job details:\s*(?<d>.+)') { $detail = $Matches['d'].Trim(); break } }
+            $id = "agent:$jname"
+            $when = ConvertTo-UtcString $e.TimeCreated
+            $j = if ($jobs.ContainsKey($id)) { $jobs[$id] } else { @{ runs = @(); last_success = '' } }
+            $j.name = $jname; $j.result = $res; $j.finished = $when; $j.detail = Limit-Text $detail 200
+            $j.retry = ($e.Id -eq 191)
+            if ($res -ne 'Failed') { $j.last_success = $when }
+            if (@($j.runs) -notcontains $when) { $j.runs = @(@($j.runs) + $when | Select-Object -Last 12) }
+            $jobs[$id] = $j
+        }
+    }
+    $cutoff = (Get-Date).ToUniversalTime().AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
+    foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
+    $State.veeam_agent = ($jobs | ConvertTo-Json -Depth 4 -Compress)
+    return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
+        [ordered]@{ source = 'Veeam Agent'; id = $k; name = $j.name; type = 'Agent backup (this computer)'; result = $j.result; finished = $j.finished
+            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.finished; runs = @($j.runs) } })
 }
 
 function Get-VboJobs($State) {
@@ -2531,10 +2594,13 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $bjobs = @()
         $vbr = Measure-Step 'veeam b&r' { Get-VeeamJobs $State }
         if ($null -ne $vbr) { $bjobs += @($vbr) }
+        $vaw = $null
+        try { $vaw = Measure-Step 'veeam agent' { Get-VeeamAgentJobs $State } } catch { Add-CollectorError 'veeam agent' $_ }
+        if ($null -ne $vaw) { $bjobs += @($vaw) }
         $vbo = $null
         try { $vbo = Measure-Step 'veeam m365' { Get-VboJobs $State } } catch { Add-CollectorError 'veeam m365' $_ }
         if ($null -ne $vbo) { $bjobs += @($vbo) }
-        if ($null -ne $vbr -or $null -ne $vbo) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
+        if ($null -ne $vbr -or $null -ne $vbo -or $null -ne $vaw) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
     } catch { Add-CollectorError 'veeam' $_ }
     try {
         $laps = Measure-Step 'laps' { Get-LapsStatus $State ($discovery.roles -contains 'Domain controller') $(if ($sys) { [bool]$sys.part_of_domain } else { $false }) }
