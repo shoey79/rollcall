@@ -994,11 +994,14 @@ def domain_key(group: str, name: str) -> str:
     return f"{group.lower()}|{name.lower()}"
 
 
-def domain_state(dm: dict, changes: list, now: float, krbtgt_days: int = 180, ign: "Ignore | None" = None) -> tuple[str, str]:
-    """Domain-wide security, from the PDC emulator: recent additions to privileged groups (24 h),
-    an old KRBTGT password, and enabled accounts that don't need a password. Other lists are for review."""
+def domain_state(dm: dict, changes: list, now: float, krbtgt_days: int = 180, ign: "Ignore | None" = None,
+                 ack_at: float = 0) -> tuple[str, str]:
+    """Domain-wide security, from the PDC emulator: recent additions to privileged groups (24 h, unless
+    acknowledged since), an old KRBTGT password, and enabled accounts that don't need a password.
+    Other lists are for review."""
     bad = []
-    added = [c for c in changes or [] if c.get("change") == "added" and now - (c.get("time") or 0) < DAY]
+    added = [c for c in changes or [] if c.get("change") == "added" and now - (c.get("time") or 0) < DAY
+             and (c.get("time") or 0) > ack_at]
     for c in added[::-1]:
         bad.append(f"{c['account']} added to {c['group']}")
     k = _ts(dm.get("krbtgt_pwd_set")) if dm.get("krbtgt_pwd_set") else None
@@ -1508,7 +1511,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
 
     dm = rc.get("domain")
     if dm and not ign.has("domain", "domain"):
-        res = domain_state(dm, settings.get("domain_changes") or [], now, 180, ign)
+        res = domain_state(dm, settings.get("domain_changes") or [], now, 180, ign, settings.get("domain_ack") or 0)
         checks.append(_check("domain", "Domain security", res[0], res[1]))
 
     ex = rc.get("exchange")

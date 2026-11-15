@@ -240,3 +240,18 @@ def test_acknowledged_snmp_problem_stops_counting_until_it_gets_worse_or_clears(
     ev(h, dell("OK", "on"))                                          # cleared: forgotten, so it alerts if it comes back
     assert h.snmp_acks == {}
     assert ev(h, dell("OK", "off"))[0] == "warn"
+
+
+# --- acknowledging agent checks and Domain Admins additions -----------------------------------------
+
+def test_domain_admin_addition_acknowledged():
+    import agents
+    dm = {"groups": [{"name": "Domain Admins", "members": [{"name": "admin", "kind": "user"}]}]}
+    changes = [{"time": NOW_T - 600, "change": "added", "group": "Domain Admins", "account": "temp.contractor"}]
+    assert agents.domain_state(dm, changes, NOW_T)[0] == agents.WARN
+    assert agents.domain_state(dm, changes, NOW_T, ack_at=NOW_T - 60)[0] == agents.OK      # acknowledged after it
+    later = changes + [{"time": NOW_T - 30, "change": "added", "group": "Enterprise Admins", "account": "other"}]
+    assert agents.domain_state(dm, later, NOW_T, ack_at=NOW_T - 60)[1].startswith("other added")  # a new one shows
+
+
+NOW_T = 1_800_000_000.0

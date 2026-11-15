@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.79.0 - 2026-11-15
+
+### Added
+- **Acknowledge alerts from the Overview.** Most alerts now have an **Acknowledge** button there, so you don't have to open each device; the same button is on each amber or red check in a device's details.
+  - Things that happened (events, security alerts, passwords found, agent file changes) are acknowledged up to now; anything new turns amber again.
+  - Things that are still the case (a pending reboot, a stopped app pool, a backup that hasn't run, SNMP warnings) count as OK while they stay as they are or better, and alert again if they get worse, or clear and come back.
+  - **N acknowledged**, under the alerts, lists what's acknowledged, by whom and when, each with **Undo**.
+- **Acknowledge additions to Domain Admins** and the other privileged groups, instead of waiting 24 hours for the amber to clear. Anyone added after that turns it amber again.
+
 ## 1.78.0 - 2026-11-15
 
 ### Added

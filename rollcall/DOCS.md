@@ -647,6 +647,14 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 
 **Network adapters:** the **Network** tab in Details lists each adapter with its status, link speed, addresses, MAC address, traffic (the average since the previous report) and error counts. Like the ports on an SNMP switch, nothing alerts until you tick **Alert** for an adapter that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. The link speed when you tick it is remembered, so a cable or switch port that drops to a slower speed shows amber. Virtual adapters (Hyper-V vEthernet and the like) are labelled. This needs Windows agent 1.0.31 or Linux agent 1.0.12; the Linux agent leaves out loopback and Docker's own interfaces.
 
+**Acknowledging alerts.** Most alerts on the Overview have an **Acknowledge** button, so you don't need to open each device. The same button is on each amber or red check in a device's details. What it does depends on the alert:
+
+- **Something that happened** (alert-worthy events, security alerts, passwords found in files, changes to the agent's files, and additions to privileged groups such as Domain Admins): everything up to now is acknowledged, so it's green again straight away instead of after 24 hours. Anything new turns it amber again.
+- **Something that's still the case** (a pending reboot, a stopped app pool, a backup that hasn't run, a disk filling up, an SNMP warning): it counts as OK while it stays as it is or better. If it gets worse (amber to red) it alerts again, and if it clears and later comes back it alerts again too.
+- **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
+
+Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Only Home Assistant admins and Rollcall editors can acknowledge.
+
 **Graphs over time.** Rollcall keeps the disk space, network traffic, CPU and memory from each agent report, so you can see how they change, e.g. for capacity planning. **Graph** opens a graph under the item, with ranges of 24 hours, 7 days, 30 days, 90 days and a year. Hover for the figures at that time.
 
 - **Disks** (Storage tab): used space against the disk's size. Underneath, how fast it's growing and, if it is, roughly when it'll be full at that rate. The rate is worked out from the daily averages over the last 30 days, or the range shown if that's longer, once there are at least 3 days of history.

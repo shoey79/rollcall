@@ -352,6 +352,11 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 .alert .go{color:var(--accent);font-size:12px;white-space:nowrap}
 .alert.sev0,.alert.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
 .alertwrap{display:flex;align-items:center;border-bottom:1px solid var(--line)}
+.alertwrap.acking{opacity:.45}
+.ackd{border-top:1px solid var(--line)}.ackd summary{cursor:pointer;padding:10px 14px;font-size:13px;color:var(--muted);font-weight:600}
+.ackd summary small{font-weight:400;margin-left:6px}
+.ackrow{display:flex;align-items:center;gap:10px;padding:8px 14px 8px 22px;border-top:1px solid var(--line);font-size:13px;opacity:.85}
+.ackrow .what{flex:1;min-width:0}.ackrow small{display:block;color:var(--muted)}
 .alertwrap:last-child{border-bottom:none}
 .alertwrap .alert{border-bottom:none;flex:1;min-width:0}
 .alertwrap.sev0,.alertwrap.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
@@ -1222,6 +1227,37 @@ function alerts() {
   }
   return out.sort((a, b) => a.sev - b.sev || (b.since || 0) - (a.since || 0) || collator.compare(a.h.name, b.h.name));
 }
+// Everything acknowledged, under the alerts, folded away, each with Undo
+let ackedOpen = false;
+function ackedList() {
+  const rows = [];
+  for (const h of data.hosts) for (const k of h.acks || []) rows.push({h, ...k});
+  if (!rows.length) return "";
+  rows.sort((a, b) => (b.at || 0) - (a.at || 0) || collator.compare(a.h.name, b.h.name));
+  return `<details class="ackd"${ackedOpen ? " open" : ""}><summary>${rows.length} acknowledged <small>not counted while they stay as they are; they alert again if they get worse, or clear and come back</small></summary>` +
+    rows.map(r => `<div class="ackrow"><span class="dot unknown"></span><span class="what"><b>${esc(r.h.name)}</b> <span class="chk">· ${esc(r.label)}</span><small>${esc(r.detail || "")}${r.at ? ` · acknowledged ${esc(ago(r.at, data.now))}${r.by ? " by " + esc(r.by) : ""}` : ""}</small></span>
+      <button type="button" class="ackmini edit-only" data-unackalert="${esc(JSON.stringify([r.h.key, r.type, r.key]))}" title="Count it again">Undo</button></div>`).join("") + `</details>`;
+}
+document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("ackd")) ackedOpen = e.target.open; }, true);
+// What Acknowledge does for an alert on the Overview (null: nothing to acknowledge, e.g. not responding)
+const TIME_ACK = ["events", "security", "secrets", "integrity", "domain"];
+function ackFor(a) {
+  const c = a.check;
+  if (!c || a.h.off_schedule) return null;
+  if (c.kind === "syslog") return {sys: true, tip: "Acknowledge this device's syslog alerts"};
+  if (c.kind === "snmp" && !c.ackable) return null;  // not answering: nothing to acknowledge
+  if (c.kind === "snmp") return {url: "/snmp/ack", body: {all: true}, tip: "Acknowledge what SNMP shows now: it alerts again if anything gets worse, or clears and comes back"};
+  if (!c.agent) return null;
+  const k = checkKey(c);
+  if (k === "agent") return null;
+  if (TIME_ACK.includes(k)) return {url: "/agent/ack", body: {kind: k}, tip: "Back to green until something new happens"};
+  return {url: "/agent/ack", body: {kind: "check", check: k}, tip: "Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back"};
+}
+async function ackPost(hostKey, act) {
+  const r = await fetch("api/hosts/" + encodeURIComponent(hostKey) + act.url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(act.body)});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "That didn't work (" + r.status + ")"); return false; }
+  return true;
+}
 function renderHome() {
   const el = document.getElementById("home"), hosts = data.hosts, now = data.now, list = alerts();
   if (!hosts.length) {
@@ -1247,13 +1283,13 @@ function renderHome() {
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
       const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
-      const ack = a.check && a.check.kind === "syslog";
+      const ack = ackFor(a);
       return `${ack ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
         <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
         <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
-        <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" data-sysack="${esc(a.h.key)}" title="Acknowledge this device's syslog alerts">Acknowledge</button></div>` : ""}`;
-    }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + `</div>`;
+        <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" ${ack.sys ? `data-sysack="${esc(a.h.key)}"` : `data-ackalert="${i}"`} title="${esc(ack.tip)}">Acknowledge</button></div>` : ""}`;
+    }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + ackedList() + `</div>`;
   const gs = GLANCE_SORT[glanceSort] ? glanceSort : "status";
   const groupOpts = Object.fromEntries(Object.entries(GLANCE_GROUP).filter(([k]) => k !== "tab" || views.length));
   const gb = groupOpts[glanceGroup] ? glanceGroup : "group";
@@ -1392,6 +1428,22 @@ document.getElementById("home").addEventListener("click", async e => {
     const r = await fetch("api/hosts/" + encodeURIComponent(sk.dataset.sysack) + "/syslog/ack", {method: "POST"});
     if (!r.ok) { alert("That didn't work (" + r.status + ")"); sk.disabled = false; }
     setTimeout(load, 1500); return;
+  }
+  const aa = e.target.closest("[data-ackalert]");
+  if (aa) {
+    const x = homeAlerts[+aa.dataset.ackalert], act = x && ackFor(x); if (!act) return;
+    aa.disabled = true; aa.textContent = "…";
+    if (await ackPost(x.h.key, act)) { aa.closest(".alertwrap").classList.add("acking"); setTimeout(load, 1500); }
+    else { aa.disabled = false; aa.textContent = "Acknowledge"; }
+    return;
+  }
+  const ua = e.target.closest("[data-unackalert]");
+  if (ua) {
+    const [hk, type, key] = JSON.parse(ua.dataset.unackalert);
+    ua.disabled = true;
+    const act = type === "snmp" ? {url: "/snmp/ack", body: {what: key, undo: true}} : type === "kind" ? {url: "/agent/ack", body: {kind: key, undo: true}} : {url: "/agent/ack", body: {kind: "check", check: key, undo: true}};
+    if (await ackPost(hk, act)) setTimeout(load, 1500); else ua.disabled = false;
+    return;
   }
   const sf = e.target.closest("[data-sysforget]");
   if (sf) { await fetch("api/syslog/forget", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ip: sf.dataset.sysforget})}); return load(); }
@@ -2191,8 +2243,11 @@ function renderDetails(d) {
   const ackItems = kind => kind === "security" ? [...(hist.security || []), ...(hist.failed_logons || [])] : (hist[kind] || []);
   const newAlerts = kind => ackItems(kind).filter(x => x.alert && (x.received || 0) > ackAt(kind)).length;
   const alertCls = (x, kind) => x.alert ? ((x.received || 0) > ackAt(kind) ? "hl" : "acked") : "";
+  // Privileged group additions in the last 24 h not yet acknowledged
+  const domainNew = () => { const at = ((st.ack || {}).domain || {}).at || 0, now = Date.now() / 1000;
+    return (st.domain_changes || []).filter(x => x.change === "added" && now - x.time < 86400 && x.time > at).length; };
   const ackBar = (kind, noun) => {
-    const n = newAlerts(kind), a = (st.ack || {})[kind];
+    const n = kind === "domain" ? domainNew() : newAlerts(kind), a = (st.ack || {})[kind];
     if (n) return `<div class="ackbar"><span><b>${n}</b> ${noun} in the last 24 h ${n === 1 ? "hasn't" : "haven't"} been acknowledged.</span>
       <button type="button" class="mini primary edit-only" data-ack="${kind}">Acknowledge</button></div>`;
     if (a && a.at && Date.now() / 1000 - a.at < 86400) return `<div class="ackbar ok"><span>Acknowledged${a.by ? " by " + esc(a.by) : ""} at ${when(new Date(a.at * 1000).toISOString())}. Anything new turns it amber again.</span>
@@ -2207,7 +2262,10 @@ function renderDetails(d) {
   const flush = next => { if (html) T[curTab] = (T[curTab] || "") + html; html = ""; curTab = next; };
   html += sect("Checks", `<div class="checklist">${(d.checks || []).map(x =>
     `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${(x.status === "amber" || x.status === "red" && x.key === "security") && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>`
-      : x.key === "integrity" && x.status === "amber" ? `<button type="button" class="mini edit-only ackbtn" data-ack="integrity" title="Back to green until the agent finds another change">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
+      : x.key === "integrity" && x.status === "amber" ? `<button type="button" class="mini edit-only ackbtn" data-ack="integrity" title="Back to green until the agent finds another change">Acknowledge</button>`
+      : x.key === "domain" && x.status === "amber" && domainNew() ? `<button type="button" class="mini edit-only ackbtn" data-ack="domain" title="Back to green until someone else is added to a privileged group">Acknowledge</button>`
+      : x.acked ? `<small>acknowledged: counts as OK while it stays like this</small><button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" data-undo="1">Undo</button>`
+      : (x.status === "amber" || x.status === "red") && !TIME_ACK.includes(x.key) && x.key !== "agent" ? `<button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" title="Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
   const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
   html += sect("System", `<div class="kv">
     <div><span>Operating system</span>${esc(r.os || "—")}</div>
@@ -2501,6 +2559,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       <div><span>Checked</span>${esc(day(dm.checked))} <small class="muted">hourly, from this DC (the PDC emulator)</small></div></div>`;
     inner += tbl(["Privileged group", "Members", ""], (dm.groups || []).map(g => `<tr><td><b>${esc(g.name)}</b> <small class="muted">${g.members.length}</small></td><td>${g.members.length ? g.members.map(a =>
       `<span class="${recent(a._since) ? "old" : ""}" title="${esc((a.kind === "group" ? "Group" : a.kind === "computer" ? "Computer" : "User") + (a.enabled ? "" : ", disabled") + " · added " + sinceTxt(a._since) + (a.last_logon ? " · last logon " + day(a.last_logon) : ""))}">${esc(a.name)}${a.kind === "group" ? " <small class='muted'>(group)</small>" : ""}${a.enabled ? "" : " <small class='muted'>(disabled)</small>"}${recent(a._since) ? ` <small>added ${esc(sinceTxt(a._since))}</small>` : ""}</span>`).join(", ") : `<small class="muted">none</small>`}</td><td></td></tr>`));
+    inner += ackBar("domain", "addition(s) to a privileged group");
     const ch = (st.domain_changes || []).slice(-8).reverse();
     if (ch.length) inner += `<p class="empty-note" style="margin:8px 0 2px"><b>Recent changes</b></p>` + tbl(["When", "Change"], ch.map(x =>
       `<tr class="${x.change === "added" && recent(x.time) ? "hl" : ""}"><td>${esc(ago(x.time, Date.now() / 1000))}</td><td>${esc(x.account)} ${x.change === "added" ? "added to" : "removed from"} ${esc(x.group)}</td></tr>`));
@@ -3745,6 +3804,11 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (ack) {
     e.stopPropagation(); ack.disabled = true;
     return detPost("/agent/ack", ack.dataset.ack ? {kind: ack.dataset.ack} : {kind: ack.dataset.unack, undo: true});
+  }
+  const ac = e.target.closest("[data-ackcheck]");
+  if (ac) {
+    e.stopPropagation(); ac.disabled = true;
+    return detPost("/agent/ack", {kind: "check", check: ac.dataset.ackcheck, ...(ac.dataset.undo ? {undo: true} : {})});
   }
   const j = e.target.closest("[data-jump]");
   if (j) return showDetTab(...JUMP[j.dataset.jump]);

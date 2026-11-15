@@ -1420,6 +1420,12 @@ class HomeAssistant:
 # --------------------------------------------------------------------------
 # Monitor
 # --------------------------------------------------------------------------
+TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
+TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
+                 "secrets": "passwords found up to then", "integrity": "changes to the agent's files up to then",
+                 "domain": "privileged group changes up to then"}
+
+
 @dataclass
 class Service:
     key: str
@@ -1437,6 +1443,7 @@ class Service:
     resolved: str | None = None     # that address's IP at the last check
     status: str = UNKNOWN
     failures: int = 0
+    acked: bool = False                # acknowledged: counts as OK while it stays like this
     latency: float | None = None
     detail: str | None = None
     last_check: float | None = None
@@ -3394,6 +3401,42 @@ class Monitor:
                           f"https://github.com/immich-app/immich/releases/tag/v{im['latest']}",
                           f"ping_monitor_{h.key}__immich_update")
 
+    def acks_summary(self, h: Host) -> list:
+        """What's acknowledged on this device, for the Overview's Acknowledged list (with Undo)."""
+        hs = self.agent_settings["hosts"].get(h.key) or {}
+        out = []
+        for k, a in (hs.get("check_acks") or {}).items():
+            sv = next((s for s in h.agent_checks if s.key == f"agent_{k}"), None)
+            if sv and sv.acked:
+                out.append({"type": "check", "key": k, "label": sv.label, "detail": sv.detail, "at": a.get("at"), "by": a.get("by")})
+        now = time.time()
+        for k, a in (hs.get("ack") or {}).items():
+            if k in TIME_ACK_KINDS and a.get("at") and now - a["at"] < DAY:
+                sv = next((s for s in h.agent_checks if s.key == f"agent_{k}"), None)
+                out.append({"type": "kind", "key": k, "label": sv.label if sv else k.capitalize(),
+                            "detail": TIME_ACK_TEXT.get(k, "everything up to then"), "at": a["at"], "by": a.get("by")})
+        for i in h.snmp_items:
+            if i.get("acked"):
+                out.append({"type": "snmp", "key": i["what"], "label": i["what"], "detail": i["detail"]})
+        return out
+
+    async def acknowledge_check(self, h: Host, check: str, who: str | None, undo: bool = False) -> None:
+        """Acknowledge an agent check that's amber or red (e.g. a reboot that's waiting for a maintenance
+        window): it counts as OK while it stays as it is or better, and alerts again if it gets worse or
+        clears and comes back. Event-type checks use acknowledge() instead (everything up to now)."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        acks = hs.setdefault("check_acks", {})
+        if undo:
+            acks.pop(check, None)
+        else:
+            sv = next((s for s in h.agent_checks if s.key == f"agent_{check}"), None)
+            if check in TIME_ACK_KINDS or check == "agent" or not sv or sv.status not in (AMBER, RED):
+                raise ValueError("that check has nothing to acknowledge")
+            acks[check] = {"status": sv.status, "at": time.time(), "by": who or "", "detail": sv.detail[:300]}
+        self._save_agent_settings()
+        log.info("%s: %s %s%s", h.name, "un-acknowledged" if undo else "acknowledged", check, f" by {who}" if who else "")
+        await self.reevaluate(h)
+
     def _ack_time(self, h: Host, kind: str) -> float:
         return float(((self.agent_settings["hosts"].get(h.key) or {}).get("ack") or {}).get(kind, {}).get("at") or 0)
 
@@ -3430,6 +3473,7 @@ class Monitor:
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "secret_ack": self._ack_time(h, "secrets"),
                 "integrity_ack": self._ack_time(h, "integrity"),
+                "domain_ack": self._ack_time(h, "domain"),
                 "secret_scan_on": self.secret_scan_config({**(self.agents.agents.get(h.agent_id) or {}), "host_key": h.key})["on"],
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
@@ -3676,6 +3720,16 @@ class Monitor:
             else:
                 sv.failures = 0
                 status = self.LEVEL_STATUS[level]
+            # Acknowledged (Overview or details): OK while it stays as it is or better. Worse, or cleared,
+            # and the acknowledgement goes, so it alerts again (now, or when it comes back).
+            ack = (self.agent_settings["hosts"].get(h.key) or {}).get("check_acks", {}).get(c["key"])
+            sv.acked = False
+            if ack:
+                if status in (AMBER, RED) and (ack.get("status") == RED or status == AMBER):
+                    sv.acked, status = True, GREEN
+                elif not restoring:
+                    self.agent_settings["hosts"][h.key]["check_acks"].pop(c["key"], None)
+                    self._save_agent_settings()
             sv.label, sv.detail, sv.last_check = c["label"], detail, received
             if not restoring and not reeval:
                 self.store.add(svc_key(h, sv), received, MAINT_OK if status == MAINT else status != RED, None)
@@ -3710,6 +3764,9 @@ class Monitor:
                 await self.on_change(h, old, new, "agent")
 
     async def on_agent_check_change(self, h: Host, s: Service, old: str, new: str) -> None:
+        if s.acked:
+            await self.dismiss(f"ping_monitor_{svc_key(h, s)}")  # acknowledged: not an alert, and not a recovery either
+            return
         await self.ha.fire("ping_monitor_service_changed", {
             "name": h.name, "host": h.host, "ip": h.ip, "service": s.label, "target": s.desc,
             "old_status": old, "new_status": new, "detail": s.detail,
@@ -3946,7 +4003,8 @@ class Monitor:
                 "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first", "updates_from", "winget")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
                 "received": h.agent_seen, "security_visible": include_security, "secrets": secrets_out,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
-                            "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN}
+                            "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN,
+                            **({"acked": True} if s.acked else {})}
                            for s in h.agent_checks]}
 
     # -- reporting --------------------------------------------------------
@@ -4053,8 +4111,10 @@ class Monitor:
                     "latency_ms": s.latency, "detail": s.detail,
                     "uptime_24h": self.uptime_24h(svc_key(h, s)),
                     "last_check": s.last_check, "last_change": s.last_change,
-                    "agent": s.kind == "agent",
+                    "agent": s.kind == "agent", **({"acked": True} if s.acked else {}),
+                    **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") for i in h.snmp_items)} if s.kind == "snmp" else {}),
                 } for s in h.services + h.agent_checks],
+                "acks": self.acks_summary(h),
                 "agent": self._agent_summary(h),
             })
         self.syslog_sweep()
@@ -4430,9 +4490,15 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         except (json.JSONDecodeError, ValueError):
             body = {}
         kind = body.get("kind")
-        if kind not in ("events", "security", "secrets", "integrity"):
-            return web.json_response({"error": "kind must be events, security, secrets or integrity"}, status=400)
         user = await access.who(req)
+        if kind == "check":  # any other check, until it gets worse or clears
+            try:
+                await monitor.acknowledge_check(h, str(body.get("check") or ""), user.get("display"), bool(body.get("undo")))
+            except ValueError as e:
+                return web.json_response({"error": str(e)}, status=400)
+            return web.json_response({"ok": True})
+        if kind not in TIME_ACK_KINDS:
+            return web.json_response({"error": "kind must be check, " + ", ".join(TIME_ACK_KINDS)}, status=400)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
         return web.json_response({"ok": True})
 
@@ -4945,7 +5011,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
 
     async def host_snmp_ack_item(req):
         """Acknowledge an SNMP problem (e.g. a server that's meant to be off): it stops counting while it
-        is there and no worse. {what, undo}"""
+        is there and no worse. {what, undo}, or {all: true} for everything it shows now (the Overview)."""
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
             raise web.HTTPNotFound()
@@ -4954,7 +5020,14 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         item = next((i for i in h.snmp_items if i["what"] == what and i.get("ack") != "restart"), None)
         acks = dict(h.snmp_acks or {})
         user = await access.who(req)
-        if body.get("undo"):
+        if body.get("all"):
+            for i in h.snmp_items:
+                if i.get("ack") == "restart":
+                    h.snmp_restart_ack = snmplib.boot_time(h.snmp_data, h.snmp_polled) or h.snmp_restart_ack
+                elif i["what"] != "SNMP" and not i.get("acked"):
+                    acks[i["what"]] = i["level"]
+            log.info("%s: all SNMP problems acknowledged by %s", h.name, user["display"] or "someone")
+        elif body.get("undo"):
             acks.pop(what, None)
             log.info("%s: %s no longer acknowledged (%s)", h.name, what, user["display"] or "someone")
         else:
