@@ -6,8 +6,8 @@
 <link rel="icon" href="data:image/svg+xml,<svg viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'><rect width='64' height='64' rx='14' fill='%231b2230'/><circle cx='17' cy='19' r='6' fill='%232fb36d'/><circle cx='17' cy='33' r='6' fill='%23e0a21b'/><circle cx='17' cy='47' r='6' fill='%23e0524c'/><rect x='28' y='16.5' width='25' height='5' rx='2.5' fill='%23dfe4ec'/><rect x='28' y='30.5' width='18' height='5' rx='2.5' fill='%23dfe4ec'/><rect x='28' y='44.5' width='11' height='5' rx='2.5' fill='%23dfe4ec'/></svg>">
 <title>Rollcall</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--text:#1b2027;--muted:#5d6a79;--line:#e2e6eb;--green:#1f9d55;--amber:#d99a00;--red:#d64545;--grey:#9aa5b1;--accent:#2b6cb0;--blue:#3b6fd8;--orange:#e8590c}
-@media (prefers-color-scheme:dark){:root{--bg:#111418;--card:#1a1f25;--text:#e6e9ed;--muted:#97a3b0;--line:#2a313a;--green:#3ccf7a;--amber:#f2b632;--red:#f06565;--grey:#5f6b7a;--accent:#63a4ff;--blue:#6f9dff;--orange:#ff8a3d}}
+:root{--c1:#3b6fd8;--c2:#e8590c;--bg:#f5f6f8;--card:#fff;--text:#1b2027;--muted:#5d6a79;--line:#e2e6eb;--green:#1f9d55;--amber:#d99a00;--red:#d64545;--grey:#9aa5b1;--accent:#2b6cb0;--blue:#3b6fd8;--orange:#e8590c}
+@media (prefers-color-scheme:dark){:root{--c1:#5a8af0;--c2:#de6a22;--bg:#111418;--card:#1a1f25;--text:#e6e9ed;--muted:#97a3b0;--line:#2a313a;--green:#3ccf7a;--amber:#f2b632;--red:#f06565;--grey:#5f6b7a;--accent:#63a4ff;--blue:#6f9dff;--orange:#ff8a3d}}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -40,6 +40,25 @@ tr.maintenance td{background:color-mix(in srgb,var(--blue) 7%,transparent)}
 tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
 .svcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:250px}
 .svc{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:16px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-weight:500;cursor:default}
+.mbtn{margin-left:4px;vertical-align:1px}.mbtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.mpanel{margin:8px 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);min-width:0}
+.mrow td{padding-top:0!important;background:transparent!important}
+.mranges{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-bottom:6px}.mranges .mini.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.mmode{margin-left:auto;display:inline-flex;gap:4px}
+.mlegend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:2px 0 4px}
+.mlegend i,.mtip i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.mchart{position:relative;overflow:hidden}.mchart svg{display:block;max-width:100%}
+.mgrid{stroke:var(--line);stroke-width:1}.mgrid.base{stroke:var(--grey)}
+.mlab{fill:var(--muted);font-size:11px}.mend{fill:var(--muted);font-size:11px}
+.mline{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.marea{stroke:none;opacity:.14}
+.mref{fill:none;stroke:var(--grey);stroke-width:1.5;stroke-dasharray:5 4}
+.mline.c1,.mdot.c1{stroke:var(--c1);fill:none}.mdot.c1{fill:var(--c1)}.marea.c1{fill:var(--c1)}
+.mline.c2,.mdot.c2{stroke:var(--c2);fill:none}.mdot.c2{fill:var(--c2)}.marea.c2{fill:var(--c2)}
+.mlegend i.c1,.mtip i.c1{background:var(--c1)}.mlegend i.c2,.mtip i.c2{background:var(--c2)}
+.mlegend i.ref,.mtip i.ref{background:repeating-linear-gradient(90deg,var(--grey) 0 5px,transparent 5px 8px)}
+.mcross{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 3}.mhit{fill:transparent;cursor:crosshair}
+.mtip{position:absolute;top:6px;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.12);white-space:nowrap;z-index:2}
+.mtipwhen{color:var(--muted);font-size:11px}.mfoot{margin:6px 0 0}
 .viatag{display:inline-block;font-size:10px;line-height:14px;padding:0 5px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:3px}
 .viatag.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,var(--line));font-weight:600}
 .svc i{width:7px;height:7px;border-radius:50%;background:var(--grey);flex:none}
@@ -2199,7 +2218,7 @@ function renderDetails(d) {
         : `${names.length} ${names.length === 1 ? "person" : "people"}, ${r.sessions.length} sessions${act.length < r.sessions.length ? ` <small class="muted">(${r.sessions.length - act.length} disconnected)</small>` : ""}`;
     })()}</div>` : !d.security_visible && r.agent_version ? `<div><span>Signed in</span><span class="muted">Visible to Home Assistant admins</span></div>` : ""}
     <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
-    <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""}</div>
+    <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""} ${mBtn("sys", mSys())}</div>
     <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
     <div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>
     <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
@@ -2209,6 +2228,7 @@ function renderDetails(d) {
       ((r.reboot_packages || []).length ? (linux ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>`
         : `<br><small class="muted">Installed since the last restart:</small><ul class="rebootpk">${r.reboot_packages.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`)
         : (r.reboot_reasons && !linux ? `<br><small class="muted">Nothing installed since the last restart was found in Windows Update history or the Setup log.</small>` : ""))}</div></div>`);
+  if (mOpen[detKey + "|sys"]) html += sect("CPU and memory over time", mPanel("sys"));
   if ((r.sessions || []).length > 1 || (r.sessions || []).some(x => x.session !== "console")) {
     const idle = m => !m ? "—" : m < 60 ? m + " min" : m < 1440 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " d " + Math.floor(m % 1440 / 60) + " h";
     const kind = x => ({console: "Console", rdp: "Remote Desktop", ssh: "SSH"})[x.session] || x.session || "—";
@@ -2242,7 +2262,7 @@ function renderDetails(d) {
            <small class="muted">Blank uses the default (${def.warn}% / ${def.crit}%). 0 turns that level off.</small>`
         : `<small class="${custom ? "" : "muted"}">${ignored ? "Not monitored" : `Amber below ${warn}% · red below ${crit}%${custom ? " (custom)" : ""}`}</small>
            ${ignored ? "" : `<button type="button" class="mini edit-only" data-disk-edit="${esc(k)}">Change</button>`}
-           ${ignBtn("disk", v.name, "disk " + v.name)}`}</div>`;
+           ${ignBtn("disk", v.name, "disk " + v.name)} ${mBtn("disk:" + v.name, mDisk(v.name))}`}</div>${mPanel("disk:" + v.name)}`;
   }).join("");
   flush("storage");
   html += sect("Disks", disksHtml);
@@ -2283,11 +2303,12 @@ function renderDetails(d) {
       const stTxt = {up: "Connected", down: "Disconnected", disabled: "Disabled", notpresent: "Not present"}[a.status] || a.status;
       const dot = a.status === "up" ? (slow ? "degraded" : "green") : bad ? "red" : warn ? "degraded" : "unknown";
       const err = (a.rx_errors ?? null) === null ? "—" : `${a.rx_errors} / ${a.tx_errors}${rt.new_errors ? ` <b class="old">+${rt.new_errors}</b>` : ""}`;
-      return `<tr class="${bad ? "bad" : warn ? "warn" : ""}"><td><b>${esc(a.name)}</b>${a.virtual ? ` <small class="pill">virtual</small>` : ""}<br><small class="muted">${esc(a.desc || "")}${a.mac ? " · " + esc(a.mac) : ""}</small></td>
+      const gid = "nic:" + k, gp = mPanel(gid);
+      return `<tr class="${bad ? "bad" : warn ? "warn" : ""}"><td><b>${esc(a.name)}</b>${a.virtual ? ` <small class="pill">virtual</small>` : ""} ${mBtn(gid, mNic(k, a.name, a.speed_mbps))}<br><small class="muted">${esc(a.desc || "")}${a.mac ? " · " + esc(a.mac) : ""}</small></td>
         <td><span class="dot ${dot}"></span> ${stTxt}${a.status === "up" && a.speed_mbps ? ` · ${spd(a.speed_mbps)}` : ""}${slow ? `<br><small class="old">was ${spd(w.speed)} when ticked</small>` : ""}</td>
         <td>${(a.ips || []).map(esc).join("<br>") || `<span class="muted">—</span>`}</td>
         <td class="num">${a.status === "up" ? `↓ ${fmtBps(rt.rx_bps)}<br>↑ ${fmtBps(rt.tx_bps)}` : "—"}</td><td class="num">${err}</td>
-        <td><input type="checkbox" data-nicwatch="${esc(a.name)}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when ${esc(a.name)} disconnects"></td></tr>`;
+        <td><input type="checkbox" data-nicwatch="${esc(a.name)}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when ${esc(a.name)} disconnects"></td></tr>${gp ? `<tr class="mrow"><td colspan="6">${gp}</td></tr>` : ""}`;
     };
     const order = a => (nw[a.name.toLowerCase()] ? 0 : 2) + (a.virtual ? 1 : 0);
     html += sect(`Network adapters (${upN} of ${ads.length} connected)`,
@@ -2704,6 +2725,182 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   appendSourceTabs(detKey);
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
+  fillMetrics();
+}
+// Metrics graphs (disk space, network traffic, CPU and memory) in a computer's details.
+// mCfg: what each graph shows, filled while the details are built; mOpen: which are open, and their range.
+const mCfg = {}, mOpen = {}, mCache = {}, mDraw = {};
+const M_RANGES = [["24h", "24 h"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["1y", "1 year"]];
+function mBtn(id, cfg) {
+  mCfg[id] = cfg;
+  const on = !!mOpen[detKey + "|" + id];
+  return `<button type="button" class="mini mbtn${on ? " on" : ""}" data-mtoggle="${esc(id)}" aria-expanded="${on}" title="${esc(cfg.title)} over time">${on ? "Hide graph" : "Graph"}</button>`;
+}
+function mPanel(id) { return mOpen[detKey + "|" + id] ? `<div class="mpanel" data-mid="${esc(id)}"><p class="empty-note">Loading…</p></div>` : ""; }
+const mGB = v => !v ? "0 GB" : v >= 1024 ? (v / 1024).toFixed(v >= 10240 ? 1 : 2) + " TB" : v >= 100 ? Math.round(v) + " GB" : v.toFixed(1) + " GB";
+const mBps = b => b == null ? "—" : b >= 1e9 ? (b / 1e9).toFixed(2) + " Gb/s" : b >= 1e6 ? (b / 1e6).toFixed(1) + " Mb/s" : b >= 1e3 ? Math.round(b / 1e3) + " kb/s" : Math.round(b) + " b/s";
+function mNice(max) {  // a round gridline step giving 3 to 5 lines
+  if (!(max > 0)) return 1;
+  const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+// Axis labels: short, no needless decimals
+const mAxis = (kind, v) => kind === "nic" ? (!v ? "0" : v >= 1e9 ? +(v / 1e9).toFixed(2) + " Gb/s" : v >= 1e6 ? +(v / 1e6).toFixed(1) + " Mb/s" : +(v / 1e3).toFixed(0) + " kb/s")
+  : kind === "disk" ? (!v ? "0" : v >= 1024 ? +(v / 1024).toFixed(2) + " TB" : +v.toFixed(v < 10 ? 1 : 0) + " GB") : Math.round(v) + "%";
+function mWhen(ts, rng, full) {
+  const d = new Date(ts * 1000);
+  if (rng === "24h" && !full) return d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  return d.toLocaleDateString([], {day: "numeric", month: "short", ...(rng === "1y" || full ? {year: rng === "1y" ? "2-digit" : undefined} : {})})
+    + (full && rng !== "1y" && rng !== "90d" ? " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "");
+}
+async function fillMetrics() {
+  for (const el of document.querySelectorAll("#detBody .mpanel")) {
+    const id = el.dataset.mid, cfg = mCfg[id], st = mOpen[detKey + "|" + id];
+    if (!cfg || !st) continue;
+    const ck = `${detKey}|${id}|${st.range}`;
+    let resp = mCache[ck] && Date.now() - mCache[ck].at < 60000 ? mCache[ck].data : null;
+    if (resp) { mRender(el, id, cfg, st, resp); continue; }
+    try {
+      const r = await fetch(`api/hosts/${encodeURIComponent(detKey)}/metrics?range=${st.range}&series=${encodeURIComponent(cfg.series.map(s => s.key).join(","))}`);
+      if (!r.ok) throw new Error(r.status);
+      resp = await r.json();
+      mCache[ck] = {at: Date.now(), data: resp};
+    } catch (e) { el.innerHTML = `<p class="empty-note">Couldn't load the history (${esc(String(e.message || e))}).</p>`; continue; }
+    const now = document.querySelector(`#detBody .mpanel[data-mid="${CSS.escape(id)}"]`);
+    if (now) mRender(now, id, cfg, st, resp);
+  }
+}
+function mRender(el, id, cfg, st, resp) {
+  const ranges = `<div class="mranges" role="group" aria-label="Time range">${M_RANGES.map(([k, l]) =>
+    `<button type="button" class="mini${k === st.range ? " on" : ""}" data-mrange="${k}" data-mfor="${esc(id)}" aria-pressed="${k === st.range}">${l}</button>`).join("")}
+    ${cfg.kind === "nic" ? `<span class="mmode"><button type="button" class="mini${st.peak ? "" : " on"}" data-mpeak="0" data-mfor="${esc(id)}" aria-pressed="${!st.peak}">Average</button><button type="button" class="mini${st.peak ? " on" : ""}" data-mpeak="1" data-mfor="${esc(id)}" aria-pressed="${!!st.peak}">Peak</button></span>` : ""}</div>`;
+  const lines = cfg.series.filter(s => !s.ref), has = lines.some(s => (resp.series[s.key] || []).length);
+  if (!has) {
+    el.innerHTML = ranges + `<p class="empty-note">${resp.since ? `Nothing in this range yet. History started ${esc(mWhen(resp.since, "30d", true))}.` : "No history yet: it's recorded from each agent report from now on, so the graph fills in over the coming hours."}</p>`;
+    return;
+  }
+  const W = Math.max(280, (el.clientWidth || 600) - 26), H = 190, L = 62, R = 46, T = 12, B = 24, pw = W - L - R, ph = H - T - B;
+  const val = (s, p) => s.ref ? p[1] : st.peak ? p[3] : p[1];
+  let ymax = cfg.ymax || 0;
+  for (const s of cfg.series) for (const p of resp.series[s.key] || []) ymax = Math.max(ymax, val(s, p));
+  if (cfg.speed && !st.peak) ymax = Math.max(ymax, 0);  // the link speed is shown in the summary, not forced onto the scale
+  const ystep = cfg.fixedMax ? cfg.fixedMax / 4 : mNice(ymax * 1.05);
+  ymax = cfg.fixedMax || Math.max(ystep, Math.ceil(ymax * 1.05 / ystep) * ystep);
+  const x = ts => L + pw * (ts + resp.step / 2 - resp.start) / (resp.end - resp.start), y = v => T + ph * (1 - Math.min(v, ymax) / ymax);
+  const gap = Math.max(3 * resp.step, 1200);
+  const fmt = cfg.fmt;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.title)}, ${esc(M_RANGES.find(r => r[0] === st.range)[1])}">`;
+  for (let i = 0; i * ystep <= ymax + 1e-9; i++) {
+    const v = i * ystep, yy = y(v);
+    svg += `<line x1="${L}" x2="${L + pw}" y1="${yy}" y2="${yy}" class="mgrid${i ? "" : " base"}"/><text x="${L - 6}" y="${yy + 4}" class="mlab" text-anchor="end">${esc(mAxis(cfg.kind, v))}</text>`;
+  }
+  const ticks = pw < 420 ? 3 : 5;
+  for (let i = 0; i <= ticks; i++) {
+    const ts = resp.start + (resp.end - resp.start) * i / ticks;
+    svg += `<text x="${L + pw * i / ticks}" y="${H - 6}" class="mlab" text-anchor="${i === 0 ? "start" : i === ticks ? "end" : "middle"}">${esc(mWhen(ts, st.range))}</text>`;
+  }
+  const ends = [];
+  cfg.series.forEach((s, si) => {
+    const pts = resp.series[s.key] || [];
+    if (!pts.length) return;
+    const segs = [[]];
+    pts.forEach((p, i) => { if (i && p[0] - pts[i - 1][0] > gap) segs.push([]); segs[segs.length - 1].push(p); });
+    for (const seg of segs) {
+      const d = seg.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(val(s, p)).toFixed(1)}`).join("");
+      if (s.ref) { svg += `<path d="${d}" class="mref"/>`; continue; }
+      if (cfg.area && seg.length > 1) svg += `<path d="${d}L${x(seg[seg.length - 1][0]).toFixed(1)},${y(0)}L${x(seg[0][0]).toFixed(1)},${y(0)}Z" class="marea c${si + 1}"/>`;
+      svg += `<path d="${d}" class="mline c${si + 1}"/>`;
+      if (seg.length === 1) svg += `<circle cx="${x(seg[0][0])}" cy="${y(val(s, seg[0]))}" r="3" class="mdot c${si + 1}"/>`;
+    }
+    const last = pts[pts.length - 1];
+    ends.push({x: Math.min(x(last[0]) + 6, W - 40), y: y(val(s, last)) + 4, text: s.short || s.name});
+  });
+  // Name each line at its end, nudged apart when they'd overlap
+  ends.sort((a, b) => b.y - a.y);
+  if (ends.length) ends[0].y = Math.min(ends[0].y, T + ph);
+  for (let i = 1; i < ends.length; i++) if (ends[i - 1].y - ends[i].y < 13) ends[i].y = ends[i - 1].y - 13;
+  for (const e of ends) svg += `<text x="${e.x}" y="${e.y}" class="mend">${esc(e.text)}</text>`;
+  svg += `<line class="mcross" x1="0" x2="0" y1="${T}" y2="${T + ph}" hidden/><rect class="mhit" x="${L}" y="${T}" width="${pw}" height="${ph}"/></svg>`;
+  const legend = lines.length > 1 || cfg.series.some(s => s.ref) ? `<div class="mlegend">${cfg.series.map((s, i) => `<span><i class="${s.ref ? "ref" : "c" + (i + 1)}"></i>${esc(s.name)}</span>`).join("")}</div>` : "";
+  let foot = "";
+  if (cfg.summary) foot = cfg.summary(resp, st);
+  el.innerHTML = ranges + legend + `<div class="mchart">${svg}<div class="mtip" hidden></div></div>` + (foot ? `<p class="hint mfoot">${foot}</p>` : "");
+  mDraw[id] = {resp, cfg, st, x, L, pw, T, ph, val};
+}
+function mHover(e) {
+  const box = e.target.closest(".mchart"); if (!box) return;
+  const id = box.closest(".mpanel").dataset.mid, m = mDraw[id]; if (!m) return;
+  const svg = box.querySelector("svg"), rc = svg.getBoundingClientRect(), mx = e.clientX - rc.left;
+  const tip = box.querySelector(".mtip"), cross = svg.querySelector(".mcross");
+  if (e.type === "mouseleave" || mx < m.L || mx > m.L + m.pw) { tip.hidden = true; cross.setAttribute("hidden", ""); return; }
+  const {resp, cfg, st} = m;
+  const ts = resp.start + (mx - m.L) / m.pw * (resp.end - resp.start) - resp.step / 2;
+  let best = null;
+  for (const s of cfg.series) for (const p of resp.series[s.key] || []) if (!best || Math.abs(p[0] - ts) < Math.abs(best - ts)) best = p[0];
+  if (best == null || Math.abs(best - ts) > Math.max(3 * resp.step, 1200)) { tip.hidden = true; cross.setAttribute("hidden", ""); return; }
+  const cx = m.x(best);
+  cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.removeAttribute("hidden");
+  const rows = cfg.series.map((s, i) => { const p = (resp.series[s.key] || []).find(q => q[0] === best); if (!p) return "";
+    const v = s.ref ? cfg.fmt(p[1]) : cfg.kind === "nic" ? `${cfg.fmt(p[1])} <small>avg</small> · ${cfg.fmt(p[3])} <small>peak</small>` : cfg.fmt(p[1]) + (resp.step > 300 && Math.abs(p[3] - p[2]) > 0.05 ? ` <small>(${cfg.fmt(p[2])}–${cfg.fmt(p[3])})</small>` : "");
+    return `<div><i class="${s.ref ? "ref" : "c" + (i + 1)}"></i>${esc(s.name)}: <b>${v}</b></div>`; }).join("");
+  const span = resp.step > 300 ? `${mWhen(best, st.range, true)} – ${mWhen(best + resp.step, st.range, true)}` : mWhen(best, st.range, true);
+  tip.innerHTML = `<div class="mtipwhen">${esc(span)}</div>${rows}`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth, left = cx + 12 + tw > rc.width ? cx - 12 - tw : cx + 12;
+  tip.style.left = Math.max(0, left) + "px";
+}
+document.addEventListener("mousemove", e => { if (e.target.closest && e.target.closest(".mchart")) mHover(e); });
+document.addEventListener("mouseleave", e => { if (e.target.classList && e.target.classList.contains("mhit")) mHover(e); }, true);
+document.addEventListener("click", e => {
+  const t = e.target.closest && e.target.closest("[data-mtoggle],[data-mrange],[data-mpeak]");
+  if (!t || !document.getElementById("detBody").contains(t)) return;
+  if (t.dataset.mtoggle) {
+    const k = detKey + "|" + t.dataset.mtoggle;
+    if (mOpen[k]) delete mOpen[k]; else mOpen[k] = {range: mCfg[t.dataset.mtoggle].range || "7d", peak: false};
+    renderDetails(lastDetails);
+  } else {
+    const st = mOpen[detKey + "|" + t.dataset.mfor]; if (!st) return;
+    if (t.dataset.mrange) st.range = t.dataset.mrange; else st.peak = t.dataset.mpeak === "1";
+    fillMetrics();
+  }
+});
+// The three kinds of graph
+function mDisk(name) {
+  const used = `disk|${name}|used`;
+  return {kind: "disk", title: `Used space on ${name}`, area: true, range: "30d", fmt: mGB,
+    series: [{key: used, name: "Used", short: "Used"}, {key: `disk|${name}|size`, name: "Size", short: "Size", ref: true}],
+    summary: (resp, st) => {
+      const pts = resp.series[used] || [], f = (resp.forecast || {})[used];
+      const parts = [];
+      if (pts.length) parts.push(`Lowest ${mGB(Math.min(...pts.map(p => p[2])))}, highest ${mGB(Math.max(...pts.map(p => p[3])))} used in this range.`);
+      if (f) {
+        const rate = Math.abs(f.gb_per_day) < 0.05 ? "about the same" : `${f.gb_per_day > 0 ? "growing" : "shrinking"} about ${mGB(Math.abs(f.gb_per_day))} a day`;
+        const when = f.full_in_days === 0 ? " <b class='failtxt'>At this rate it's already full.</b>"
+          : f.full_in_days != null ? ` At this rate it's full in about <b${f.full_in_days < 60 ? " class='old'" : ""}>${f.full_in_days < 1 ? "a day" : Math.round(f.full_in_days) + " days"}</b> (around ${new Date((Date.now() / 1000 + f.full_in_days * 86400) * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})}).`
+          : f.gb_per_day > 0 ? " At this rate it won't be full for over 10 years." : "";
+        parts.push(`Over the last ${f.based_on_days} days it's been ${rate}.${when}`);
+      } else parts.push("A forecast of when it'll be full appears after a few days of history.");
+      return parts.join(" ");
+    }};
+}
+function mNic(key, name, speed) {
+  return {kind: "nic", title: `Traffic on ${name}`, range: "24h", fmt: mBps, speed,
+    series: [{key: `nic|${key}|rx`, name: "Received", short: "In"}, {key: `nic|${key}|tx`, name: "Sent", short: "Out"}],
+    summary: (resp, st) => {
+      const pk = s => Math.max(0, ...(resp.series[s] || []).map(p => p[3])), av = s => { const p = resp.series[s] || []; return p.length ? p.reduce((a, q) => a + q[1], 0) / p.length : null; };
+      const rx = `nic|${key}|rx`, tx = `nic|${key}|tx`, top = Math.max(pk(rx), pk(tx));
+      return `Average ${mBps(av(rx))} in, ${mBps(av(tx))} out; busiest ${mBps(pk(rx))} in, ${mBps(pk(tx))} out.` +
+        (speed ? ` That's up to ${Math.round(100 * top / (speed * 1e6))}% of its ${speed >= 1000 ? speed / 1000 + " Gb/s" : speed + " Mb/s"} link.` : "") +
+        ` Each figure is the average between two agent reports (every few minutes), so short bursts read lower than they were.`;
+    }};
+}
+function mSys() {
+  return {kind: "sys", title: "CPU and memory", range: "24h", fixedMax: 100, fmt: v => Math.round(v) + "%",
+    series: [{key: "cpu", name: "CPU", short: "CPU"}, {key: "mem", name: "Memory used", short: "Mem"}],
+    summary: (resp) => {
+      const s = k => { const p = resp.series[k] || []; return p.length ? `${Math.round(p.reduce((a, q) => a + q[1], 0) / p.length)}% on average, ${Math.round(Math.max(...p.map(q => q[3])))}% at most` : "—"; };
+      return `CPU ${s("cpu")}; memory ${s("mem")}. CPU is the reading at each agent report, so it shows how busy it usually is rather than every spike.`;
+    }};
 }
 // LAPS: which policy applies, and whether the managed password is rotating on schedule.
 function lapsSection(l, chk) {

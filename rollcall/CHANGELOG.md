@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.75.0 - 2026-11-15
+
+### Added
+- **Graphs over time for agent computers** ([#7](https://github.com/shoey79/rollcall/issues/7), thanks to [tomvining](https://github.com/tomvining) for the request). Rollcall now keeps the disk space, network traffic, CPU and memory from each agent report. **Graph** in a computer's details shows them over 24 hours, 7 days, 30 days, 90 days or a year, with the figures on hover.
+  - **Disks** (Storage tab): used space against the disk's size, how fast it's growing, and roughly when it'll be full at that rate.
+  - **Network adapters** (Network tab): received and sent traffic, as averages or peaks, with how much of the link it uses.
+  - **CPU and memory** (Overview tab, next to CPU).
+  - Kept for a year by default: every report for two days, then hourly, then daily figures, a few MB per computer. New option `metrics_days` (7–1825) in Settings.
+  - No agent update needed. History builds up from this update onwards.
+
 ## 1.74.1 - 2026-11-15
 
 ### Fixed

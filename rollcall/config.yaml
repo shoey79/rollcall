@@ -31,6 +31,7 @@ options:
   ping_timeout: 2
   service_timeout: 5
   history_days: 7
+  metrics_days: 365
   notify_services: []
   persistent_notification: true
   notify_recovery: true
@@ -84,6 +85,7 @@ schema:
   ping_timeout: int(1,10)
   service_timeout: int(1,30)
   history_days: int(1,90)
+  metrics_days: int(7,1825)?
   notify_services:
     - str
   persistent_notification: bool

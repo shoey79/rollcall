@@ -644,6 +644,14 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 
 **Network adapters:** the **Network** tab in Details lists each adapter with its status, link speed, addresses, MAC address, traffic (the average since the previous report) and error counts. Like the ports on an SNMP switch, nothing alerts until you tick **Alert** for an adapter that should always be connected, such as a second LAN, a team member, iSCSI or a backup network. The link speed when you tick it is remembered, so a cable or switch port that drops to a slower speed shows amber. Virtual adapters (Hyper-V vEthernet and the like) are labelled. This needs Windows agent 1.0.31 or Linux agent 1.0.12; the Linux agent leaves out loopback and Docker's own interfaces.
 
+**Graphs over time.** Rollcall keeps the disk space, network traffic, CPU and memory from each agent report, so you can see how they change, e.g. for capacity planning. **Graph** opens a graph under the item, with ranges of 24 hours, 7 days, 30 days, 90 days and a year. Hover for the figures at that time.
+
+- **Disks** (Storage tab): used space against the disk's size. Underneath, how fast it's growing and, if it is, roughly when it'll be full at that rate. The rate is worked out from the daily averages over the last 30 days, or the range shown if that's longer, once there are at least 3 days of history.
+- **Network adapters** (Network tab): received and sent traffic for each connected adapter that carries traffic. That's physical adapters, and virtual ones with an address, such as a Hyper-V host's vEthernet: up to 6 per computer. **Peak** shows the busiest figure in each period instead of the average. Each figure is the average between two agent reports (every few minutes), so a short burst reads lower than it was.
+- **CPU and memory** (**Graph** next to CPU on the Overview tab). CPU is the reading at each report, so it shows how busy the computer usually is rather than every spike.
+- **History builds up from the update onwards.** Nothing is filled in from before. The traffic graph starts at the second report after the add-on starts, because it's worked out from two reports.
+- **Storage:** every report is kept for two days, then as hourly figures for a month, then as daily figures (average, lowest and highest) for `metrics_days`, 365 by default. That's a few MB per computer for a year. Deleting a device removes its graphs; **Reset uptime** doesn't touch them.
+
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
 
 **Updates.** The last update date is the newest of Windows Update history (which includes MECM and WSUS installs), the Setup event log (every package Windows installs, even with the Windows Update service disabled), and the installed-updates list. Details shows which source it came from, and the OS build. It's re-checked every 6 hours or after a restart, because it can be slow to find. To leave patch compliance to MECM, set `agent_patch_days: 0`; a pending reboot is still flagged.
@@ -1133,6 +1141,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `ping_timeout` | 2 | Seconds to wait for each packet |
 | `service_timeout` | 5 | Seconds to wait for a port, web, SIP or certificate check |
 | `history_days` | 7 | How long results and syslog messages are kept (1–90) |
+| `metrics_days` | 365 | How long agents' disk, network, CPU and memory history is kept for graphs (7–1825) |
 | **Notifications** | | |
 | `notify_services` | `[]` | `notify.*` services to alert, without the `notify.` prefix |
 | `persistent_notification` | true | A bell notification in Home Assistant while something is down |

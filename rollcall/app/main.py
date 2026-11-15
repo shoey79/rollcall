@@ -45,6 +45,7 @@ import agents as agentlib
 import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
+import metrics as metricslib
 import certcheck
 import sipcheck
 import syslogreadings
@@ -140,6 +141,7 @@ DEFAULTS = {
     "ping_timeout": 2,
     "service_timeout": 5,
     "history_days": 7,
+    "metrics_days": 365,
     "notify_services": [],
     "persistent_notification": True,
     "notify_recovery": True,
@@ -1538,6 +1540,7 @@ class Monitor:
         self.opts = opts
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
+        self.metrics = metricslib.Metrics(store.db)
         self.syslog_unknown: dict[str, dict] = {}
         self.scan: discovery.Scan | None = None
         self.discovery = self._load_discovery()
@@ -1870,6 +1873,7 @@ class Monitor:
             self._save_maint()
         self.store.clear(h.key)
         self.logs.clear(h.key)
+        self.metrics.clear(h.key)
         await self.dismiss(f"ping_monitor_{h.key}")
         await self.ha.delete_state(h.entity_id)
         for s in h.services + h.agent_checks:
@@ -2067,6 +2071,10 @@ class Monitor:
                 last_prune = now
                 self.store.prune(now - int(self.opts["history_days"]) * DAY)
                 self.logs.prune(now - int(self.opts["history_days"]) * DAY)
+                try:
+                    self.metrics.rollup(now, int(self.opts.get("metrics_days") or 365))
+                except sqlite3.Error as e:
+                    log.warning("Couldn't tidy the metrics history: %s", e)
             if self.agents:
                 await self.check_stale_agents(now)
         return last_publish, last_prune
@@ -3551,6 +3559,11 @@ class Monitor:
             self._track_domain(h, report, received)
         if not reeval:
             self._nic_rates(h, report, received)
+        if not reeval and not restoring:
+            try:
+                self.metrics.record(h.key, received, metricslib.Metrics.from_report(report, h.nic_rates))
+            except sqlite3.Error as e:
+                log.warning("%s: couldn't record its metrics: %s", h.name, e)
         settings = self._host_settings(h)
         result = evaluate(report, self.opts, now=received, settings=settings)
         prev_up = (h.agent_report or {}).get("uptime_s")
@@ -4683,6 +4696,32 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         h.next_due = 0
         return web.json_response({"queued": h.key})
 
+    async def host_metrics(req):
+        """History for graphs: ?series=disk|C:|used,disk|C:|size&range=30d (24h, 7d, 30d, 90d, 1y).
+        A disk's used space comes with when it's likely to be full, going by the last 30 days or more."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        rng = req.query.get("range", "24h")
+        if rng not in metricslib.RANGES:
+            raise web.HTTPBadRequest(text="range must be one of " + ", ".join(metricslib.RANGES))
+        names = [s for s in req.query.get("series", "").split(",") if s][:8]
+        now = time.time()
+        out = await asyncio.to_thread(monitor.metrics.view, h.key, names, rng, now)
+        out["keep_days"] = int(monitor.opts.get("metrics_days") or 365)
+        fc = {}
+        for s in names:
+            if s.startswith("disk|") and s.endswith("|used"):
+                base = s[:-len("used")]
+                span = max(30 * 86400, metricslib.RANGES[rng])
+                pts = await asyncio.to_thread(monitor.metrics.query, h.key, s, now - span, now, 86400)
+                size = await asyncio.to_thread(monitor.metrics.query, h.key, base + "size", now - 3 * 86400, now, 3 * 86400)
+                f = metricslib.disk_forecast(pts, size[-1][1] if size else None, now)
+                if f:
+                    fc[s] = f
+        out["forecast"] = fc
+        return web.json_response(out)
+
     async def reset(req):
         key = req.match_info.get("key")
         if key is not None and key not in monitor.hosts:
@@ -5132,6 +5171,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/maintenance/{key}", editor_only(maintenance))
     app.router.add_post("/api/resume/{key}", editor_only(resume))
     app.router.add_get("/api/hosts/{key}/details", host_details)
+    app.router.add_get("/api/hosts/{key}/metrics", host_metrics)
     app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
