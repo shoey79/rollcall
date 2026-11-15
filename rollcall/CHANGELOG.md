@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.74.0 - 2026-11-15
+
+### Added
+- **Start-up time for computers that are only on now and then.** A computer set to **Whenever it's switched on** now gets a start-up allowance each time it comes on, as timed schedules do (**Allow … minutes**, 15 by default). Until it ends, failed services and agent checks show as *starting up* instead of red, and nothing alerts. Anything still failing after that alerts straight away.
+  - Timed schedules now hold back service and agent alerts during their allowance too. Before, the allowance only covered the computer replying to ping.
+  - Restarting the add-on while such a computer is on doesn't start a new allowance or repeat its alerts.
+- **VPN status for Sophos firewalls** (SFOS: XG and XGS). With SNMP ticked, the SNMP details list each IPsec connection with its type and status.
+  - A connection switched on in the firewall goes red if it's down, and amber if it's only partly up. Connections switched off in the firewall are just shown.
+  - Untick **Alert** for one that's only up when needed.
+  - A second connection dropping while the firewall is already red gets its own alert, and you hear when each comes back.
+  - Sophos UTM isn't covered: it's end of life.
+- **Agents choose the inside or outside address by network.** Agents tried the address that worked last first, so one failed attempt at the inside address could leave them on the outside one for good.
+  - New under Agents: **Internal networks** (e.g. `10.0.1.0/24`). Home Assistant's own networks are offered as a start.
+  - With these set, each agent chooses afresh at every report, going by its own IPv4 addresses. On an internal network it tries the inside address first; anywhere else, the outside one. The other is the fallback, and it goes back to its usual address at the next report.
+  - Needs Windows agent 1.0.42 or Linux agent 1.0.19. Agents that update automatically get it at their next report.
+  - The **Approved** list now shows whether each agent last reported through the **internal** or **external** address. A ⚠ marks one that doesn't match its own network.
+- **Ombi** service preset (Media): checks its web page on port 5000.
+
+### Changed
+- **Manage > Add computer** is now **Add device**, since it's used for switches, printers, cameras and the like too.
+
 ## 1.73.0 - 2026-11-14
 
 ### Added

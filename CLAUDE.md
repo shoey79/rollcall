@@ -23,37 +23,10 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Rename the menu item **Manage > Add computer** to **Add device** (and its dialog title, docs and any other
-  wording that says "Add computer" for the same thing).
-- Add an **Ombi** service tickbox (Home & automation, with Plex/Jellyfin): web check on its default port,
-  `http:5000/`; alias `ombi`; note "Ombi media request site".
+(none)
 
 ## Requested features (not started)
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- **Start-up allowance for "whenever it's on" computers** (`expect_off`): a server that is only on overnight
-  alerts on its services and agent checks as it boots. When one of these computers starts answering again,
-  hold back service and agent alerts for a few minutes, as timed schedules already do.
-  - Timed schedules have `schedule.grace` (minutes, default 15, 0–240), `Host.sched_started` and `in_grace` in the
-    check loop (main.py, around `if h.expect_off:`). For `expect_off`, `on` is simply "answers ping", so the host's
-    own ping never alerts, but `check_services` / `on_service_change` and the agent checks alert straight away.
-  - Set the start time when it goes from off to answering; while within the allowance, keep failed services at
-    "starting up" rather than red and don't notify. Then alert straight away for anything still down.
-  - Let the allowance be set for these computers too (same minutes box as timed schedules), default 15.
-  - Show "starting up" on the card while in the allowance, as for timed schedules.
-- **VPN status for Sophos XG/XGS firewalls** (not UTM: it's end of life): a down IPsec tunnel went unnoticed,
-  though SNMP and syslog were on. Poll `sfosIPSecVpnTunnelTable` (SFOS-FIREWALL-MIB,
-  `.1.3.6.1.4.1.2604.5.1.6.1.1.1`): connection name (`.1.2`), status (`.1.9`: 0 inactive, 1 active,
-  2 partially active), activated (`.1.10`). Show each tunnel in the device's details; alert only for tunnels
-  that are meant to be up (activated, not on-demand), with per-tunnel Ignore.
-- **Agents choose the internal or external address by subnet**: many agents now report through the external
-  address. Cause: both agents try the address that worked last first (`last_server` / `PreferredServer`), so one
-  failed internal attempt switches them to external for good.
-  - New setting under Agents: **internal networks** (a list of subnets, e.g. `10.0.1.0/24`; Home Assistant's
-    own networks could be suggested). Sent to agents with the addresses, as `servers` is now.
-  - Each run, the agent checks its own IPv4 addresses: on an internal network, try the internal address first,
-    then the external one if that fails; otherwise, external first. Don't stick to whichever worked last, so it
-    returns to the internal address on the next run.
-  - Show which address each agent reported through (internal / external) on the Agents page, so drift is visible.
-  - Both agents (Windows and Linux); keep the addresses the agent was installed with as the last fallback.
+(none)

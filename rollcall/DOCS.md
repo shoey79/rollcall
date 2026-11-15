@@ -468,6 +468,10 @@ Rollcall reads the device at every check while it answers ping. The **SNMP** tab
 
   ![A colour laser printer read over SNMP: toner levels, drum, waste box, trays and its display](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/printer.png)
   - A power cut goes red at the check after it's seen. If you need to know about power cuts quickly, shorten `interval`.
+- **Sophos Firewall VPNs** (SFOS: XG and XGS; detected automatically): each IPsec connection with its type and status. A connection switched on in the firewall goes red if it's down, and amber if it's only partly up (some of its networks are down). Connections switched off in the firewall are just shown. Untick **Alert** for one that's only up when it's needed (e.g. a supplier's on-demand tunnel), so it never alerts.
+  - On the firewall, turn on SNMP under **Administration → SNMP** (an agent with v3, or a v2c community), and allow SNMP from Home Assistant's address on the zone it uses (**Administration → Device access**).
+  - If a second connection drops while the firewall is already red, it gets its own alert, and with `notify_recovery` on you hear when each comes back.
+  - Sophos UTM isn't supported: it's end of life and doesn't have this table.
 - **Restarts**: amber for an hour after the device restarts. If it was planned or expected, choose **Acknowledge** next to it (SNMP tab or Overview, admins and editors). That clears the warning for that restart only; a later restart still shows. Devices that don't report their own uptime (many switches, APC cards) count a restart of their SNMP service or management card too.
 
 Problems go red, and notify, only if they're still there at the next check, so a port bouncing once doesn't alert. Warnings stay amber and don't notify. If the device stops answering SNMP (wrong community, SNMP turned off), the SNMP check goes red but the device stays up while it answers ping.
@@ -969,7 +973,9 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 
 Under **Agents → Where the agents report to** there are two addresses: **Inside your network** (e.g. `http://192.168.1.5:8100`) and, optionally, **From outside** (e.g. `https://rollcall.example.com:8100`).
 
-- Downloads have both built in. Agents try them in order and remember which one worked, so a laptop away from the office goes straight to the outside address next time, and back to the inside one when it returns. An address that can't be reached is skipped after 3 seconds.
+- Downloads have both built in. Agents try them in order and remember which one worked, so a laptop away from the office goes straight to the outside address next time. An address that can't be reached is skipped after 3 seconds.
+- **Internal networks** (recommended when you use both addresses): list your internal subnets, e.g. `10.0.1.0/24, 192.168.1.0/24`. If none are set yet, Rollcall offers Home Assistant's own networks. Each agent then chooses at every report, going by its own IPv4 addresses: on one of those networks, the inside address first; anywhere else, the outside one first. If that doesn't answer, it uses the other, and goes back to its usual one at the next report. Without them, one failed attempt at the inside address (e.g. during a restart) can leave an agent on the outside address until that stops working. Needs Windows agent 1.0.42 or Linux agent 1.0.19.
+- The **Approved** list shows which address each agent last reported through, **internal** or **external**. With internal networks set, it's marked ⚠ when that doesn't match the agent's own address (an older agent, or one that had to fall back).
 - Changes are saved straight away and sent to every agent with its next report (Windows agent 1.0.15 and Linux agent 1.0.9 or later), so installed agents follow them without a new download. Each agent also keeps the address it was installed with as a last resort, so a mistake here can't cut it off.
 - Each report records which address it was sent to and where it came from, shown in the agent's Details.
 
@@ -1043,7 +1049,7 @@ Paused time doesn't count towards uptime, and pauses survive an add-on restart. 
 By default every computer is monitored all the time. For one that's only meant to be on at certain times, open **Edit → Monitoring schedule**, choose **Only at set times** and add one or more windows, each with its days and times, e.g. Mon–Fri 07:00–19:00, or Sat 22:00–06:00 for an overnight job. A window can run past midnight; it belongs to the day it starts.
 
 - **Outside its windows** the computer shows as **Off schedule** (grey), with when monitoring resumes. It's still pinged: if it's on anyway, the dot turns half green, half grey and it shows **On · off schedule**. Nothing alerts either way, and off-schedule time doesn't count against uptime.
-- **When a window opens** it shows **Starting up** until it replies, for up to the allowance you set (15 minutes by default, 0–240). If it hasn't replied by then, you get the usual down alert.
+- **When a window opens** it shows **Starting up** until it replies, for up to the allowance you set (15 minutes by default, 0–240). If it hasn't replied by then, you get the usual down alert. Its services and agent checks get the same allowance: one that fails while it's starting shows as *starting up* (blue) and doesn't alert. Anything still failing when the allowance ends alerts straight away.
 - **When a window closes**, it goes back to Off schedule without an alert.
 - **Problems its agent reported stay on the Overview.** A failed backup, a full disk or a stopped service from the last report is still listed outside the window, marked *off schedule; from the report …*, and the tile says how many checks need attention. They clear when a later report says they're fixed.
 - **Backup results still notify.** A failed or overdue Veeam job is sent even if the report arrives outside the window (e.g. a backup server that's only on overnight). Only a manual **Pause** holds them back.
@@ -1051,6 +1057,7 @@ By default every computer is monitored all the time. For one that's only meant t
 Times are in Home Assistant's time zone (Settings → System → General) and follow daylight saving. The schedule shows under the computer's name, and its sensor has `off_schedule` and `schedule` attributes. A manual **Pause** still works on a scheduled computer and takes priority while it lasts.
 
 **Computers that are usually off.** For something that's only switched on now and then (cold storage, a monthly backup target), choose **Whenever it's switched on**. Being off is then normal: it shows as **Off** (grey), never alerts for it, and off time doesn't count against uptime. While it's on, it's monitored like any other computer, so a failed disk or stopped service still alerts during that monthly run.
+- **Start-up allowance:** each time it's switched on, its services and agent checks get time to start before anything alerts (**Allow … minutes**, 15 by default, 0–240). Until then a failed check shows as *starting up* and the computer as **Starting up**, with the time the allowance ends. Anything still failing after that alerts straight away. Restarting the add-on while it's on doesn't start a new allowance.
 
 **Never alert.** **Never alert for this computer** (Edit → Monitoring schedule) turns off every notification for it: down, checks, agent, events and updates. The dashboard still shows its real status, it still counts in tabs such as Needs attention, and its entities and events still update, so your own automations keep working. A 🔕 next to its name shows it's set. It can be combined with any schedule.
 
