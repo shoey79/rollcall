@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.78.0 - 2026-11-15
+
+### Added
+- **Acknowledge SNMP problems.** Any problem in a device's SNMP **Checks** can now be acknowledged, not just a restart: e.g. a server that's meant to be powered off, or a known non-critical fault. It's greyed out and stops counting, so the device can go green. It shows and alerts again if it gets worse (amber to red), or clears and later comes back. **Undo** takes it back.
+
 ## 1.77.0 - 2026-11-15
 
 ### Fixed

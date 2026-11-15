@@ -210,6 +210,7 @@ ul.tight{margin:4px 0 8px;padding-left:20px}
 .kv div span{display:block;color:var(--muted);font-size:11px}
 .pills{display:flex;flex-wrap:wrap;gap:5px}
 .pill{font-size:12px;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 10%,var(--card));border:1px solid var(--line)}
+.checklist .acked{opacity:.7}
 .checklist{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px}
 .checklist div{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
 .checklist b{display:block}
@@ -2733,7 +2734,7 @@ const mCfg = {}, mOpen = {}, mCache = {}, mDraw = {};
 const M_RANGES = [["24h", "24 h"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["1y", "1 year"]];
 function dellSt(s) {
   const cls = s === "OK" ? "green" : s === "non-critical" ? "amber" : s === "critical" || s === "non-recoverable" ? "red" : "unknown";
-  return `<span style="white-space:nowrap"><span class="dot ${cls}"></span> ${esc(s || "—")}</span>`;
+  return `<em style="font-style:normal;white-space:nowrap"><i class="dot ${cls}"></i> ${esc(s || "—")}</em>`;  // not spans: .kv styles those as labels
 }
 function mBtn(id, cfg) {
   mCfg[id] = cfg;
@@ -3161,6 +3162,17 @@ document.getElementById("detBody").addEventListener("click", async e => {
   setTimeout(load, 2500);
   setTimeout(() => detMode === "snmp" ? openSnmp(detKey) : detMode === "overview" ? openOverview(detKey) : null, 2500);
 }, true);
+// Acknowledge any other SNMP problem (e.g. a server that's meant to be off), or undo that
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-snmpackitem]");
+  if (!b || !detKey) return;
+  e.stopPropagation(); b.disabled = true; const was = b.textContent; b.textContent = "…";
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/ack", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({what: b.dataset.snmpackitem, undo: !!b.dataset.undo})});
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || `That didn't work (${r.status})`); b.disabled = false; b.textContent = was; return; }
+  setTimeout(load, 2500);
+  setTimeout(() => detMode === "snmp" ? openSnmp(detKey) : detMode === "overview" ? openOverview(detKey) : null, 2500);
+}, true);
 // The Home Assistant tab: for every device with a linked HA device, including those with an agent.
 async function openHa(key) {
   const h = data && data.hosts.find(x => x.key === key);
@@ -3242,7 +3254,7 @@ function renderOverview(h, sn, lg, ha) {
     if (s.status === "green" || s.status === "unknown" || s.kind === "snmp" || s.kind === "syslog") continue;
     att.push({lvl: s.status === "red" ? "red" : "amber", what: s.label, detail: s.detail || "", jump: ""});
   }
-  for (const i of (sn && sn.items) || []) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp", ack: i.ack});
+  for (const i of ((sn && sn.items) || []).filter(i => !i.acked)) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp", ack: i.ack});
   const snmpSvc = h.services.find(s => s.kind === "snmp");
   if (snmpSvc && !d && snmpSvc.status !== "green" && snmpSvc.status !== "unknown") att.push({lvl: "red", what: "SNMP", detail: snmpSvc.detail || "no reply", jump: "snmp"});
   for (const i of ((hd && hd.items) || []).filter(i => i.level !== "info")) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "ha"});
@@ -3355,7 +3367,9 @@ function renderSnmp(x) {
   const items = x.items || [];
   if (d && (d.missing || []).length) html += `<p class="hint" style="margin:0 0 10px">⚠ The device didn't send its ${esc(d.missing.join(", "))} in time on the last poll. Rollcall tries again at each check.</p>`;
   html += sect("Checks", items.length
-    ? `<div class="checklist">${items.map(i => `<div><span class="dot ${i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}</small>${i.ack === "restart" && canEdit ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
+    ? `<div class="checklist">${items.map(i => `<div${i.acked ? ` class="acked"` : ""}><span class="dot ${i.acked ? "unknown" : i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}${i.acked ? " · acknowledged: not counted while it stays like this; alerts again if it gets worse, or clears and comes back" : ""}</small>${!canEdit || i.what === "SNMP" ? "" : i.ack === "restart" ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>`
+      : i.acked ? `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" data-undo="1" style="margin-top:4px">Undo</button>`
+      : `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" style="margin-top:4px" title="Expected (e.g. a server that's meant to be off): stop counting it while it stays like this">Acknowledge</button>`}</span></div>`).join("")}</div>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
   if (!d) { body.innerHTML = html; return; }
   const pr = d.printer;
@@ -3467,7 +3481,7 @@ function renderSnmp(x) {
   html += sect("System", `<div class="kv">
     <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
     ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}
-    ${d.dell ? `<div><span>Server health</span>${dellSt(d.dell.system)}${d.dell.storage ? ` · storage ${dellSt(d.dell.storage)}` : ""}${d.dell.power ? ` · powered ${esc(d.dell.power)}` : ""}${d.dell.mib === "drac6" ? ` <small class="muted">(iDRAC6 reports overall health only)</small>` : ""}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
+    ${d.dell ? `<div><span>Server health</span>${dellSt(d.dell.system)}${d.dell.storage ? ` · storage ${dellSt(d.dell.storage)}` : ""}${d.dell.power ? ` · powered ${esc(d.dell.power)}` : ""}${d.dell.mib === "drac6" ? ` <small class="muted">(iDRAC6 reports overall health only)</small>` : ""}${(x.items || []).some(i => i.acked && /^(Server|Storage)/.test(i.what)) ? ` <small class="muted">(acknowledged)</small>` : ""}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
     <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests${d.per && d.per < 25 ? `, ${d.per} rows at a time` : ""}</div></div>` +
     (d.timing ? `<p class="hint" style="margin-top:8px">Time per part: ${Object.entries(d.timing).map(([k, v]) => `${esc(k)} ${v} ms`).join(", ")}</p>` : ""));
   body.innerHTML = html;

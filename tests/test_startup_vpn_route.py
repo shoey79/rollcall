@@ -219,3 +219,24 @@ def test_idrac6_over_snmp_v1():
     assert d["system"] == "critical" and d["mib"] == "drac6"
     assert snmp.evaluate({"uptime_s": 99999, "ports": [], "dell": d}, set(), None)[0] == "crit"
     assert asyncio.run(snmp.read_dell(_FakeSnmp({}, v1=True))) is None
+
+
+# --- acknowledging SNMP problems --------------------------------------------------------------------
+
+def test_acknowledged_snmp_problem_stops_counting_until_it_gets_worse_or_clears():
+    m = types.SimpleNamespace(ups_limits=lambda h: {}, _save_hosts=lambda: None)
+    ev = lambda h, d, prune=True: main.Monitor.snmp_eval(m, h, d, None, prune=prune)  # noqa: E731
+    h = _host()
+    dell = lambda st, power="on": {"uptime_s": 99999, "uptime_source": "system", "ports": [],  # noqa: E731
+                                   "dell": {"system": st, "storage": None, "power": power, "mib": "idrac"}}
+    assert ev(h, dell("non-critical", "off"))[0] == "warn"
+    h.snmp_acks = {"Server": "warn"}                                 # "powered off" acknowledged
+    worst, items = ev(h, dell("non-critical", "off"))
+    assert worst == "warn" and [i["what"] for i in items if i.get("acked")] == ["Server"]
+    h.snmp_acks["Server health"] = "warn"
+    assert ev(h, dell("non-critical", "off"))[0] == "ok"
+    assert ev(h, dell("critical", "off"))[0] == "crit"               # worse: counts again, and the acknowledgement goes
+    assert "Server health" not in h.snmp_acks and "Server" in h.snmp_acks
+    ev(h, dell("OK", "on"))                                          # cleared: forgotten, so it alerts if it comes back
+    assert h.snmp_acks == {}
+    assert ev(h, dell("OK", "off"))[0] == "warn"
