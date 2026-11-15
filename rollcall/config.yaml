@@ -1,5 +1,5 @@
 name: Rollcall
-version: "1.79.0"
+version: "1.80.0"
 slug: ping_monitor
 description: "Who's up, and how are they doing? Server monitoring by ping, service checks, Home Assistant sensors and optional Windows and Linux agents (disk, services, containers, logs, security, updates), with a dashboard and alerts."
 url: https://github.com/shoey79/rollcall
@@ -38,6 +38,20 @@ options:
   log_level: info
   maintenance_minutes: 30
   notification_url: ""
+  email_send: "off"
+  email_to: []
+  email_from: ""
+  email_recovery: true
+  email_digest_time: "08:00"
+  smtp_host: ""
+  smtp_port: 25
+  smtp_security: starttls
+  smtp_check_certificate: true
+  smtp_username: ""
+  smtp_password: ""
+  m365_tenant_id: ""
+  m365_client_id: ""
+  m365_client_secret: ""
   admin_only_changes: true
   editors: []
   cert_warn_days: 30
@@ -93,6 +107,21 @@ schema:
   log_level: list(debug|info|warning|error)
   maintenance_minutes: int(1,1440)
   notification_url: str?
+  email_send: list(off|smtp|microsoft365)?
+  email_to:
+    - str?
+  email_from: str?
+  email_recovery: bool?
+  email_digest_time: str?
+  smtp_host: str?
+  smtp_port: int(1,65535)?
+  smtp_security: list(starttls|ssl|none)?
+  smtp_check_certificate: bool?
+  smtp_username: str?
+  smtp_password: password?
+  m365_tenant_id: str?
+  m365_client_id: str?
+  m365_client_secret: password?
   admin_only_changes: bool
   editors:
     - str

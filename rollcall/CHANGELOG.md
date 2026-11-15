@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.80.0 - 2026-11-15
+
+### Added
+- **Email alerts.** Red alerts are emailed as they happen (several within a minute come as one email), with an optional email when things come back, and a daily summary of everything that's amber or red. One list of addresses gets them all. Set up under **Manage → Settings → Email alerts**, with a **Send a test email** button.
+  - Sends through an internal relay (e.g. an Exchange receive connector), any SMTP server that needs signing in (STARTTLS or SSL), or Microsoft 365 through Microsoft Graph with an app registration. The docs walk through each.
+  - Passwords and the client secret are never shown again once saved, and are left out of exports.
+
 ## 1.79.0 - 2026-11-15
 
 ### Added
