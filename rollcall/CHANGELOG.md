@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.81.0 - 2026-11-15
+
+### Added
+- **Choose what's emailed.** The Email alerts settings now have tick boxes:
+  - **What to email:** red alerts, when things come back, amber warnings and events as they happen (instead of in the daily summary), and the daily summary.
+  - **Email about:** devices not responding, service checks, SNMP and syslog, agent checks and log events, backups, security and updates. Unticked ones aren't emailed or put in the daily summary; phone notifications are unchanged.
+  - The test email says what you'll get with the ticks as they are.
+
+### Fixed
+- A computer coming back online after a pause was emailed as a red alert instead of as back up.
+
 ## 1.80.0 - 2026-11-15
 
 ### Added
