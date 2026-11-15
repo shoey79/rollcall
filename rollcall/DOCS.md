@@ -42,7 +42,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 
 1. In Home Assistant, go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add `https://github.com/shoey79/rollcall` and close.
 2. Find **Rollcall** in the store, choose **Install** then **Start**, and turn on **Show in sidebar**.
-3. Open **Rollcall** from the sidebar and choose **Manage → Add computer**. Give it a name and an IP address or hostname, tick any services to check, and save.
+3. Open **Rollcall** from the sidebar and choose **Manage → Add device**. Give it a name and an IP address or hostname, tick any services to check, and save.
 4. In the add-on's **Configuration** tab, add your phone under `notify_services` (e.g. `mobile_app_your_phone`) to get alerts.
 
 **Updates** appear on the add-on's page in Home Assistant, or use **⋮ → Check for updates** in the store. Turn on **Auto update** to install them automatically.
@@ -116,7 +116,7 @@ Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit op
 
 ![Adding a computer: name, address and the services to check](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/add.png)
 
-- **Manage → Add computer** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
+- **Manage → Add device** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
 - **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
 - Changes apply straight away, with no add-on restart.
 - The list is saved in the add-on's data folder (`hosts.json`), which is included in Home Assistant backups.
@@ -337,6 +337,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `navidrome` | Navidrome | http:4533/ |
 | `tautulli` | Tautulli | http:8181/ |
 | `overseerr` (or `jellyseerr`) | Overseerr / Jellyseerr | http:5055/api/v1/status |
+| `ombi` | Ombi | http:5000/ |
 | **Downloads** | | |
 | `sonarr` | Sonarr | http:8989/ping |
 | `radarr` | Radarr | http:7878/ping |

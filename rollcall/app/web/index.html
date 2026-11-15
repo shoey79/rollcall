@@ -40,8 +40,10 @@ tr.maintenance td{background:color-mix(in srgb,var(--blue) 7%,transparent)}
 tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
 .svcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:250px}
 .svc{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:16px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-weight:500;cursor:default}
+.viatag{display:inline-block;font-size:10px;line-height:14px;padding:0 5px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:3px}
+.viatag.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,var(--line));font-weight:600}
 .svc i{width:7px;height:7px;border-radius:50%;background:var(--grey);flex:none}
-.svc.green i{background:var(--green)}.svc.amber i{background:var(--amber)}
+.svc.green i{background:var(--green)}.svc.amber i{background:var(--amber)}.svc.maintenance i{background:var(--blue)}
 .svc.red{color:var(--orange);border-color:color-mix(in srgb,var(--orange) 45%,var(--line));font-weight:600}
 .svc.red i{background:var(--orange)}
 .status{display:flex;align-items:center;gap:8px;font-weight:600}
@@ -258,7 +260,8 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .sect.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{background:color-mix(in srgb,var(--accent) 14%,transparent)}100%{background:transparent}}
 .osgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
-.hint.ok{color:var(--green)}.hint.bad{color:var(--red)}
+.schedgrace{display:block;margin:8px 0 2px 24px;font-size:13px;line-height:1.6}.schedgrace input{width:64px;margin:0 4px}.schedgrace[hidden]{display:none}
+.hint.ok{color:var(--green)}.hint.bad{color:var(--red)}.hint.warn{color:var(--amber)}
 #detActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 #detActions small{font-size:12px}
 .dlrow{display:flex;flex-wrap:wrap;gap:8px}
@@ -462,7 +465,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="menuwrap edit-only">
       <button type="button" id="menuBtn" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="mainMenu">Manage<span class="badge" id="menuBadge" hidden></span> ▾</button>
       <div class="menu" id="mainMenu" role="menu" hidden>
-        <button type="button" id="addHost" role="menuitem">Add computer</button>
+        <button type="button" id="addHost" role="menuitem">Add device</button>
         <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
         <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added">Discover devices</button>
         <button type="button" id="swBtn" role="menuitem" title="Which computers have a program installed, and which version">Find software</button>
@@ -481,7 +484,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
       <thead><tr id="head"></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="empty" id="empty" hidden>No computers have been added yet.<br><button class="primary edit-only" id="addFirst">+ Add computer</button></div>
+    <div class="empty" id="empty" hidden>No devices have been added yet.<br><button class="primary edit-only" id="addFirst">+ Add device</button></div>
     <div class="empty" id="emptyTab" hidden>Nothing in this tab right now.</div>
   </div>
 </main>
@@ -582,7 +585,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 
 <dialog id="dlg">
   <form id="hostForm" novalidate>
-    <div class="dlg-head"><h2 id="dlgTitle">Add computer</h2></div>
+    <div class="dlg-head"><h2 id="dlgTitle">Add device</h2></div>
     <div class="dlg-body">
       <div class="fields">
         <label class="field">Name<input id="fName" maxlength="64" placeholder="SQL01" autocomplete="off"></label>
@@ -672,9 +675,9 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <div id="schedBox" hidden>
           <div id="schedWins"></div>
           <button type="button" id="schedAdd">+ Add time window</button>
-          <label class="tabfield">Allow <input type="number" id="schedGrace" min="0" max="240" value="15" style="width:70px"> minutes for it to start up when a window opens, before alerting</label>
           <p class="hint">Times are in Home Assistant's time zone. A window can run past midnight, e.g. 22:00 to 06:00 (it belongs to the day it starts).</p>
         </div>
+        <label class="schedgrace" id="schedGraceRow" hidden>Allow <input type="number" id="schedGrace" min="0" max="240" value="15"> minutes for it to start up <span id="schedGraceWhen">when a window opens</span>, before alerting about it, its services or its agent</label>
         <div class="checkby" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
           <b style="font-size:13px">Tell it's up by</b>
           <label class="schedopt"><input type="radio" name="checkBy" value="auto" checked> <span><b>Automatic</b>: up while it answers ping or, if it has an agent, while the agent has reported in the last 10 minutes. Suits laptops that are sometimes on the internet. Without an agent, this is the same as ping.</span></label>
@@ -702,7 +705,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 <script>
 const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off / off schedule"};
 const ORDER = {red: 0, degraded: 1, amber: 2, maintenance: 3, unknown: 4, green: 5};
-const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked"};
+const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked", maintenance: "starting up"};
 let data = null;
 
 // Column definitions. `val` returns the sort key; null/undefined always sorts last.
@@ -799,6 +802,8 @@ function schedNote(h) {
     : {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : null;
   if (h.off_schedule && h.expect_off) return `<div class="note">Off, as expected · checked whenever it's on</div>`;
   if (h.off_schedule) return `<div class="note">Monitoring resumes ${at ? at : "—"}</div>`;
+  if (h.starting_up && h.starting_until && (h.status === "green" || h.status === "degraded"))
+    return `<div class="note">${h.expect_off ? "Just switched on" : "Window opened"}: starting up until ${new Date(h.starting_until * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}, no alerts before then</div>`;
   if (h.starting_up) return `<div class="note">Window opened; waiting for it to reply</div>`;
   return "";
 }
@@ -1200,7 +1205,7 @@ function alerts() {
 function renderHome() {
   const el = document.getElementById("home"), hosts = data.hosts, now = data.now, list = alerts();
   if (!hosts.length) {
-    el.innerHTML = `<div class="panel"><div class="allok">No computers have been added yet.<br><br><button class="primary edit-only" data-homeadd>+ Add computer</button></div></div>`;
+    el.innerHTML = `<div class="panel"><div class="allok">No devices have been added yet.<br><br><button class="primary edit-only" data-homeadd>+ Add device</button></div></div>`;
     return;
   }
   const n = st => hosts.filter(st).length;
@@ -3219,6 +3224,18 @@ function renderSnmp(x) {
     if ((nas.errors || []).length) html += sect("Reported by the NAS", `<ul class="plain">${nas.errors.map(e => `<li>${esc(e)}</li>`).join("")}</ul>`);
     if ((nas.unavailable || []).length) html += `<p class="hint">The NAS didn't send its ${esc(nas.unavailable.join(" or "))} in time on the last check; Rollcall tries again at each check. This doesn't affect the disk and RAID checks.</p>`;
   }
+  const vpn = (d.vpn && d.vpn.tunnels) || [], vign = new Set((x.vpn_ignore || []).map(n => n.toLowerCase()));
+  if (vpn.length) {
+    const on = vpn.filter(v => v.active), upN = on.filter(v => v.up).length;
+    html += sect(`VPN connections (${upN} of ${on.length} up)`, `<p class="hint" style="margin:0 0 6px">IPsec connections switched on in the firewall go red if they drop (amber if only some of their networks are up). Untick <b>Alert</b> for one that's only up when needed. Connections switched off in the firewall are just shown.</p>` +
+      tbl(["Connection", "Type", "Status", "Alert"], vpn.map(v => {
+        const alertOn = v.active && !vign.has(v.name.toLowerCase()), bad = alertOn && !v.up;
+        const dot = !v.active ? "unknown" : v.up ? "green" : v.partial ? "amber" : alertOn ? "red" : "unknown";
+        return `<tr class="${bad ? (v.partial ? "warn" : "bad") : ""}"><td><b>${esc(v.name)}</b>${v.descr ? `<small class="muted"> ${esc(v.descr)}</small>` : ""}</td><td>${esc(v.type || "—")}</td>
+          <td><span class="dot ${dot}"></span> ${v.active ? esc(v.status[0].toUpperCase() + v.status.slice(1)) : "Switched off in the firewall"}</td>
+          <td>${v.active ? `<input type="checkbox" data-vpn="${esc(v.name)}" ${alertOn ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when VPN ${esc(v.name)} goes down">` : ""}</td></tr>`;
+      })));
+  }
   const ports = d.ports || [], watch = new Set(x.watch || []);
   if (ports.length) {
     const upN = ports.filter(p => p.up).length;
@@ -3324,6 +3341,15 @@ document.getElementById("detBody").addEventListener("change", async e => {
       body: JSON.stringify({name: n.dataset.nicwatch, watch: n.checked})});
     if (!r.ok) alert("That didn't work (" + r.status + ")");
     await openDetails(detKey, ["network"]); setTimeout(load, 1500);
+    return;
+  }
+  const vc = e.target.closest("input[data-vpn]");
+  if (vc && detMode === "snmp") {
+    vc.disabled = true;
+    const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/vpn-ignore", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: vc.dataset.vpn, ignore: !vc.checked})});
+    if (!r.ok) alert("That didn't work (" + r.status + ")");
+    await openSnmp(detKey); setTimeout(load, 2500);
     return;
   }
   const c = e.target.closest("input[data-watch]");
@@ -3574,6 +3600,32 @@ async function saveServers() {
   return true;
 }
 document.addEventListener("change", e => { if (e.target && (e.target.id === "agServer" || e.target.id === "agServerExt")) saveServers(); });
+async function saveNets(value) {
+  const note = document.getElementById("agSaved");
+  const r = await fetch("api/agents/networks", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({networks: value})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { note.textContent = j.error || "Couldn't save (" + r.status + ")"; note.className = "hint bad"; return; }
+  agInfo.internal_networks = j.internal_networks;
+  const both = agInfo.servers && agInfo.servers.inside && agInfo.servers.outside;
+  note.textContent = !j.internal_networks.length ? "✓ Saved. Agents go back to trying the address that worked last first."
+    : both ? "✓ Saved. Agents (Windows 1.0.42, Linux 1.0.19 and later) choose their address this way from their next report."
+    : "✓ Saved. This takes effect once both an inside and an outside address are set.";
+  note.className = "hint ok";
+  document.getElementById("agNets").value = j.internal_networks.join(", ");
+}
+document.addEventListener("change", e => { if (e.target && e.target.id === "agNets") saveNets(e.target.value); });
+document.addEventListener("click", e => {
+  if (!e.target || e.target.id !== "agNetsSuggest") return;
+  const v = (agInfo.suggested_networks || []).join(", ");
+  document.getElementById("agNets").value = v; e.target.closest("p").remove(); saveNets(v);
+});
+function viaTag(x) {
+  if (!x.via) return "";
+  const word = x.via === "inside" ? "internal" : "external";
+  if (x.expected && x.expected !== x.via)
+    return ` <span class="viatag warn" title="${esc(`Its address is ${x.expected === "inside" ? "on" : "not on"} an internal network, so it should use the ${x.expected === "inside" ? "internal" : "external"} address. It may have fallen back because that didn't answer, or is on an older agent version.`)}">${word} ⚠</span>`;
+  return ` <span class="viatag">${word}</span>`;
+}
 function renderAgents() {
   const a = agInfo, now = Date.now() / 1000;
   const staleSec = (a.stale_minutes || 15) * 60;
@@ -3588,7 +3640,11 @@ function renderAgents() {
       <label class="field"><span>From outside <small class="muted">(optional)</small></span><input type="text" id="agServerExt" value="${esc(ext)}" spellcheck="false" placeholder="https://rollcall.example.com:${a.port}"></label>
     </div>
     ${a.ssl ? `<label class="row-inline" style="margin-top:6px;font-size:13px"><input type="checkbox" id="agIgnoreCert"> Accept a self-signed certificate</label>` : ""}
-    <p class="hint">Agents try the inside address first, then the outside one, and remember which worked so a laptop away from the office goes straight to the outside address next time.
+    <label class="field" style="margin-top:8px"><span>Internal networks <small class="muted">(with both addresses set)</small></span>
+      <input type="text" id="agNets" value="${esc((a.internal_networks || []).join(", "))}" spellcheck="false" placeholder="e.g. 10.0.1.0/24, 192.168.1.0/24"></label>
+    ${(a.suggested_networks || []).length && !(a.internal_networks || []).length ? `<p class="hint" style="margin-top:4px">Home Assistant is on ${esc(a.suggested_networks.join(", "))}. <button type="button" class="mini" id="agNetsSuggest">Use ${a.suggested_networks.length > 1 ? "these" : "this"}</button></p>` : ""}
+    <p class="hint">With internal networks listed, each agent chooses at every report: on one of those networks, the inside address first; anywhere else, the outside one first. If the first doesn't answer it uses the other, and goes back to its usual one at the next report.
+    Without them, agents try the inside address first and then remember whichever worked last, so one failed attempt can leave an agent on the outside address.
     Use the IP if servers can't resolve the name. Changes are saved here and sent to agents with their next report, so installed agents follow them without a new download.</p>
     <p class="hint" id="agSaved"></p>
     <p class="hint" id="agExtWarn" hidden></p>`);
@@ -3638,6 +3694,8 @@ function renderAgents() {
       <td><div class="actions"><button type="button" class="primary" data-approve="${esc(p.id)}">Approve</button><button type="button" class="danger" data-reject="${esc(p.id)}">Reject</button></div></td></tr>`)) +
     (a.pending.length > 1 ? `<p><button type="button" id="agApproveAll">Approve all ${a.pending.length}</button></p>` : "")
     : `<p class="empty-note">None. Servers appear here within 5 minutes of the agent being installed. Check that the address and sender IP look right before approving.</p>`);
+  const drift = a.agents.filter(x => x.via && x.expected && x.via !== x.expected);
+  if (drift.length) html += `<p class="hint warn" style="margin:0 0 8px">⚠ ${drift.length} agent${drift.length > 1 ? "s" : ""} reported through the ${drift.length === drift.filter(x => x.via === "outside").length ? "external" : "other"} address, though ${drift.length > 1 ? "their" : "its"} own address says otherwise (marked ⚠ below). Older agents keep using the address that worked last; they choose by network once updated.</p>`;
   html += sect(`Approved (${a.agents.length})`, a.agents.length ? tbl(["Server", "On dashboard as", "Last report", "Agent", "Roles", ""], a.agents.map(x => {
     const age = x.last_report ? now - x.last_report : null;
     const stale = age == null || age > staleSec;
@@ -3647,7 +3705,7 @@ function renderAgents() {
     const from = x.forwarded_for ? `${x.forwarded_for} (through ${x.source_ip || "a proxy"})` : x.source_ip;
     return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
       <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
-      <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}${x.sent_to ? `<br><small class="muted" title="${esc("Sent to " + x.sent_to + (from ? ", from " + from : ""))}">to ${esc(x.sent_to.replace(/^https?:\/\//, ""))}${from ? `<br>from ${esc(from)}` : ""}</small>` : ""}</td>
+      <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}${x.sent_to ? `<br><small class="muted" title="${esc("Sent to " + x.sent_to + (from ? ", from " + from : ""))}">to ${esc(x.sent_to.replace(/^https?:\/\//, ""))}${viaTag(x)}${from ? `<br>from ${esc(from)}` : ""}</small>` : ""}</td>
       <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (x.os_family === "linux" ? "download it and run --install again" : "update the script on the share") : ""}">${esc(x.version || "?")} <small class="muted">${x.os_family === "linux" ? "Linux" : "Windows"}</small></td>
       <td><small>${esc((x.roles || []).join(", "))}</small></td>
       <td><div class="actions">${old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`
@@ -4011,6 +4069,8 @@ function schedRow(w) {
 function setSchedMode(mode) {
   document.querySelectorAll('input[name="schedMode"]').forEach(r => r.checked = r.value === mode);
   document.getElementById("schedBox").hidden = mode !== "times";
+  document.getElementById("schedGraceRow").hidden = mode === "always";
+  document.getElementById("schedGraceWhen").textContent = mode === "ondemand" ? "each time it's switched on" : "when a window opens";
   if (mode === "times" && !document.querySelector("#schedWins .swin")) schedRow({days: [0, 1, 2, 3, 4], start: "08:00", end: "18:00"});
 }
 document.querySelectorAll('input[name="schedMode"]').forEach(r => r.addEventListener("change", () => setSchedMode(r.value)));
@@ -4084,7 +4144,7 @@ function addCustomRow(value = "") {
 async function openDialog(h) {
   try { await loadPresets(); } catch (e) { return alert("Couldn't load the list of checks. Is the add-on running?"); }
   editing = h || null;
-  document.getElementById("dlgTitle").textContent = h ? `Edit ${h.name}` : "Add computer";
+  document.getElementById("dlgTitle").textContent = h ? `Edit ${h.name}` : "Add device";
   fName.value = h ? h.name : "";
   fHost.value = h ? h.host : "";
   hostViaHint();
@@ -4113,7 +4173,7 @@ async function openDialog(h) {
     if (cb) cb.checked = true; else addCustomRow(c);
   }
   document.getElementById("schedWins").innerHTML = "";
-  document.getElementById("schedGrace").value = h && h.schedule ? h.schedule.grace : 15;
+  document.getElementById("schedGrace").value = h && h.schedule ? h.schedule.grace : h && h.expect_off && h.startup_grace != null ? h.startup_grace : 15;
   if (h && h.schedule) h.schedule.windows.forEach(schedRow);
   setSchedMode(h && h.expect_off ? "ondemand" : h && h.schedule ? "times" : "always");
   document.getElementById("fNoAlerts").checked = !!(h && h.no_alerts);
@@ -4161,6 +4221,7 @@ form.addEventListener("submit", async e => {
     icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value, group: document.getElementById("fGroup").value.trim(),
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
+    grace: +document.getElementById("schedGrace").value || 0,
     no_alerts: document.getElementById("fNoAlerts").checked, critical: document.getElementById("fCritical").checked && !document.getElementById("fNoAlerts").checked};
   body.ha_device = linkedDev ? linkedDev.id : ""; body.ha_device_name = linkedDev ? linkedDev.name : "";
   body.checks = body.checks.filter(c => c.toLowerCase() !== "hadev:device");

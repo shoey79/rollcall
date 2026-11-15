@@ -48,7 +48,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.18"
+AGENT_VERSION = "1.0.19"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -1408,7 +1408,34 @@ def check_own_permissions(state):
 # --------------------------------------------------------------------------
 # Talking to the add-on
 # --------------------------------------------------------------------------
-ACTIVE = {"server": None, "preferred": None, "pushed": []}
+ACTIVE = {"server": None, "preferred": None, "pushed": [], "route": None, "side": None}
+
+
+def route_side(route, ips):
+    """"inside" if one of this computer's IPv4 addresses is on an internal network set under Agents."""
+    import ipaddress
+    nets = []
+    for n in route.get("networks") or []:
+        try:
+            nets.append(ipaddress.ip_network(str(n), strict=False))
+        except ValueError:
+            pass
+    for ip in ips or []:
+        try:
+            a = ipaddress.ip_address(str(ip))
+        except ValueError:
+            continue
+        if a.version == 4 and any(n.version == 4 and a in n for n in nets):
+            return "inside"
+    return "outside"
+
+
+def clean_route(rt):
+    ok = lambda u: isinstance(u, str) and re.match(r"^https?://[^\s,;]+$", u)  # noqa: E731
+    if not isinstance(rt, dict) or not ok(rt.get("inside")) or not ok(rt.get("outside")):
+        return None
+    nets = [str(n) for n in rt.get("networks") or [] if str(n).strip()][:50]
+    return {"inside": rt["inside"].rstrip("/"), "outside": rt["outside"].rstrip("/"), "networks": nets} if nets else None
 
 
 def server_list(server):
@@ -1416,6 +1443,12 @@ def server_list(server):
     ("http://10.0.0.5:8100,https://rollcall.example.com:8100"). The one that worked last goes first."""
     # Addresses the add-on sent (set under Agents) first; the installed ones stay on the end.
     allx = list(dict.fromkeys(x.strip().rstrip("/") for x in list(ACTIVE["pushed"]) + re.split(r"[,;\s]+", server or SERVER) if x.strip()))
+    rt = ACTIVE["route"]
+    if rt:
+        # Internal networks set under Agents: chosen afresh each run. On one, the inside address first;
+        # elsewhere, the outside one first. The other, then the installed addresses, are the fallbacks.
+        pair = [rt["inside"], rt["outside"]] if ACTIVE["side"] == "inside" else [rt["outside"], rt["inside"]]
+        return list(dict.fromkeys(pair + allx))
     pref = ACTIVE["preferred"]
     return ([pref] + [x for x in allx if x != pref]) if pref in allx else allx
 
@@ -1523,6 +1556,13 @@ def agent_run(conf, report_only=False):
     ignore = bool(conf.get("ignore_cert", IGNORE_CERT))
     ACTIVE["preferred"] = state.get("last_server")
     ACTIVE["pushed"] = [x for x in state.get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))]
+    ACTIVE["route"] = clean_route(state.get("route"))
+    if ACTIVE["route"]:
+        ACTIVE["side"] = route_side(ACTIVE["route"], report.get("ips"))
+        if ACTIVE["side"] != state.get("route_side"):
+            log("%s: trying the %s address first" % ("On an internal network" if ACTIVE["side"] == "inside"
+                                                     else "Not on an internal network", ACTIVE["side"]))
+            state["route_side"] = ACTIVE["side"]
     status, body = send("/agent/report", report, state["token"], server, ignore)
     if status == 401:
         log("Not enrolled yet: asking to join")
@@ -1564,6 +1604,10 @@ def agent_run(conf, report_only=False):
         if pushed != state.get("servers"):
             log("Rollcall's addresses are now: " + ", ".join(pushed))
         state["servers"] = pushed
+    if body is not None:
+        state["route"] = clean_route((body or {}).get("route"))  # None: not set under Agents (any more)
+        if not state["route"]:
+            state.pop("route_side", None)
     save_json(STATE_PATH, state)
     slow = max(TIMINGS.items(), key=lambda kv: kv[1]) if TIMINGS else None
     log("Report sent to %s: %d role(s), %d error(s); run took %.1f s%s" % (ACTIVE["server"],

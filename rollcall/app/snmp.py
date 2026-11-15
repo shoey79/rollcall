@@ -556,6 +556,29 @@ UPS_ALARMS = {1: "battery bad", 2: "on battery", 3: "low battery", 4: "battery d
 UPS_ENTERPRISES = {"534", "705", "3808", "5491", "4555", "476", "850", "13891", "19536", "2254", "2011", "935"}
 
 
+# Sophos Firewall (SFOS, XG and XGS): SFOS-FIREWALL-MIB sfosIPSecVpnTunnelTable, one row per IPsec connection
+SFOS_VPN = "1.3.6.1.4.1.2604.5.1.6.1.1.1.1"
+SFOS_VPN_STATUS = {0: "down", 1: "up", 2: "partly up"}   # sfosIPSecVpnConnStatus
+SFOS_VPN_TYPE = {1: "host to host", 2: "site to site", 3: "tunnel interface"}
+
+
+async def read_sophos_vpn(s: "Session") -> dict | None:
+    """IPsec connections on a Sophos Firewall. active: switched on in the firewall (sfosIPSecVpnActivated);
+    only those are expected to be up."""
+    cols = {c: await s.walk(f"{SFOS_VPN}.{c}", limit=1000) for c in ("2", "3", "6", "9", "10")}
+    if not cols["2"]:
+        return None
+    tunnels = []
+    for idx, name in cols["2"].items():
+        st = cols["9"].get(idx)
+        tunnels.append({"index": int(idx) if str(idx).isdigit() else idx, "name": _text(name),
+                        "descr": _text(cols["3"].get(idx)), "type": SFOS_VPN_TYPE.get(cols["6"].get(idx), ""),
+                        "status": SFOS_VPN_STATUS.get(st, str(st) if st is not None else "unknown"),
+                        "up": st == 1, "partial": st == 2, "active": cols["10"].get(idx) == 1})
+    tunnels.sort(key=lambda x: x["name"].lower())
+    return {"tunnels": tunnels}
+
+
 def _apc_date(v) -> str:
     """APC cards give dates as mm/dd/yy or mm/dd/yyyy; returns yyyy-mm-dd ('' if unreadable)."""
     import re
@@ -787,7 +810,7 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
         out = {"descr": str(sysv.get(f"{SYS}.1.0") or ""), "object_id": str(sysv.get(f"{SYS}.2.0") or ""),
                "uptime_s": (sysv.get(f"{SYS}.3.0") or 0) // 100 if isinstance(sysv.get(f"{SYS}.3.0"), int) else None,
                "name": str(sysv.get(f"{SYS}.5.0") or ""), "location": str(sysv.get(f"{SYS}.6.0") or ""),
-               "ports": [], "poe": None, "nas": None, "ups": None, "printer": None, "uptime_source": "snmp"}
+               "ports": [], "poe": None, "nas": None, "ups": None, "printer": None, "vpn": None, "uptime_source": "snmp"}
         # sysUpTime is how long the SNMP service has been running, which on Linux-based kit (NAS units)
         # restarts with the network. HOST-RESOURCES-MIB's hrSystemUptime is the device's own uptime.
         # Asked once per device: some switches (e.g. Netgear smart switches) stall their SNMP service
@@ -905,6 +928,12 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
             got = await timed("Printer", read_printer(s))
             if got:
                 out["printer"] = got
+        # Sophos Firewall (SFOS: XG and XGS); not the older Sophos UTM, which is end of life
+        if (oid.startswith("1.3.6.1.4.1.2604.5") or ent == "2604" and re.search(r"sfos|xgs?\b|firewall", text, re.I)
+                or re.search(r"\bsfos\b|sophos (?:xgs?|firewall)", text, re.I)):
+            got = await timed("VPN", read_sophos_vpn(s))
+            if got:
+                out["vpn"] = got
         if reader:
             got = await timed("UPS", reader(s))
             if got:
@@ -936,9 +965,10 @@ def boot_time(d: dict, now: float | None = None) -> float | None:
 
 
 def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = None,
-             restart_ack: float | None = None) -> tuple[str, list[dict]]:
+             restart_ack: float | None = None, vpn_ignore: set[str] | None = None) -> tuple[str, list[dict]]:
     """Problems in a poll. Returns (worst level, items) with level ok / warn / crit.
-    restart_ack: the start time of a restart someone acknowledged; it's no longer flagged."""
+    restart_ack: the start time of a restart someone acknowledged; it's no longer flagged.
+    vpn_ignore: names of VPN connections (lower case) that never alert."""
     lim = {**UPS_LIMITS, **(limits or {})}
     items: list[dict] = []
     add = lambda level, what, detail="": items.append({"level": level, "what": what, "detail": detail})  # noqa: E731
@@ -1055,5 +1085,15 @@ def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = 
             if a not in shown:
                 add("crit" if a in ("output overloaded", "shutdown pending", "shutdown imminent", "charger failed",
                                     "general fault", "fan failure", "fuse failure", "output off", "UPS system off") else "warn", "UPS", a)
+    vpn = d.get("vpn")
+    if vpn:
+        ign = {x.lower() for x in vpn_ignore or ()}
+        for v in vpn.get("tunnels") or []:
+            if not v.get("active") or v["name"].lower() in ign:
+                continue  # switched off in the firewall, or ignored here
+            if v.get("partial"):
+                add("warn", f"VPN {v['name']}", "partly up (some of its networks are down)")
+            elif not v.get("up"):
+                add("crit", f"VPN {v['name']}", "down")
     worst = "crit" if any(i["level"] == "crit" for i in items) else "warn" if items else "ok"
     return worst, items

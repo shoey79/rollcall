@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.41'
+$AgentVersion = '1.0.42'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -141,6 +141,11 @@ function Read-State {
             if ($raw.watch) { $state.watch = @($raw.watch) }
             if ($raw.last_server) { $state.last_server = [string]$raw.last_server }
             if ($raw.servers) { $state.servers = @($raw.servers | ForEach-Object { [string]$_ }) }
+            if ($raw.route -and $raw.route.inside -and $raw.route.outside) {
+                $state.route = @{ inside = [string]$raw.route.inside; outside = [string]$raw.route.outside
+                    networks = @($raw.route.networks | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
+            }
+            if ($raw.route_side) { $state.route_side = [string]$raw.route_side }
             if ($raw.amd_raid) { $state.amd_raid = [string]$raw.amd_raid }
             if ($raw.veeam) { $state.veeam = [string]$raw.veeam }
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
@@ -2586,12 +2591,52 @@ function Get-Report($State, [string[]]$ExtraWatch) {
 # ---------------------------------------------------------------------------
 # Talking to the add-on
 # ---------------------------------------------------------------------------
+function Test-InNetwork([string]$Ip, [string]$Cidr) {
+    # Is this IPv4 address in this subnet (e.g. 10.0.1.0/24)?
+    try {
+        $parts = $Cidr.Trim() -split '/'
+        $bits = if ($parts.Count -gt 1) { [int]$parts[1] } else { 32 }
+        if ($bits -lt 0 -or $bits -gt 32) { return $false }
+        $a = [System.Net.IPAddress]::Parse($Ip).GetAddressBytes(); $n = [System.Net.IPAddress]::Parse($parts[0]).GetAddressBytes()
+        if ($a.Count -ne 4 -or $n.Count -ne 4) { return $false }
+        $ai = ([uint64]$a[0] -shl 24) + ([uint64]$a[1] -shl 16) + ([uint64]$a[2] -shl 8) + [uint64]$a[3]
+        $ni = ([uint64]$n[0] -shl 24) + ([uint64]$n[1] -shl 16) + ([uint64]$n[2] -shl 8) + [uint64]$n[3]
+        $size = [uint64][math]::Pow(2, 32 - $bits)
+        return ([math]::Floor($ai / $size) -eq [math]::Floor($ni / $size))
+    } catch { return $false }
+}
+
+function Get-OwnIPv4 {
+    # This computer's IPv4 addresses on connected adapters (not loopback or self-assigned 169.254.x.x)
+    try {
+        return @([System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+            Where-Object { $_.OperationalStatus -eq 'Up' -and $_.NetworkInterfaceType -ne 'Loopback' } |
+            ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
+            Where-Object { $_.Address.AddressFamily -eq 'InterNetwork' } |
+            ForEach-Object { $_.Address.ToString() } | Where-Object { $_ -notlike '169.254.*' -and $_ -notlike '127.*' })
+    } catch { return @() }
+}
+
+function Get-RouteSide($Route) {
+    # 'inside' when this computer has an address on one of the internal networks set under Agents
+    foreach ($ip in @(Get-OwnIPv4)) {
+        foreach ($net in @($Route.networks)) { if (Test-InNetwork $ip $net) { return 'inside' } }
+    }
+    return 'outside'
+}
+
 function Get-ServerList {
     # -Server can list several addresses, e.g. internal then external:
     # 'http://10.0.0.5:8100,https://rollcall.example.com:8100'. The one that worked last is tried first.
     # Addresses the add-on sent (set under Agents) come first; the ones this copy was installed with
     # stay on the end, so a mistake in the dashboard can't cut the agent off.
+    # With internal networks set under Agents, the address is chosen afresh each run instead: on an internal
+    # network, the inside address first; elsewhere, the outside one first. The other is the fallback.
     $all = @(@($script:PushedServers) + @($Server -split '[,;\s]+') | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') } | Select-Object -Unique)
+    if ($script:Route) {
+        $pair = if ($script:RouteSide -eq 'inside') { @($script:Route.inside, $script:Route.outside) } else { @($script:Route.outside, $script:Route.inside) }
+        return @(@($pair) + @($all) | Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().TrimEnd('/') } | Select-Object -Unique)
+    }
     if ($script:PreferredServer -and $all -contains $script:PreferredServer) {
         $all = @($script:PreferredServer) + @($all | Where-Object { $_ -ne $script:PreferredServer })
     }
@@ -2701,6 +2746,15 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     $script:PreferredServer = [string]$state.last_server
     $script:PushedServers = @($state.servers | Where-Object { $_ -match '^https?://[^\s,;]+$' })
+    $script:Route = $null
+    if ($state.route -and $state.route.inside -match '^https?://[^\s,;]+$' -and $state.route.outside -match '^https?://[^\s,;]+$' -and @($state.route.networks).Count) {
+        $script:Route = $state.route
+        $script:RouteSide = Get-RouteSide $state.route
+        if ($script:RouteSide -ne $state.route_side) {
+            Write-AgentLog ("{0}: trying the {1} address first" -f $(if ($script:RouteSide -eq 'inside') { 'On an internal network' } else { 'Not on an internal network' }), $script:RouteSide)
+            $state.route_side = $script:RouteSide
+        }
+    }
 
     $extra = @($ExtraServices) + @($state.watch) | Where-Object { $_ } | Select-Object -Unique
     if (-not ($ReportOnly -or $ShowReport)) {
@@ -2749,6 +2803,13 @@ function Invoke-AgentRun([switch]$ReportOnly) {
             Write-AgentLog ("Rollcall's addresses are now: " + ($pushed -join ', '))
         }
         if ($pushed.Count) { $state.servers = $pushed }
+    }
+    $rt = if ($res.body) { $res.body.route } else { $null }
+    if ($rt -and [string]$rt.inside -match '^https?://[^\s,;]+$' -and [string]$rt.outside -match '^https?://[^\s,;]+$') {
+        $state.route = @{ inside = ([string]$rt.inside).TrimEnd('/'); outside = ([string]$rt.outside).TrimEnd('/')
+            networks = @(@($rt.networks) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -First 50) }
+    } elseif ($res.body) {
+        $state.route = $null; $state.route_side = $null  # not set under Agents (any more): the last address that worked goes first
     }
     Save-State $state
     $slow = $script:Timings.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1

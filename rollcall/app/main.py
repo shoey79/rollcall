@@ -288,6 +288,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("navidrome", "Navidrome", _MEDIA, [("Navidrome", "http:4533/")]),
     ("tautulli", "Tautulli", _MEDIA, [("Tautulli", "http:8181/")]),
     ("overseerr", "Overseerr / Jellyseerr", _MEDIA, [("Overseerr", "http:5055/api/v1/status")]),
+    ("ombi", "Ombi", _MEDIA, [("Ombi", "http:5000/")]),
     # Downloads
     ("sonarr", "Sonarr", _DL, [("Sonarr", "http:8989/ping")]),
     ("radarr", "Radarr", _DL, [("Radarr", "http:7878/ping")]),
@@ -309,6 +310,7 @@ PRESETS: dict[str, list[tuple[str, str]]] = {n: checks for n, _t, _g, checks in 
 PRESET_INFO = [(n, t, g) for n, t, g, _c in PRESET_TABLE]
 # A line of explanation, shown when hovering over a service in the form (and found by its search)
 PRESET_NOTES = {
+    "ombi": "Ombi media request site",
     "dc": "DNS, Kerberos, LDAP, SMB and Global Catalog", "rds": "Remote Desktop / Terminal Server",
     "adcs": "Certificate Services web enrolment (/certsrv)", "configmgr": "ConfigMgr / SCCM management point",
     "kms": "KMS activation", "winrm": "WinRM / PowerShell remoting",
@@ -318,7 +320,7 @@ PRESET_NOTES = {
     "unifi-os": "UniFi OS console, e.g. Cloud Key or UDM", "unifi-os-server": "UniFi OS Server, self-hosted",
     "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
     "printer": "Network printer (raw printing on 9100)",
-    "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies (e.g. Netgear, Buffalo, APC)",
+    "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
     "cert": "Warns before the HTTPS certificate on 443 expires",
     "syslog": "Keep this device's log messages and alert on errors",
     "camera": "IP camera or NVR (RTSP)", "onvif": "IP camera with RTSP and ONVIF, e.g. TP-Link Tapo",
@@ -555,6 +557,24 @@ def clean_schedule(raw) -> dict | None:
     return {"windows": out, "grace": grace}
 
 
+def _grace_minutes(value, default: int = 15) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return default
+    return v if 0 <= v <= 240 else default
+
+
+def startup_until(h, now: float) -> float | None:
+    """While a scheduled or "whenever it's on" computer is starting up, the time its start-up
+    allowance ends (services and agent checks don't alert until then); otherwise None."""
+    if h.maint_until or h.off_schedule or not h.sched_started:
+        return None
+    minutes = h.startup_grace if h.expect_off else (h.schedule or {}).get("grace", 15) if h.schedule else 0
+    end = h.sched_started + minutes * 60
+    return end if now < end else None
+
+
 def schedule_intervals(sched: dict, now: float) -> list[tuple[float, float]]:
     """The schedule's on-periods from yesterday to 8 days ahead, merged, as timestamps."""
     tz = TZ or datetime.now().astimezone().tzinfo
@@ -660,6 +680,13 @@ def validate_entry(raw: dict) -> dict:
     entry = {"name": name, "host": host, "checks": out}
     if raw.get("expect_off"):
         entry["expect_off"] = True  # monitored whenever it's on; a schedule doesn't apply
+        try:
+            grace = int(raw.get("grace", 15))
+        except (TypeError, ValueError):
+            raise ValueError("The start-up allowance must be a whole number of minutes") from None
+        if not 0 <= grace <= 240:
+            raise ValueError("The start-up allowance must be between 0 and 240 minutes")
+        entry["grace"] = grace  # minutes after it comes on before its services alert
     else:
         sched = clean_schedule(raw.get("schedule"))
         if sched:
@@ -1435,6 +1462,8 @@ class Host:
     maint_ended: float | None = None   # when the last pause ended (agent gets a fresh stale period)
     schedule: dict | None = None       # None: monitored all the time
     expect_off: bool = False           # usually off (e.g. cold storage): off is normal, checked while on
+    startup_grace: int = 15            # expect_off: minutes after it comes on before its services and agent alert
+    startup_end: float | None = None   # when the current start-up allowance ends (None: not starting up)
     no_alerts: bool = False            # show its status, never notify
     critical: bool = False             # its problem alerts are critical notifications on phones
     off_schedule: bool = False         # outside its monitoring schedule right now
@@ -1456,6 +1485,10 @@ class Host:
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
     snmp_restart_ack: float = 0        # start time of an acknowledged restart (not flagged)
+    snmp_vpn_ignore: list[str] = field(default_factory=list)  # Sophos VPN connections that never alert
+    vpn_alerted: set = field(default_factory=set)    # VPN connections already alerted as down
+    vpn_down_prev: set = field(default_factory=set)  # VPN connections down at the previous poll
+    vpn_polled: bool = False                         # polled since the add-on started
     readings_cfg: dict = field(default_factory=dict)  # syslog readings: {"temp0": {"name": "CPU", "warn": 80, "crit": 90}}
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
@@ -1538,7 +1571,7 @@ class Monitor:
 
         self._load_maint()
         if not self.hosts:
-            log.warning("No hosts yet - add some with 'Add computer' on the dashboard")
+            log.warning("No hosts yet - add some with 'Add device' on the dashboard")
         log.info(
             "Monitoring %d host(s) and %d service check(s), interval %ss, retry %ss",
             len(self.hosts), sum(len(h.services) for h in self.hosts.values()),
@@ -1612,7 +1645,7 @@ class Monitor:
     def _save_hosts(self) -> None:
         self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
                             **({"schedule": h.schedule} if h.schedule else {}),
-                            **({"expect_off": True} if h.expect_off else {}),
+                            **({"expect_off": True, "grace": h.startup_grace} if h.expect_off else {}),
                             **({"no_alerts": True} if h.no_alerts else {}),
                             **({"critical": True} if h.critical else {}),
                             **({"check_by": h.check_by} if h.check_by != "auto" else {}),
@@ -1627,6 +1660,7 @@ class Monitor:
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
                             **({"ups_limits": h.ups_limits} if h.ups_limits else {}),
                             **({"snmp_restart_ack": h.snmp_restart_ack} if h.snmp_restart_ack else {}),
+                            **({"snmp_vpn_ignore": h.snmp_vpn_ignore} if h.snmp_vpn_ignore else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1638,6 +1672,7 @@ class Monitor:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
                  checks=list(entry.get("checks") or []), next_due=due)
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        h.startup_grace = _grace_minutes(entry.get("grace"))
         h.critical = bool(entry.get("critical")) and not h.no_alerts
         h.snmp_community = entry.get("snmp_community") or None
         h.check_by = entry.get("check_by") if entry.get("check_by") in ("ping", "agent") else "auto"
@@ -1650,6 +1685,7 @@ class Monitor:
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
+        h.snmp_vpn_ignore = [str(x)[:100] for x in entry.get("snmp_vpn_ignore") or [] if str(x).strip()][:200]
         h.ups_limits = clean_ups_limits(entry.get("ups_limits"))
         h.readings_cfg = clean_readings_cfg(entry.get("readings_cfg"))
         try:
@@ -1683,6 +1719,7 @@ class Monitor:
         h.checks = entry["checks"]
         h.schedule = entry.get("schedule")
         h.expect_off, h.no_alerts = bool(entry.get("expect_off")), bool(entry.get("no_alerts"))
+        h.startup_grace = _grace_minutes(entry.get("grace"))
         h.critical = bool(entry.get("critical")) and not h.no_alerts
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
@@ -2087,7 +2124,8 @@ class Monitor:
             if h.expect_off:
                 # Only switched on now and then: being off is normal, and it's "on" while it answers.
                 on = bool(ok)
-                since = (h.sched_started or now) if ok else None
+                # Already up before an add-on restart (its status was restored): no fresh start-up allowance
+                since = (h.sched_started or (now - 86400 if h.status in (GREEN, DEGRADED) else now)) if ok else None
             grace = (h.schedule or {}).get("grace", 15) * 60
             h.reachable = bool(ok)
             was_off = h.off_schedule
@@ -2151,9 +2189,16 @@ class Monitor:
             if h.removed:
                 return
             h.status = new
+            prev_end, starting = h.startup_end, startup_until(h, now)
             retry = (new == AMBER or (new == MAINT and not h.off_schedule)
-                     or any(s.status == AMBER for s in h.services))
+                     or any(s.status == AMBER for s in h.services)
+                     or (starting and any(s.status == MAINT for s in h.services)))
             h.next_due = now + (min(self.retry_interval, self.interval) if retry else self.interval)
+            if starting and any(s.status == MAINT for s in h.services + h.agent_checks):
+                h.next_due = min(h.next_due, starting + 1)  # check again as soon as its allowance ends
+            h.startup_end = starting
+            if prev_end and not starting and any(s.status == MAINT for s in h.agent_checks):
+                await self.reevaluate(h)  # allowance over: anything the agent still finds wrong alerts now
             if h.maint_until and not h.maint_seen_down:
                 h.next_due = min(h.next_due, now + 5)  # paused until it's back: check often, so a quick restart isn't missed
             nxt = schedule_state(h.schedule, now)[2] if h.schedule else None
@@ -2214,6 +2259,7 @@ class Monitor:
                 return ok, ms, detail
 
         results = await asyncio.gather(*(run_one(s) for s in h.services), return_exceptions=True)
+        starting = startup_until(h, now)
         for s, res in zip(h.services, results):
             if isinstance(res, Exception):
                 log.warning("%s %s: check error: %s", h.name, s.label, res)
@@ -2228,11 +2274,29 @@ class Monitor:
             s.failures = 0 if ok or warn else s.failures + 1
             new = GREEN if ok else AMBER if warn or (s.failures == 1 and level != "now") else RED
             ok = ok or warn  # a warning isn't counted as downtime
-            self.store.add(svc_key(h, s), now, ok, s.latency)
+            if not ok and starting:
+                # Just switched on (or its window just opened): give it time to start before alerting.
+                # Once the allowance is over, the next failed check alerts straight away.
+                new, s.failures = MAINT, 1
+                s.detail = f"starting up: {detail}"
+            self.store.add(svc_key(h, s), now, MAINT_OK if new == MAINT else ok, s.latency)
+            turned_red = new == RED and s.status != RED
             if new != s.status:
                 old, s.status, s.last_change = s.status, new, now
                 log.info("%s %s (%s): %s -> %s [%s]", h.name, s.label, s.desc, old, new, detail)
                 await self.on_service_change(h, s, old, new)
+            elif s.kind == "snmp" and new == RED and h.vpn_polled:
+                await self._vpn_more_down(h, s)
+            if s.kind == "snmp":
+                down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith("VPN ")}
+                if new == RED and not turned_red and h.vpn_polled and self.opts.get("notify_recovery"):
+                    for what in sorted(h.vpn_alerted - down):  # back up while another is still down
+                        await self.notify(f"🟢 {h.name}: {what} back up", f"{h.name}: {what} is up again.",
+                                          f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}")
+                # Down when it went red: covered by that alert. Back up: alerts again if it drops again.
+                # First poll since the add-on started, already red: those were alerted before the restart.
+                h.vpn_alerted = set() if new != RED else down if turned_red or not h.vpn_polled else h.vpn_alerted & down
+                h.vpn_down_prev, h.vpn_polled = down, True
 
     @staticmethod
     def _snmp_per(prev: dict | None) -> int:
@@ -2299,7 +2363,8 @@ class Monitor:
         elif prev and prev.get("per_cap") and now - (prev.get("per_cap_at") or 0) < 6 * 3600:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         h.snmp_data, h.snmp_polled = d, now
-        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(h), h.snmp_restart_ack)
+        worst, items = snmplib.evaluate(d, set(h.snmp_watch), prev, self.ups_limits(h), h.snmp_restart_ack,
+                                               vpn_ignore=set(h.snmp_vpn_ignore))
         h.snmp_items = items
         if worst == "ok":
             bits = []
@@ -2309,6 +2374,9 @@ class Monitor:
                 bits.append(f"PoE {d['poe']['used_w']}/{d['poe']['power_w']} W")
             if d.get("nas"):
                 bits.append(f"{len(d['nas'].get('disks') or [])} disks OK")
+            vpn = [v for v in ((d.get("vpn") or {}).get("tunnels") or []) if v.get("active")]
+            if vpn:
+                bits.append(f"{sum(1 for v in vpn if v.get('up'))} of {len(vpn)} VPNs up")
             u = d.get("ups")
             if u and not u.get("error"):
                 bits.append(", ".join(x for x in (
@@ -2399,6 +2467,16 @@ class Monitor:
                     tag,
                 )
             h.down_since = None
+
+    async def _vpn_more_down(self, h: Host, s: Service) -> None:
+        """A firewall already alerting: another of its VPN connections has gone down (seen on two polls
+        in a row, like the first), so it gets its own alert rather than going unnoticed."""
+        down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and i["what"].startswith("VPN ")}
+        for what in sorted((down & h.vpn_down_prev) - h.vpn_alerted):
+            msg = f"{h.name} ({h.ip or h.host}): {what} is down."
+            tag = f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}"
+            await self.notify(f"🟠 {h.name}: {what} down", msg, tag, critical=h.critical)
+            h.vpn_alerted.add(what)
 
     async def on_service_change(self, h: Host, s: Service, old: str, new: str) -> None:
         await self.ha.fire("ping_monitor_service_changed", {
@@ -2911,6 +2989,45 @@ class Monitor:
         hist = [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= cutoff]
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
+
+    def internal_networks(self) -> list[str]:
+        """Subnets set under Agents as inside the network, e.g. ["10.0.1.0/24"] ([] if none)."""
+        return [str(n) for n in self.agent_settings.get("internal_networks") or []]
+
+    def agent_route(self) -> dict | None:
+        """What agents need to choose an address themselves: on an internal network, the inside one first;
+        elsewhere, the outside one first. None until both addresses and at least one network are set."""
+        sv = self.agent_settings.get("servers") or {}
+        nets = self.internal_networks()
+        if not (sv.get("inside") and sv.get("outside") and nets):
+            return None
+        return {"inside": sv["inside"], "outside": sv["outside"], "networks": nets}
+
+    def agent_side(self, agent: dict) -> dict:
+        """Which of the two addresses an agent last reported through, and which it should use going by its
+        own addresses: {"via": "inside" | "outside" | None, "expected": "inside" | "outside" | None}."""
+        sv = self.agent_settings.get("servers") or {}
+        norm = lambda u: str(u or "").strip().rstrip("/").lower()  # noqa: E731
+        sent = norm(agent.get("sent_to"))
+        via = "inside" if sent and sent == norm(sv.get("inside")) else "outside" if sent and sent == norm(sv.get("outside")) else None
+        nets = []
+        for n in self.internal_networks():
+            try:
+                nets.append(ipaddress.ip_network(n, strict=False))
+            except ValueError:
+                pass
+        expected = None
+        if nets and sv.get("inside") and sv.get("outside"):
+            ips = []
+            for ip in agent.get("ips") or []:
+                try:
+                    ips.append(ipaddress.ip_address(str(ip).split("%")[0]))
+                except ValueError:
+                    pass
+            v4 = [ip for ip in ips if ip.version == 4]
+            if v4:
+                expected = "inside" if any(ip in n for ip in v4 for n in nets if n.version == 4) else "outside"
+        return {"via": via, "expected": expected}
 
     def agent_servers(self) -> list[str]:
         """The inside then outside address set under Agents ([] if never set)."""
@@ -3511,12 +3628,17 @@ class Monitor:
                     # was already in the report, so don't wait for two more reports.
                     sv.failures = 2
                 status = AMBER if c.get("confirm") and sv.failures < 2 else RED
+                if startup_until(h, time.time()) and not restoring:
+                    # Just switched on: services may still be starting, so wait before alerting.
+                    # Checked again when the allowance ends (see check_startup_end).
+                    status, sv.failures = MAINT, max(sv.failures, 2)
+                    detail = f"starting up: {detail}"
             else:
                 sv.failures = 0
                 status = self.LEVEL_STATUS[level]
             sv.label, sv.detail, sv.last_check = c["label"], detail, received
             if not restoring and not reeval:
-                self.store.add(svc_key(h, sv), received, status != RED, None)
+                self.store.add(svc_key(h, sv), received, MAINT_OK if status == MAINT else status != RED, None)
             if status != sv.status:
                 old, sv.status, sv.last_change = sv.status, status, received
                 if not restoring:
@@ -3872,9 +3994,11 @@ class Monitor:
                 "maint_until": h.maint_until, "maint_seen_down": h.maint_seen_down,
                 "schedule": h.schedule, "schedule_text": describe_schedule(h.schedule) if h.schedule else
                 ("Checked whenever it's on" if h.expect_off else None),
-                "expect_off": h.expect_off, "no_alerts": h.no_alerts, "critical": h.critical,
+                "expect_off": h.expect_off, "startup_grace": h.startup_grace, "no_alerts": h.no_alerts, "critical": h.critical,
                 "off_schedule": h.off_schedule, "reachable": h.reachable, "schedule_next": schedule_state(h.schedule, time.time())[2],
-                "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until),
+                "starting_up": bool(h.schedule and not h.off_schedule and h.status == MAINT and not h.maint_until)
+                or bool(startup_until(h, time.time()) and h.status in (GREEN, DEGRADED)),
+                "starting_until": startup_until(h, time.time()),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
@@ -4367,6 +4491,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 "approved_at": a.get("approved_at"), "last_report": a.get("last_report"),
                 "sent_to": a.get("sent_to"), "source_ip": a.get("source_ip"), "forwarded_for": a.get("forwarded_for"),
                 "host_key": h.key if h else None, "host_name": h.name if h else None,
+                **monitor.agent_side(a),
                 "update_queued": a["id"] in (monitor.agent_settings.get("update_now") or [])}
 
     async def agents_list(_req):
@@ -4386,7 +4511,54 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "rollout": {k: v for k, v in (monitor.agent_settings.get("rollout") or {}).items()
                         if v.get("version") == (_linux_script_version() if k == "linux" else _script_version())},
             "servers": monitor.agent_settings.get("servers") or {},
+            "internal_networks": monitor.internal_networks(),
+            "suggested_networks": await _suggested_networks(),
         })
+
+    async def _suggested_networks() -> list[str]:
+        """Home Assistant's own networks, offered as a starting point for the internal networks."""
+        out = []
+        for i in await monitor.interfaces():
+            for a in i.get("addresses") or []:
+                try:
+                    n = str(ipaddress.ip_interface(a).network)
+                except ValueError:
+                    continue
+                if n not in out:
+                    out.append(n)
+        return out
+
+    async def agents_networks(req):
+        """Set the internal networks: agents on one try the inside address first, the rest the outside one."""
+        body = await req.json()
+        raw = body.get("networks")
+        if isinstance(raw, str):
+            raw = re.split(r"[\s,;]+", raw)
+        out, errors = [], []
+        for x in raw or []:
+            x = str(x).strip()
+            if not x:
+                continue
+            try:
+                n = ipaddress.ip_network(x, strict=False)
+            except ValueError:
+                errors.append(x)
+                continue
+            if n.version != 4:
+                errors.append(x)
+                continue
+            if str(n) not in out:
+                out.append(str(n))
+        if errors:
+            return web.json_response({"error": "Enter each network as an IPv4 subnet like 10.0.1.0/24 ("
+                                      + ", ".join(errors[:3]) + (" isn't" if len(errors) == 1 else " aren't") + ")"}, status=400)
+        if len(out) > 50:
+            return web.json_response({"error": "At most 50 networks"}, status=400)
+        monitor.agent_settings["internal_networks"] = out
+        monitor._save_agent_settings()
+        user = await access.who(req)
+        log.info("Internal networks for agents set to %s by %s", ", ".join(out) or "none", user["display"] or "someone")
+        return web.json_response({"internal_networks": out})
 
     async def agents_approve(req):
         pid = req.match_info["pid"]
@@ -4633,7 +4805,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             raise web.HTTPNotFound()
         svc = next((s for s in h.services if s.kind == "snmp"), None)
         return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "polled": h.snmp_polled,
-                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch, "ups_limits": monitor.ups_limits(h),
+                                  "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch,
+                                  "vpn_ignore": h.snmp_vpn_ignore, "ups_limits": monitor.ups_limits(h),
                                   "ups_defaults": monitor.ups_defaults(), "ups_custom": h.ups_limits,
                                   "status": svc.status if svc else None, "detail": svc.detail if svc else None})
 
@@ -4655,7 +4828,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         log.info("%s: UPS limits %s", h.name, lim or "back to the add-on's")
         if h.snmp_data:  # re-evaluate straight away
             svc = next((s for s in h.services if s.kind == "snmp"), None)
-            worst, items = snmplib.evaluate(h.snmp_data, set(h.snmp_watch), None, monitor.ups_limits(h), h.snmp_restart_ack)
+            worst, items = snmplib.evaluate(h.snmp_data, set(h.snmp_watch), None, monitor.ups_limits(h), h.snmp_restart_ack,
+                                               vpn_ignore=set(h.snmp_vpn_ignore))
             h.snmp_items = items
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0
@@ -4677,11 +4851,34 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         log.info("%s: port %s %s", h.name, idx, "watched" if body.get("watch") else "no longer watched")
         if h.snmp_data:  # re-evaluate straight away
             svc = next((s for s in h.services if s.kind == "snmp"), None)
-            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits(h), h.snmp_restart_ack)
+            worst, items = snmplib.evaluate(h.snmp_data, watch, None, monitor.ups_limits(h), h.snmp_restart_ack,
+                                               vpn_ignore=set(h.snmp_vpn_ignore))
             h.snmp_items = items
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0
         return web.json_response({"watch": h.snmp_watch})
+
+    async def host_snmp_vpn_ignore(req):
+        """Ignore a Sophos VPN connection (e.g. one that's only up on demand), or stop ignoring it."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        name = str(body.get("name") or "").strip()[:100]
+        if not name:
+            raise web.HTTPBadRequest(text="name is required")
+        keep = [x for x in h.snmp_vpn_ignore if x.lower() != name.lower()]
+        h.snmp_vpn_ignore = keep + [name] if body.get("ignore") else keep
+        monitor._save_hosts()
+        log.info("%s: VPN %s %s", h.name, name, "ignored" if body.get("ignore") else "no longer ignored")
+        if h.snmp_data:  # re-evaluate straight away
+            svc = next((s for s in h.services if s.kind == "snmp"), None)
+            worst, items = snmplib.evaluate(h.snmp_data, set(h.snmp_watch), None, monitor.ups_limits(h), h.snmp_restart_ack,
+                                            vpn_ignore=set(h.snmp_vpn_ignore))
+            h.snmp_items = items
+            if svc and svc.status != UNKNOWN:
+                h.next_due = 0
+        return web.json_response({"vpn_ignore": h.snmp_vpn_ignore})
 
     async def host_snmp_ack(req):
         """Acknowledge a restart (e.g. a planned one): it stops showing amber. A later restart still shows."""
@@ -4909,6 +5106,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/discovery/cancel", editor_only(discovery_cancel))
     app.router.add_post("/api/discovery/hide", editor_only(discovery_hide))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
+    app.router.add_post("/api/hosts/{key}/snmp/vpn-ignore", editor_only(host_snmp_vpn_ignore))
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
@@ -4952,6 +5150,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/auto-update", editor_only(agents_auto_update))
     app.router.add_post("/api/agents/rollout", editor_only(agents_rollout))
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
+    app.router.add_post("/api/agents/networks", editor_only(agents_networks))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app
@@ -5304,6 +5503,9 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         servers = monitor.agent_servers()
         if servers:
             resp["servers"] = servers  # agents use these from now on (plus the address they were installed with)
+        route = monitor.agent_route()
+        if route:
+            resp["route"] = route  # agents (Windows 1.0.42, Linux 1.0.19 on) pick inside or outside by their own address
         if agent["id"] in monitor.want_apps:
             resp["send_apps"] = True
         resp["secret_scan"] = monitor.secret_scan_config(agent)
