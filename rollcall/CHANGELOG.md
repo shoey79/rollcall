@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.82.2 - 2026-11-16
+
+### Fixed
+- **Acknowledging, filtering and other changes are quick again when Home Assistant is slow.** Each change waited while every sensor for that computer was sent to Home Assistant one at a time, so with Home Assistant busy (e.g. its host patching) an acknowledgement could take many seconds, and several in a row piled up. Sensors are now sent in the background, a few at a time, and several changes to the same computer in quick succession are sent once. Agent reports and the minute-by-minute refresh don't wait for Home Assistant either, so checks carry on on time.
+- A Home Assistant update that times out now says "Home Assistant didn't answer in time" in the log, instead of ending in a blank.
+
 ## 1.82.1 - 2026-11-16
 
 ### Changed
