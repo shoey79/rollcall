@@ -31,4 +31,8 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-(none)
+- Time check on domain-joined Windows computers (Windows agent): measure the clock offset with `w32tm /stripchart`
+  against the DC in use (members) or the PDC emulator (other DCs). On the PDC emulator, check Windows Time syncs
+  from a real source, not "Local CMOS Clock" / "Free-running System Clock". Amber over 1 minute out or not syncing,
+  red over 4 minutes (Kerberos fails at 5); both thresholds as settings. Show offset, the DC compared against and
+  the sync source; if the DC can't be reached, say so rather than going red. Skip computers not in a domain.
