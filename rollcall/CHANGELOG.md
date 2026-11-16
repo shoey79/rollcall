@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.82.1 - 2026-11-16
+
+### Changed
+- **Dismiss** and **Dismiss all** now remove acknowledged items from the Overview completely, instead of leaving a "dismissed from this list" line. They stay acknowledged, and alert again if the problem comes back or gets worse ([#8](https://github.com/shoey79/rollcall/issues/8)).
+
 ## 1.82.0 - 2026-11-16
 
 ### Added
