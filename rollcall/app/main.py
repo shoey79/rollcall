@@ -1677,19 +1677,24 @@ class Monitor:
         tmp.replace(HOSTS_PATH)
 
     def _save_hosts(self) -> None:
-        self._write_hosts([{"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
-                            **({"schedule": h.schedule} if h.schedule else {}),
-                            **({"expect_off": True, "grace": h.startup_grace} if h.expect_off else {}),
-                            **({"no_alerts": True} if h.no_alerts else {}),
-                            **({"critical": True} if h.critical else {}),
-                            **({"check_by": h.check_by} if h.check_by != "auto" else {}),
-                            **({"icon": h.icon} if h.icon else {}),
-                            **({"model": h.model} if h.model else {}),
-                            **({"subtitle": h.subtitle} if h.subtitle else {}),
-                            **({"group": h.group} if h.group else {}),
-                            **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
-                            **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
-                            **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
+        self._write_hosts([self._entry(h) for h in self.hosts.values()])
+
+    @staticmethod
+    def _entry(h: "Host") -> dict:
+        """A dashboard entry as it's saved in hosts.json."""
+        return {"id": h.key, "name": h.name, "host": h.host, "checks": h.checks,
+                **({"schedule": h.schedule} if h.schedule else {}),
+                **({"expect_off": True, "grace": h.startup_grace} if h.expect_off else {}),
+                **({"no_alerts": True} if h.no_alerts else {}),
+                **({"critical": True} if h.critical else {}),
+                **({"check_by": h.check_by} if h.check_by != "auto" else {}),
+                **({"icon": h.icon} if h.icon else {}),
+                **({"model": h.model} if h.model else {}),
+                **({"subtitle": h.subtitle} if h.subtitle else {}),
+                **({"group": h.group} if h.group else {}),
+                **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
+                **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
+                **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
                             **({"snmp_watch": h.snmp_watch} if h.snmp_watch else {}),
                             **({"ups_limits": h.ups_limits} if h.ups_limits else {}),
@@ -1701,7 +1706,6 @@ class Monitor:
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
                             **({"syslog_ignore": h.syslog_ignore} if h.syslog_ignore else {}),
                             **({"syslog_ack": h.syslog_ack} if h.syslog_ack else {})}
-                           for h in self.hosts.values()])
 
     def _make_host(self, entry: dict, due: float) -> Host:
         h = Host(key=entry["id"], name=entry["name"], host=entry["host"],
@@ -2761,6 +2765,61 @@ class Monitor:
                            f"{rec['hostname']} ({', '.join(rec.get('ips') or []) or rec.get('source_ip')}) "
                            f"wants to {what}. Approve or reject it in Rollcall, under Agents.")
 
+    def same_computer(self, h: Host) -> Host | None:
+        """For an entry without an agent: another entry whose agent is on the same computer
+        (by name or address), e.g. one added for ping before the agent was installed."""
+        if h.agent_id or not self.agents:
+            return None
+        for o in self.hosts.values():
+            a = self.agents.agents.get(o.agent_id or "")
+            if o is h or not a:
+                continue
+            ips = set(a.get("ips") or [])
+            if self._name_match(h, a) or h.host in ips or (h.ip and h.ip in ips):
+                return o
+        return None
+
+    async def merge_agent_into(self, h: Host, other: Host, who: str | None = None) -> None:
+        """Move the agent from `other` onto `h`, the entry without one, then remove `other`.
+        h keeps its name, address, history and Home Assistant entities; it gains other's checks
+        and agent settings (ignores, filters, acknowledgements) and its graphs."""
+        agent = self.agents.agents.get(other.agent_id or "")
+        if h.agent_id or not agent:
+            raise ValueError("only an entry without an agent can take one over")
+        entry = self._entry(h)
+        entry["checks"] = list(h.checks) + [c for c in other.checks if c not in h.checks]
+        for k in ("schedule", "icon", "model", "group"):
+            if not entry.get(k) and getattr(other, k):
+                entry[k] = getattr(other, k)
+        hs = self.agent_settings["hosts"]
+        moved = hs.pop(other.key, None)
+        if moved:
+            hs[h.key] = {**moved, **hs.get(h.key, {})}
+            self._save_agent_settings()
+        saved = self.agents.load_report(agent["id"]) or {}
+        was = {c.key: c for c in other.agent_checks}  # their state carries over: nothing re-alerts
+        await self._unlink(other)
+        try:
+            self.metrics.rename(other.key, h.key)
+        except sqlite3.Error as e:
+            log.warning("Couldn't move the graphs from %s: %s", other.name, e)
+        await self.update_host(h, entry)
+        h.agent_id, agent["host_key"] = agent["id"], h.key
+        self.agents.save()
+        await self.delete_host(other)
+        if saved.get("report"):
+            h.agent_history = saved.get("history") or h.agent_history
+            await self._apply(h, agent, agentlib.normalize_report(saved["report"]), saved.get("received") or time.time(),
+                              restoring=True)
+            for c in h.agent_checks:
+                if c.key in was:
+                    for f in ("status", "detail", "last_change", "last_check", "failures"):
+                        setattr(c, f, getattr(was[c.key], f))
+            await self._recompute(h, quiet=True)
+        self._save_hosts()
+        await self.publish(h)
+        log.info("Merged %s into %s: its agent now reports to %s (by %s)", other.name, h.name, h.name, who or "someone")
+
     async def approve_agent(self, pid: str) -> dict:
         agent = self.agents.approve(pid)
         await self.dismiss(f"ping_monitor_pending_{pid}")
@@ -3511,7 +3570,40 @@ class Monitor:
         for i in h.snmp_items:
             if i.get("acked"):
                 out.append({"type": "snmp", "key": i["what"], "label": i["what"], "detail": i["detail"]})
+        hidden = (self.agent_settings.get("ack_hidden") or {}).get(h.key) or {}
+        for a in out:
+            if f"{a['type']}:{a['key']}" in hidden and hidden[f"{a['type']}:{a['key']}"] == self._ack_mark(a):
+                a["hidden"] = True
         return out
+
+    @staticmethod
+    def _ack_mark(a: dict) -> str:
+        """What identifies this acknowledgement: a new one (acknowledged again, or SNMP showing
+        something different) brings a dismissed row back."""
+        return str(a.get("at") or a.get("detail") or "")
+
+    def dismiss_acks(self, items: list, undo: bool, who: str | None) -> int:
+        """Take acknowledged items off the Overview's Acknowledged list (they stay acknowledged)."""
+        hidden = self.agent_settings.setdefault("ack_hidden", {})
+        n = 0
+        for hk, typ, key in items:
+            h = self.hosts.get(hk)
+            a = next((a for a in self.acks_summary(h) if a["type"] == typ and a["key"] == key), None) if h else None
+            mine = hidden.setdefault(hk, {})
+            if undo:
+                n += mine.pop(f"{typ}:{key}", None) is not None
+            elif a:
+                mine[f"{typ}:{key}"] = self._ack_mark(a)
+                n += 1
+        for hk in list(hidden):  # forget dismissals whose acknowledgement has gone
+            h = self.hosts.get(hk)
+            live = {f"{a['type']}:{a['key']}": self._ack_mark(a) for a in self.acks_summary(h)} if h else {}
+            hidden[hk] = {k: v for k, v in hidden[hk].items() if live.get(k) == v}
+            if not hidden[hk]:
+                del hidden[hk]
+        self._save_agent_settings()
+        log.info("%s %d acknowledged item(s) %s the Overview list", who or "Someone", n, "back on" if undo else "dismissed from")
+        return n
 
     async def acknowledge_check(self, h: Host, check: str, who: str | None, undo: bool = False) -> None:
         """Acknowledge an agent check that's amber or red (e.g. a reboot that's waiting for a maintenance
@@ -4215,6 +4307,7 @@ class Monitor:
                 } for s in h.services + h.agent_checks],
                 "acks": self.acks_summary(h),
                 "agent": self._agent_summary(h),
+                **({"same_as": {"key": o.key, "name": o.name}} if (o := self.same_computer(h)) else {}),
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
@@ -4390,6 +4483,18 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         except RuntimeError as err:
             return web.json_response({"error": f"Not saved: {err}"}, status=502)
         return web.json_response({"ok": True, **result, "values": settingslib.values(monitor.opts)})
+
+    async def acks_dismiss(req):
+        """Dismiss acknowledged items from the Overview's list, or bring them back (undo)."""
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        items = [i for i in body.get("items") or [] if isinstance(i, list) and len(i) == 3 and all(isinstance(x, str) for x in i)][:500]
+        if not items:
+            return web.json_response({"error": "nothing to dismiss"}, status=400)
+        user = await access.who(req)
+        return web.json_response({"ok": True, "n": monitor.dismiss_acks(items, bool(body.get("undo")), user.get("display"))})
 
     async def email_test(req):
         """Send a test email with the settings in the dialog (saved or not), so they can be tried first."""
@@ -4581,6 +4686,25 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         scope = "all" if body.get("scope") == "all" else "host"
         await monitor.set_ignore(h, item, scope, bool(body.get("remove")))
         return web.json_response({"ok": True, "item": item, "scope": scope})
+
+    async def host_merge(req):
+        """Move the agent from another entry for the same computer onto this one, and remove that entry."""
+        h = monitor.hosts.get(req.match_info["key"])
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        other = monitor.hosts.get(str(body.get("from") or ""))
+        if not h or not other or other is h:
+            raise web.HTTPNotFound()
+        if monitor.same_computer(h) is not other:
+            return web.json_response({"error": f"{other.name} doesn't look like the same computer as {h.name}"}, status=400)
+        user = await access.who(req)
+        try:
+            await monitor.merge_agent_into(h, other, user.get("display"))
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        return web.json_response({"ok": True})
 
     async def agent_sec_filter(req):
         """Add, remove or widen a security filter (events that match don't alert)."""
@@ -5395,6 +5519,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/discovery/cancel", editor_only(discovery_cancel))
     app.router.add_post("/api/discovery/hide", editor_only(discovery_hide))
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
+    app.router.add_post("/api/hosts/{key}/merge", editor_only(host_merge))
     app.router.add_post("/api/hosts/{key}/snmp/vpn-ignore", editor_only(host_snmp_vpn_ignore))
     app.router.add_post("/api/hosts/{key}/snmp/ack", editor_only(host_snmp_ack_item))
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
@@ -5443,6 +5568,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
     app.router.add_post("/api/agents/networks", editor_only(agents_networks))
     app.router.add_post("/api/email/test", editor_only(email_test))
+    app.router.add_post("/api/acks/dismiss", editor_only(acks_dismiss))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
     return app

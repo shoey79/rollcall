@@ -174,6 +174,7 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+.mergebox{border:1px solid var(--line);border-left:4px solid #d97706;border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
 .lgrow{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:flex-start;justify-content:space-between;padding:3px 0}
 .lgrow>span{min-width:0;flex:1 1 200px;overflow-wrap:break-word;white-space:normal}
 
@@ -362,7 +363,9 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 .ackd{border-top:1px solid var(--line)}.ackd summary{cursor:pointer;padding:10px 14px;font-size:13px;color:var(--muted);font-weight:600}
 .ackd summary small{font-weight:400;margin-left:6px}
 .ackrow{display:flex;align-items:center;gap:10px;padding:8px 14px 8px 22px;border-top:1px solid var(--line);font-size:13px;opacity:.85}
-.ackrow .what{flex:1;min-width:0}.ackrow small{display:block;color:var(--muted)}
+.ackrow .what{flex:1;min-width:0}.ackrow.gone{opacity:.55}
+.ackmore{display:flex;gap:16px;justify-content:flex-end;padding:8px 14px;border-top:1px solid var(--line)}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent,#2563eb);font:inherit;font-size:13px;cursor:pointer}.linkbtn:hover{text-decoration:underline}.ackrow small{display:block;color:var(--muted)}
 .alertwrap:last-child{border-bottom:none}
 .alertwrap .alert{border-bottom:none;flex:1;min-width:0}
 .alertwrap.sev0,.alertwrap.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
@@ -1236,14 +1239,29 @@ function alerts() {
 }
 // Everything acknowledged, under the alerts, folded away, each with Undo
 let ackedOpen = false;
+let ackShowHidden = false;
 function ackedList() {
-  const rows = [];
-  for (const h of data.hosts) for (const k of h.acks || []) rows.push({h, ...k});
-  if (!rows.length) return "";
-  rows.sort((a, b) => (b.at || 0) - (a.at || 0) || collator.compare(a.h.name, b.h.name));
-  return `<details class="ackd"${ackedOpen ? " open" : ""}><summary>${rows.length} acknowledged <small>not counted while they stay as they are; they alert again if they get worse, or clear and come back</small></summary>` +
-    rows.map(r => `<div class="ackrow"><span class="dot unknown"></span><span class="what"><b>${esc(r.h.name)}</b> <span class="chk">· ${esc(r.label)}</span><small>${esc(r.detail || "")}${r.at ? ` · acknowledged ${esc(ago(r.at, data.now))}${r.by ? " by " + esc(r.by) : ""}` : ""}</small></span>
-      <button type="button" class="ackmini edit-only" data-unackalert="${esc(JSON.stringify([r.h.key, r.type, r.key]))}" title="Count it again">Undo</button></div>`).join("") + `</details>`;
+  const all = [];
+  for (const h of data.hosts) for (const k of h.acks || []) all.push({h, ...k});
+  all.sort((a, b) => (b.at || 0) - (a.at || 0) || collator.compare(a.h.name, b.h.name));
+  const rows = all.filter(r => !r.hidden), hidden = all.filter(r => r.hidden);
+  if (!rows.length && !hidden.length) return "";
+  const id = r => esc(JSON.stringify([r.h.key, r.type, r.key]));
+  const row = r => `<div class="ackrow${r.hidden ? " gone" : ""}"><span class="dot unknown"></span><span class="what"><b>${esc(r.h.name)}</b> <span class="chk">· ${esc(r.label)}</span><small>${esc(r.detail || "")}${r.at ? ` · acknowledged ${esc(ago(r.at, data.now))}${r.by ? " by " + esc(r.by) : ""}` : ""}</small></span>
+      ${r.hidden ? `<button type="button" class="ackmini edit-only" data-ackshow="${id(r)}" title="Put it back on this list">Show again</button>`
+        : `<button type="button" class="ackmini edit-only" data-ackhide="${id(r)}" title="Take it off this list. It stays acknowledged, and comes back if it alerts again">Dismiss</button>`}
+      <button type="button" class="ackmini edit-only" data-unackalert="${id(r)}" title="Count it again">Undo</button></div>`;
+  const more = hidden.length ? `<div class="ackmore"><button type="button" class="linkbtn" data-ackshowhidden>${ackShowHidden ? "Hide" : "Show"} ${hidden.length} dismissed</button>${rows.length > 1 ? `<button type="button" class="linkbtn edit-only" data-ackhideall>Dismiss all</button>` : ""}</div>`
+    : rows.length > 1 ? `<div class="ackmore"><button type="button" class="linkbtn edit-only" data-ackhideall>Dismiss all</button></div>` : "";
+  if (!rows.length)  // all dismissed: just a quiet line to bring them back
+    return `<div class="ackd"><div class="ackmore" style="justify-content:space-between;border-top:0"><small class="muted">${hidden.length} acknowledged, dismissed from this list</small><button type="button" class="linkbtn" data-ackshowhidden>${ackShowHidden ? "Hide" : "Show"}</button></div>${ackShowHidden ? hidden.map(row).join("") : ""}</div>`;
+  return `<details class="ackd"${ackedOpen ? " open" : ""}><summary>${rows.length} acknowledged${hidden.length ? ` <small>+ ${hidden.length} dismissed</small>` : ""} <small>not counted while they stay as they are; they alert again if they get worse, or clear and come back</small></summary>` +
+    rows.map(row).join("") + (ackShowHidden ? hidden.map(row).join("") : "") + more + `</details>`;
+}
+async function ackHide(items, undo) {
+  const r = await fetch("api/acks/dismiss", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({items, undo})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "That didn't work (" + r.status + ")"); }
+  load();
 }
 document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("ackd")) ackedOpen = e.target.open; }, true);
 // What Acknowledge does for an alert on the Overview (null: nothing to acknowledge, e.g. not responding)
@@ -1444,6 +1462,17 @@ document.getElementById("home").addEventListener("click", async e => {
     if (await ackPost(x.h.key, act)) { aa.closest(".alertwrap").classList.add("acking"); setTimeout(load, 1500); }
     else { aa.disabled = false; aa.textContent = "Acknowledge"; }
     return;
+  }
+  const ah = e.target.closest("[data-ackhide],[data-ackshow],[data-ackhideall],[data-ackshowhidden]");
+  if (ah) {
+    const d = ah.dataset;
+    if (d.ackshowhidden !== undefined) { ackShowHidden = !ackShowHidden; renderHome(); return; }
+    ah.disabled = true;
+    if (d.ackhideall !== undefined) {
+      const items = []; for (const h of data.hosts) for (const k of h.acks || []) if (!k.hidden) items.push([h.key, k.type, k.key]);
+      return ackHide(items, false);
+    }
+    return ackHide([JSON.parse(d.ackhide || d.ackshow)], d.ackshow !== undefined);
   }
   const ua = e.target.closest("[data-unackalert]");
   if (ua) {
@@ -3440,7 +3469,11 @@ function renderOverview(h, sn, lg, ha) {
   for (const r of ((lg && lg.rows) || []).filter(r => r.alert).slice(0, 5)) att.push({lvl: r.alert === "red" ? "red" : "amber", what: "Log", detail: (r.app ? r.app + ": " : "") + r.msg, jump: "logs", ts: r.ts});
   const order = {red: 0, amber: 1};
   att.sort((a, b) => order[a.lvl] - order[b.lvl]);
-  let html = `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
+  let html = h.same_as && !h.agent ? `<div class="mergebox"><p style="margin:0 0 8px">This looks like the same computer as <b>${esc(h.same_as.name)}</b>, which has the agent.
+      <b>Merge</b> moves the agent, its checks, settings and graphs onto this entry and removes ${esc(h.same_as.name)}. This entry keeps its name, address, history and Home Assistant sensors.</p>
+    <div class="actions"><button type="button" class="mini primary edit-only" data-merge="${esc(h.same_as.key)}" data-mergename="${esc(h.same_as.name)}">Merge into this entry</button>
+      <button type="button" class="mini" data-mergeopen="${esc(h.same_as.key)}">Open ${esc(h.same_as.name)}</button></div></div>` : "";
+  html += `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
   html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
     ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small>${a.ack === "restart" && data && data.can_edit === true ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
     : `<p class="empty-note">✓ Nothing needs attention.</p>`);
@@ -3899,6 +3932,18 @@ function showDetTab(tab, sectionTitle) {
 }
 
 let detSettings = null, diskEditing = null, lastDetails = null;
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-merge],[data-mergeopen]");
+  if (!b) return;
+  const d = b.dataset;
+  if (d.mergeopen) return openDetails(d.mergeopen);
+  if (!confirm(`Move the agent from ${d.mergename} onto this entry and remove ${d.mergename}?`)) return;
+  b.disabled = true;
+  const key = detKey;
+  const r = await fetch("api/hosts/" + encodeURIComponent(key) + "/merge", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({from: d.merge})});
+  if (!r.ok) { let m = "That didn't work (" + r.status + ")"; try { m = (await r.json()).error || m; } catch (x) {} alert(m); b.disabled = false; return; }
+  await load(); openDetails(key);
+});
 async function detPost(path, payload) {
   const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + path, {
     method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});

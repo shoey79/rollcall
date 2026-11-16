@@ -581,6 +581,8 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 4. Within 5 minutes each server shows under **Waiting for approval**. Check the name and address, then **Approve** (or **Approve all**).
 5. Approved servers that aren't on the dashboard yet are added automatically, by IP, unless `agent_auto_add` is off. Existing entries are matched by name or IP.
 
+   If the same computer has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same computer as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
+
 **What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
 
 | Switch | Does |
@@ -656,7 +658,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 - **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
 - **Defender:** a threat is cleared on the computer itself; the next agent report then clears the alert. There's no Acknowledge for it.
 
-Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Only Home Assistant admins and Rollcall editors can acknowledge.
+Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Ones you don't need to see, e.g. passwords in files that have to stay, can be **Dismiss**ed (or **Dismiss all**): they stay acknowledged but leave the list, which then shrinks to one line with **Show**. A dismissed item comes back if it's acknowledged again after alerting. Only Home Assistant admins and Rollcall editors can acknowledge.
 
 **Graphs over time.** Rollcall keeps the disk space, network traffic, CPU and memory from each agent report, so you can see how they change, e.g. for capacity planning. **Graph** opens a graph under the item, with ranges of 24 hours, 7 days, 30 days, 90 days and a year. Hover for the figures at that time.
 
