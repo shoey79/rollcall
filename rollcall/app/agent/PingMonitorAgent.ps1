@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.44'
+$AgentVersion = '1.0.45'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -2776,6 +2776,9 @@ function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
         ContentType = 'application/json; charset=utf-8'; TimeoutSec = 30; UseBasicParsing = $true
     }
     if ($Token) { $params.Headers = @{ Authorization = "Bearer $Token" } }
+    # Windows PowerShell 5.1 otherwise asks permission before sending (Expect: 100-continue): an extra
+    # round trip, and if Rollcall is slow to answer that, the request can be abandoned half-way.
+    [Net.ServicePointManager]::Expect100Continue = $false
     if ($uri -like 'https:*') {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if ($IgnoreCertificate) {

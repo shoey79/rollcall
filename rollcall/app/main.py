@@ -51,6 +51,7 @@ from html import escape as html_escape
 import certcheck
 import sipcheck
 import syslogreadings
+import watchdog as watchdoglib
 import discovery
 import hadevice
 import ilo as ilolib
@@ -6605,6 +6606,9 @@ async def main() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.server").addFilter(watchdoglib.QuietDisconnects(log))
+    watchdog = watchdoglib.Watchdog(log)
+    watchdog_task = watchdog.start()  # says where the add-on is stuck if something holds it up  # noqa: F841
     apply_pending_restore()
     store = Store(DB_PATH)
     async with ClientSession(timeout=ClientTimeout(total=15)) as session:
