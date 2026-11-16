@@ -36,3 +36,7 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   from a real source, not "Local CMOS Clock" / "Free-running System Clock". Amber over 1 minute out or not syncing,
   red over 4 minutes (Kerberos fails at 5); both thresholds as settings. Show offset, the DC compared against and
   the sync source; if the DC can't be reached, say so rather than going red. Skip computers not in a domain.
+- Add-on log in the dashboard (Manage menu), so it doesn't need Settings > Apps > Rollcall > Log. The add-on
+  already has `hassio_api`, so read its own log from the Supervisor (`GET /addons/self/logs`, which covers before
+  the last restart too); fall back to an in-memory buffer of recent lines if that's refused. Admins only; filter
+  by level (warnings and errors) and search; refresh/follow; download. Mask anything secret-looking.
