@@ -250,6 +250,8 @@ table.small tr.dim td{opacity:.55}
 .swsearch{display:flex;gap:8px;margin-bottom:10px}
 .swtools{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .swnewonly{font-size:13px;gap:6px}
+.vuln{display:inline-block;margin-top:2px;font-size:11.5px;font-weight:600;color:var(--amber);background:color-mix(in srgb,var(--amber) 14%,transparent);padding:0 7px;border-radius:9px;white-space:nowrap}
+.vuln.expl{color:var(--red);background:color-mix(in srgb,var(--red) 14%,transparent)}
 .secpromise{display:block;margin:0 0 10px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--green) 45%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--green) 8%,transparent);font-size:13px;line-height:1.45}
 .secpromise b{display:block;margin-bottom:2px}
 .secpath{word-break:break-all;font-size:12.5px}
@@ -662,6 +664,13 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
             <label class="field">Never alert on these words<input id="fSysIgnore" maxlength="600" placeholder="e.g. NTP, DHCPACK" autocomplete="off"></label>
           </div>
           <p class="hint" id="syslogHint">Set the device to send syslog to Home Assistant's IP address, UDP port 514. Critical messages and the words above go red and notify; others you alert on go amber. Comma-separated, not case-sensitive.</p>
+        </div>
+        <div id="iloBox" hidden class="snmpbox">
+          <div class="fields">
+            <label class="field">iLO user name<input id="fIloUser" maxlength="39" autocomplete="off" spellcheck="false"></label>
+            <label class="field">iLO password<input id="fIloPass" type="password" maxlength="63" autocomplete="new-password"></label>
+          </div>
+          <p class="hint">For HPE iLO 3 and iLO 4. Create an iLO user with only the <b>Login</b> privilege and enter it here; Rollcall only reads. The health is read every 5 minutes over HTTPS. Use the iLO's own address as this device's address. The password isn't shown on the dashboard.</p>
         </div>
         <div id="snmpBox" hidden class="snmpbox">
           <div class="fields">
@@ -1267,6 +1276,7 @@ function ackFor(a) {
   if (c.kind === "syslog") return {sys: true, tip: "Acknowledge this device's syslog alerts"};
   if (c.kind === "snmp" && !c.ackable) return null;  // not answering: nothing to acknowledge
   if (c.kind === "snmp") return {url: "/snmp/ack", body: {all: true}, tip: "Acknowledge what SNMP shows now: it alerts again if anything gets worse, or clears and comes back"};
+  if (c.kind === "ilo") return c.ackable ? {url: "/ilo/ack", body: {all: true}, tip: "Acknowledge what the iLO shows now: it alerts again if anything gets worse, or clears and comes back"} : null;
   if (!c.agent) return null;
   const k = checkKey(c);
   if (k === "agent" || NO_ACK.includes(k)) return null;
@@ -1471,7 +1481,7 @@ document.getElementById("home").addEventListener("click", async e => {
   if (ua) {
     const [hk, type, key] = JSON.parse(ua.dataset.unackalert);
     ua.disabled = true;
-    const act = type === "snmp" ? {url: "/snmp/ack", body: {what: key, undo: true}} : type === "kind" ? {url: "/agent/ack", body: {kind: key, undo: true}} : {url: "/agent/ack", body: {kind: "check", check: key, undo: true}};
+    const act = type === "snmp" ? {url: "/snmp/ack", body: {what: key, undo: true}} : type === "ilo" ? {url: "/ilo/ack", body: {what: key, undo: true}} : type === "kind" ? {url: "/agent/ack", body: {kind: key, undo: true}} : {url: "/agent/ack", body: {kind: "check", check: key, undo: true}};
     if (await ackPost(hk, act)) setTimeout(load, 1500); else ua.disabled = false;
     return;
   }
@@ -2234,7 +2244,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -2272,7 +2282,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -2792,7 +2802,21 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   flush("software");
   {
     // Installed software: what changed lately, then the full list with a filter box.
-    const sw = d.software;
+    const sw = d.software, vu = d.vulns;
+    if (vu) {
+      // Known vulnerabilities: what an update (or a newer Windows build) fixes, worst first
+      const inf = vu.info || {}, errs = Object.entries(inf.errors || {});
+      const srcs = [linux ? (vu.linux_source === "online" ? "OSV.dev (asked online)" : "OSV.dev data downloaded daily") : `Microsoft's security updates (${inf.msrc_months || 0} months)`,
+        `CISA's known-exploited list (${(inf.kev || 0).toLocaleString()} CVEs)`];
+      const cveLink = c => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
+      const body = !vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
+        : !vu.found.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : ""}.</p>`
+        : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], vu.found.map(f =>
+            `<tr><td>${cveLink(f.cve)}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
+             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`));
+      html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
+        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), and any known to be exploited at any score, ${linux ? "in packages a newer version fixes" : "fixed in a later Windows build than this one"}. Known-exploited ones are red; the rest amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
+    }
     if (!sw || !sw.apps) html += sect("Installed software", `<p class="empty-note">${r.agent_version ? `Not reported yet. It needs ${linux ? "Linux agent 1.0.14" : "Windows agent 1.0.33"} or later, and arrives with the next report after the agent updates.` : ""}</p>`);
     else {
       const ch = (sw.changes || []).filter(x => x.at >= Date.now() / 1000 - 30 * 86400).slice().reverse();
@@ -2801,7 +2825,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         `<tr><td>${when(new Date(x.at * 1000).toISOString())}</td><td><span class="swch ${x.change}">${verb[x.change] || esc(x.change)}</span></td><td>${esc(x.name)}</td>
           <td>${x.was ? `${esc(x.was)} → <b>${esc(x.version)}</b>` : esc(x.version)}</td></tr>`))
         : `<p class="empty-note">Nothing installed, removed or updated since ${sw.first ? when(new Date(sw.first * 1000).toISOString()) : "the first list"}${sw.first && sw.first > Date.now() / 1000 - 30 * 86400 ? ", when Rollcall started keeping track" : ""}.</p>`);
-      const user = sw.apps.some(a => a.scope === "user"), nNew = sw.apps.filter(a => a.newer).length;
+      const user = sw.apps.some(a => a.scope === "user"), nNew = sw.apps.filter(a => a.newer).length, nVul = sw.apps.filter(a => a.vulns).length;
       const wg = sw.winget || {};
       const src = linux ? "Newer versions come from the package manager's own list of updates."
         : sw.updates_from === "winget" ? `Newer versions come from the winget catalogue (${wg.packages ? wg.packages.toLocaleString() + " packages, " : ""}checked daily); programs it doesn't list aren't checked.`
@@ -2809,10 +2833,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         : wg.error ? `Newer versions can't be checked at the moment: the winget catalogue couldn't be downloaded (${esc(wg.error)}).`
         : "Newer versions will show once the winget catalogue has downloaded (a minute or so after the add-on starts).";
       html += sect(`Installed software (${sw.apps.length})`, `<div class="swtools"><input type="search" class="swfilter" placeholder="Filter by name or publisher" aria-label="Filter installed software">
-        ${nNew ? `<label class="row-inline swnewonly"><input type="checkbox" class="swnew"> Only the <b>${nNew}</b> with a newer version</label>` : ""}</div>
+        ${nNew ? `<label class="row-inline swnewonly"><input type="checkbox" class="swnew"> Only the <b>${nNew}</b> with a newer version</label>` : ""}
+        ${nVul ? `<label class="row-inline swnewonly"><input type="checkbox" class="swvul"> Only the <b>${nVul}</b> with known vulnerabilities</label>` : ""}</div>
         <p class="hint" style="margin:6px 0">${linux ? "Packages from the package manager" : "As listed in Apps &amp; features"}; the list was last updated ${sw.updated ? when(new Date(sw.updated * 1000).toISOString()) : "?"} (the agent sends it when something changes). ${src}</p>` +
         tbl(["Program", "Version", "Publisher", "Installed", "Size", ...(user ? ["For"] : [])], sw.apps.map(a =>
-          `<tr data-sw="${esc((a.name + " " + a.publisher).toLowerCase())}"${a.newer ? " data-newer" : ""}><td>${esc(a.name)}${a.arch === "x86" && !linux ? ` <small class="muted">32-bit</small>` : ""}</td><td>${esc(a.version)}${a.newer ? `<br><span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}</td><td>${esc(a.publisher)}</td>
+          `<tr data-sw="${esc((a.name + " " + a.publisher).toLowerCase())}"${a.newer ? " data-newer" : ""}${a.vulns ? " data-vul" : ""}><td>${esc(a.name)}${a.arch === "x86" && !linux ? ` <small class="muted">32-bit</small>` : ""}</td><td>${esc(a.version)}${a.newer ? `<br><span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}${a.vulns ? `<br><span class="vuln${a.vulns.some(v => v.exploited) ? " expl" : ""}" title="${esc(a.vulns.map(v => v.cve + (v.score ? " " + v.score.toFixed(1) : "") + (v.exploited ? " exploited" : "")).join(", "))}; fixed in ${esc(a.vulns[0].fixed)}">${a.vulns.length} CVE${a.vulns.length === 1 ? "" : "s"}</span>` : ""}</td><td>${esc(a.publisher)}</td>
             <td>${a.installed ? esc(a.installed) : ""}</td><td class="num">${a.size_mb ? (a.size_mb >= 1024 ? (a.size_mb / 1024).toFixed(1) + " GB" : Math.round(a.size_mb) + " MB") : ""}</td>${user ? `<td>${a.scope === "user" ? "A user" : "Everyone"}</td>` : ""}</tr>`)));
     }
   }
@@ -3259,6 +3284,7 @@ function deviceSources(h) {
   if (h && h.agent) out.push(["agent", "Agent details"]);
   if (h && h.snmp) out.push(["snmp", "SNMP"]);
   if (h && h.syslog) out.push(["logs", "Logs"]);
+  if (h && h.ilo) out.push(["ilo", "iLO"]);
   if (h && h.ha_device) out.push(["ha", "Home Assistant"]);
   return out;
 }
@@ -3270,7 +3296,7 @@ function srcBadge(h, kind) {
 function showSourceTabs(key, active) {
   const h = data && data.hosts.find(x => x.key === key), src = deviceSources(h), nav = document.getElementById("detTabs");
   if (src.length < 2) { nav.hidden = true; return; }
-  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : ""}</button>`).join("");
+  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : ""}</button>`).join("");
   nav.hidden = false;
 }
 // In agent view: SNMP and Logs added after the agent's tabs.
@@ -3279,14 +3305,14 @@ function appendSourceTabs(key) {
   const extra = deviceSources(h).filter(([k]) => k !== "agent");
   if (!extra.length) return;
   nav.insertAdjacentHTML("beforeend", `<span class="tabsep"></span>` + extra.map(([k, n]) =>
-    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : srcBadge(h, "syslog")}</button>`).join(""));
+    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : srcBadge(h, "syslog")}</button>`).join(""));
 }
 document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dsrc]");
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
   if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey);
-  else if (k === "ha") openHa(detKey); else openLogs(detKey);
+  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else openLogs(detKey);
 });
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
@@ -3382,6 +3408,96 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || `That didn't work (${r.status})`); b.disabled = false; b.textContent = was; return; }
   setTimeout(load, 2500);
   setTimeout(() => detMode === "snmp" ? openSnmp(detKey) : detMode === "overview" ? openOverview(detKey) : null, 2500);
+}, true);
+// The iLO tab: an HPE server's health read from its iLO (drives, fans, temperatures, power supplies).
+async function openIlo(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  if (detMode !== "ilo" || key !== detKey) {
+    document.getElementById("detTitle").textContent = h.name;
+    document.getElementById("detSub").textContent = "Loading…";
+    showSourceTabs(key, "ilo");
+    document.getElementById("detBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  }
+  detMode = "ilo"; detKey = key; renderDetActions();
+  if (!detDlg.open) detDlg.showModal();
+  let x = null;
+  try { const r = await fetch("api/hosts/" + encodeURIComponent(key) + "/ilo", {cache: "no-store"}); if (r.ok) x = await r.json(); } catch (e) { }
+  if (detMode !== "ilo" || detKey !== key) return;
+  showSourceTabs(key, "ilo");
+  if (!x) { document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`; return; }
+  renderIlo(x);
+}
+function iloLevel(st) {
+  const s = String(st || "").toLowerCase();
+  if (!s || /^(n\/?a|not installed|not present|absent|unknown|other|not configured|none|-)$/.test(s)) return "";
+  if (/fail|fault|critical|non-?recoverable|missing|\blost\b|offline/.test(s) && !/predictive/.test(s)) return "red";
+  if (/degrad|predictive|rebuild|recover|caution|warning|interim|not redundant|mismatch|expanding|ready for|disabled/.test(s)) return "amber";
+  return /^(ok|good|redundant|normal)/.test(s) ? "ok" : "";
+}
+function iloSt(st) {
+  const l = iloLevel(st);
+  return l === "red" ? `<b style="color:var(--red)">${esc(st)}</b>` : l === "amber" ? `<b class="old">${esc(st)}</b>` : l === "ok" ? `<span class="okc">${esc(st)}</span>` : `<span class="muted">${esc(st || "—")}</span>`;
+}
+function renderIlo(x) {
+  const d = x.data, now = data.now || Date.now() / 1000, body = document.getElementById("detBody"), top = body.scrollTop;
+  const canEdit = data && data.can_edit === true, items = x.items || [];
+  document.getElementById("detSub").textContent = d
+    ? [d.model, [d.ilo, d.firmware].filter(Boolean).join(" "), d.power ? "power " + d.power.toLowerCase() : "", "read " + ago(d.read, now)].filter(Boolean).join(" · ")
+    : "iLO";
+  const ignBtn = w => `<button type="button" class="mini" data-iloignore="${esc(w)}" style="margin-top:4px" title="Never alert on ${esc(w)} for this server">Ignore</button>`;
+  const unignBtn = w => `<button type="button" class="mini" data-iloignore="${esc(w)}" data-undo="1" style="margin-top:4px">Stop ignoring</button>`;
+  const ignoredNow = new Set(items.filter(i => i.ignored).map(i => i.what.toLowerCase()));
+  const ignoredIdle = (x.ignore || []).filter(w => !ignoredNow.has(w.toLowerCase()));
+  let html = sect("Checks", items.length
+    ? `<div class="checklist">${items.map(i => `<div${i.acked || i.ignored ? ` class="acked"` : ""}><span class="dot ${i.acked || i.ignored ? "unknown" : i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}${i.ignored ? " · ignored on this server: never alerts" : i.acked ? " · acknowledged: not counted while it stays like this; alerts again if it gets worse, or clears and comes back" : ""}</small>${!canEdit || i.what === "iLO" ? "" : i.ignored ? unignBtn(i.what)
+      : i.acked ? `<button type="button" class="mini" data-iloackitem="${esc(i.what)}" data-undo="1" style="margin-top:4px">Undo</button> ${ignBtn(i.what)}`
+      : `<button type="button" class="mini" data-iloackitem="${esc(i.what)}" style="margin-top:4px" title="Expected now (e.g. a replacement is on order): stop counting it while it stays like this">Acknowledge</button> ${ignBtn(i.what)}`}</span></div>`).join("")}</div>`
+      + (ignoredIdle.length ? `<p class="hint" style="margin:8px 0 0">Also ignored on this server: ${ignoredIdle.map(w => `<b>${esc(w)}</b>${canEdit ? ` ${unignBtn(w)}` : ""}`).join(" · ")}</p>` : "")
+    : d ? `<p class="empty-note">✓ Everything the iLO reports is OK.</p>` + (ignoredIdle.length ? `<p class="hint" style="margin:8px 0 0">Ignored on this server: ${ignoredIdle.map(w => `<b>${esc(w)}</b>${canEdit ? ` ${unignBtn(w)}` : ""}`).join(" · ")}</p>` : "")
+    : `<p class="empty-note">${esc(x.detail || "Not read yet: the iLO is read at the next check.")}</p>`);
+  if (!d) { body.innerHTML = html; return; }
+  const ps = d.power_summary || {}, inlet = (d.temps || []).find(t => /inlet|ambient/i.test(t.label) && t.reading);
+  const tiles = [["Power", d.power ? (d.power === "ON" ? "On" : d.power === "OFF" ? "Off" : d.power) : "—", ps.reading || ""],
+    inlet ? ["Inlet", inlet.reading + "°C", inlet.caution ? `caution at ${inlet.caution}°C` : ""] : null,
+    ps.redundancy ? ["Power supplies", (d.psus || []).filter(p => (p.present || "").toLowerCase() !== "no").length, ps.redundancy] : null]
+    .filter(Boolean).map(([l, v, sub]) => `<div class="tile"><span class="lbl">${esc(l)}</span><b${typeof v === "number" ? "" : ' style="font-size:19px;padding:4px 0 3px"'}>${esc(String(v))}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`).join("");
+  html = (tiles ? `<div class="tiles" style="margin-bottom:14px">${tiles}</div>` : "") + html;
+  const drv = p => `<tr><td>${esc(p.label)}</td><td>${iloSt(p.status)}</td><td>${esc([p.model, p.media].filter(Boolean).join(" · "))}</td><td>${esc(p.capacity || "")}</td></tr>`;
+  for (const c of d.controllers || []) {
+    const lds = (c.logical || []).map(l => `<h4 class="subh">Logical drive ${esc(l.label)} · ${iloSt(l.status)} <small class="muted">${esc([l.raid, l.capacity].filter(Boolean).join(" · "))}</small></h4>`
+      + tbl(["Drive", "Status", "Model", "Size"], (l.drives || []).map(drv))).join("");
+    const loose = (c.drives || []).length ? `<h4 class="subh">Not in a logical drive</h4>` + tbl(["Drive", "Status", "Model", "Size"], c.drives.map(drv)) : "";
+    html += sect(`Storage · ${esc(c.model || c.label)}`, `<p class="hint" style="margin:0 0 6px">${esc(c.label)} · controller ${iloSt(c.controller_status || c.status)}${c.cache ? ` · cache ${iloSt(c.cache)}` : ""}${c.firmware ? ` · firmware ${esc(c.firmware)}` : ""}</p>` + (lds + loose || `<p class="empty-note">No drives listed.</p>`));
+  }
+  for (const bp of d.backplanes || []) {
+    const bays = (bp.bays || []).filter(b => iloLevel(b.status));
+    html += sect("Drive bays" + (bp.enclosure && (d.backplanes || []).length > 1 ? ` · box ${esc(bp.enclosure)}` : ""),
+      tbl(["Bay", "Status", "Drive"], bays.map(b => `<tr><td>${esc(b.bay)}</td><td>${iloSt(b.status)}</td><td>${esc(b.product_id || "")}</td></tr>`)) || `<p class="empty-note">No drives listed.</p>`);
+  }
+  if (!(d.controllers || []).length && !(d.backplanes || []).length) html += sect("Storage", `<p class="hint">This iLO doesn't report drives. On iLO 4, drive details need HPE's Agentless Management Service on the server; iLO 3 only lists drives on some servers.</p>`);
+  html += sect("Power supplies", tbl(["Supply", "Status", "Model", "Capacity"], (d.psus || []).filter(p => (p.present || "").toLowerCase() !== "no")
+    .map(p => `<tr><td>${esc(p.label)}</td><td>${iloSt(p.status)}</td><td>${esc(p.model || "")}</td><td>${esc(p.capacity || "")}</td></tr>`)));
+  html += sect("Fans", tbl(["Fan", "Status", "Speed", "Zone"], (d.fans || []).map(f => `<tr><td>${esc(f.label)}</td><td>${iloSt(f.status)}</td><td>${esc(f.speed ? f.speed + (f.unit === "Percentage" ? "%" : " " + f.unit) : "")}</td><td>${esc(f.zone || "")}</td></tr>`)));
+  html += sect("Temperatures", tbl(["Sensor", "Status", "Reading", "Caution / critical"], (d.temps || []).filter(t => iloLevel(t.status) || t.reading)
+    .map(t => `<tr><td>${esc(t.label)}</td><td>${iloSt(t.status)}</td><td>${t.reading != null ? esc(t.reading + "°C") : "—"}</td><td>${esc([t.caution, t.critical].map(v => v ? v + "°C" : "—").join(" / "))}</td></tr>`)));
+  const glance = (d.glance || []).map(g => `<tr><td>${esc(g.what.replace(/_/g, " ").toLowerCase().replace(/^./, c => c.toUpperCase()))}${g.kind === "redundancy" ? " redundancy" : ""}</td><td>${iloSt(g.value)}</td></tr>`);
+  if (glance.length) html += sect("Health at a glance", tbl(["Part", "Status"], glance));
+  html += `<p class="hint">Read every ${Math.round((x.every || 300) / 60)} minutes. A new failure is read again at the next check and alerts if it's still there.</p>`;
+  body.innerHTML = html; body.scrollTop = top;
+}
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-iloackitem], [data-iloignore]");
+  if (!b || !detKey) return;
+  e.stopPropagation();
+  const ign = b.dataset.iloignore != null, what = ign ? b.dataset.iloignore : b.dataset.iloackitem, undo = !!b.dataset.undo;
+  if (ign && !undo && !confirm(`Never alert on "${what}" for this server? It stays listed, greyed out, and you can stop ignoring it here.`)) return;
+  b.disabled = true; const was = b.textContent; b.textContent = "…";
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + (ign ? "/ilo/ignore" : "/ilo/ack"), {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(ign ? {what, ignore: !undo} : {what, undo})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); b.disabled = false; b.textContent = was; return; }
+  setTimeout(load, 2500);
+  if (detMode === "ilo") openIlo(detKey);
 }, true);
 // The Home Assistant tab: for every device with a linked HA device, including those with an agent.
 async function openHa(key) {
@@ -3772,10 +3888,11 @@ function hostViaHint() {
 }
 function filterSoftware(sect) {
   const q = sect.querySelector(".swfilter").value.trim().toLowerCase(), only = sect.querySelector(".swnew") && sect.querySelector(".swnew").checked;
-  for (const tr of sect.querySelectorAll("tr[data-sw]")) tr.hidden = (!!q && !tr.dataset.sw.includes(q)) || (only && !tr.hasAttribute("data-newer"));
+  const vul = sect.querySelector(".swvul") && sect.querySelector(".swvul").checked;
+  for (const tr of sect.querySelectorAll("tr[data-sw]")) tr.hidden = (!!q && !tr.dataset.sw.includes(q)) || (only && !tr.hasAttribute("data-newer")) || (vul && !tr.hasAttribute("data-vul"));
 }
 document.getElementById("detBody").addEventListener("input", e => {
-  if (e.target.matches(".swfilter, .swnew")) filterSoftware(e.target.closest(".sect"));
+  if (e.target.matches(".swfilter, .swnew, .swvul")) filterSoftware(e.target.closest(".sect"));
 });
 document.getElementById("detBody").addEventListener("change", async e => {
   const n = e.target.closest("input[data-nicwatch]");
@@ -3928,7 +4045,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");
@@ -4332,7 +4449,7 @@ async function findSoftware() {
   if (!res.length) { out.innerHTML = `<p class="empty-note">No computer with an agent has anything matching "${esc(q)}".</p>`; return; }
   out.innerHTML = `<p class="hint">${res.length} of ${withAgents} computer${withAgents === 1 ? "" : "s"} with an agent.</p>` +
     tbl(["Computer", "Program", "Version"], res.flatMap(c => c.apps.map((a, i) =>
-      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}${a.newer ? ` <span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}</td></tr>`)));
+      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}${a.newer ? ` <span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}${a.cves ? ` <span class="vuln" title="Known vulnerabilities an update fixes: see the computer's Software tab">${a.cves} CVE${a.cves === 1 ? "" : "s"}</span>` : ""}</td></tr>`)));
 }
 document.getElementById("swGo").addEventListener("click", findSoftware);
 document.getElementById("swQ").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findSoftware(); } });
@@ -4446,6 +4563,7 @@ function updatePicked() {
   const snmpOn = !!form.querySelector('.preset input[value="snmp"]:checked');
   document.getElementById("snmpBox").hidden = !snmpOn;
   document.getElementById("syslogBox").hidden = !form.querySelector('.preset input[value="syslog"]:checked');
+  document.getElementById("iloBox").hidden = !form.querySelector('.preset input[value="hpilo"]:checked');
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -4658,6 +4776,8 @@ async function openDialog(h) {
     const el = document.getElementById(id); el.value = ""; el.placeholder = set ? "Unchanged (type to replace)" : "8 characters or more";
   }
   snmpShow();
+  document.getElementById("fIloUser").value = h ? (h.ilo_user || "") : "";
+  const iloPw = document.getElementById("fIloPass"); iloPw.value = ""; iloPw.placeholder = h && h.ilo_pass_set ? "Unchanged (type to replace)" : "";
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -4698,6 +4818,13 @@ form.addEventListener("submit", async e => {
       if (ap) body.snmp_v3.auth_pass = ap;
       if (pp) body.snmp_v3.priv_pass = pp;
     }
+  }
+  if (!document.getElementById("iloBox").hidden) {
+    body.ilo_user = document.getElementById("fIloUser").value.trim();
+    const ip = document.getElementById("fIloPass").value;
+    if (ip) body.ilo_pass = ip;
+    if (!body.ilo_user) { err.textContent = "Enter the iLO user name, or untick HPE iLO health."; return document.getElementById("fIloUser").focus(); }
+    if (!ip && !(editing && editing.ilo_pass_set)) { err.textContent = "Enter the iLO password."; return document.getElementById("fIloPass").focus(); }
   }
   if (!document.getElementById("syslogBox").hidden) {
     body.syslog_alert = +document.getElementById("fSysAlert").value;

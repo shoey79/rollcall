@@ -12,6 +12,8 @@ Rollcall is a Home Assistant add-on with its own sidebar dashboard. It started a
 - **Service checks** on each computer: TCP ports and web pages, with 80+ presets (IIS, SQL Server, Exchange, RDP, domain controllers, Proxmox, Plex, Jellyfin, Immich, UniFi, iDRAC…). A failing service shows the computer as *Degraded*.
 - **Windows agent** (PowerShell, deploy by Group Policy or MECM): works out each server's roles and reports disk space, role services, System/Application errors, Security log events (lockouts, admin-group changes, cleared logs), Defender, IIS, AD replication, DHCP scopes, Hyper-V and more.
 - **Linux agent** (one Python file, no dependencies): disks, failed systemd units, Docker containers and health checks, Immich, journal errors, SSH/sudo failures, user and group changes, pending updates.
+- **Known vulnerabilities:** CVE alerts for Windows builds and Linux packages, from Microsoft's, OSV.dev's and CISA's public data.
+- **HPE iLO 3 and iLO 4 health:** failed drives, fans, power supplies and temperatures.
 - **Home Assistant sensors as checks**, e.g. CPU and memory of UniFi access points.
 - **Dashboard** with sorting, search, tabs and custom filters (name, IP range, OS, role, status…), a 24-hour history strip and uptime %.
 - **Alerts** as phone notifications (tap to open the dashboard) and Home Assistant notifications; **maintenance mode** for reboots.

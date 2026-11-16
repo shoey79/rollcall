@@ -48,7 +48,7 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.19"
+AGENT_VERSION = "1.0.20"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 IGNORE_CERT = False
@@ -213,6 +213,9 @@ def system_info():
     kernel = os.uname().release
     info["os"] = limit("%s (kernel %s)" % (osr.get("PRETTY_NAME", "Linux"), kernel), 120)
     info["os_build"] = kernel
+    # The distro and release, for matching packages against the distro's security data (Rollcall 1.84+)
+    info["os_id"] = limit(osr.get("ID", ""), 30)
+    info["os_version_id"] = limit(osr.get("VERSION_ID", ""), 20)
     btime = re.search(r"^btime (\d+)", read("/proc/stat"), re.M)
     if btime:
         info["boot_time"] = utc(int(btime.group(1)))
@@ -360,22 +363,30 @@ def installed_apps():
     """Installed packages from dpkg (Debian, Ubuntu) or rpm (RHEL, Fedora, SUSE): name, version, publisher, size."""
     out = []
     if shutil.which("dpkg-query"):
-        rc, text, _ = run(["dpkg-query", "-W", "-f", "${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Maintainer}\\t${Installed-Size}\\t${Architecture}\\n"])
+        rc, text, _ = run(["dpkg-query", "-W", "-f", "${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Maintainer}\\t${Installed-Size}\\t${Architecture}\\t${source:Package}\\t${source:Version}\\n"])
         for line in text.splitlines():
             f = line.split("\t")
             if len(f) < 6 or not f[0].startswith("ii"):
                 continue
-            out.append({"name": f[1][:150], "version": f[2][:60], "publisher": re.sub(r"\s*<[^>]*>", "", f[3])[:100], "installed": "",
-                        "size_mb": round(int(f[4]) / 1024, 1) if f[4].isdigit() else 0, "arch": f[5][:12], "scope": "machine"})
+            a = {"name": f[1][:150], "version": f[2][:60], "publisher": re.sub(r"\s*<[^>]*>", "", f[3])[:100], "installed": "",
+                 "size_mb": round(int(f[4]) / 1024, 1) if f[4].isdigit() else 0, "arch": f[5][:12], "scope": "machine"}
+            if len(f) >= 8 and f[6]:  # the source package, as the distro's security data names it
+                a["src"], a["srcver"] = f[6][:150], f[7][:60]
+            out.append(a)
     elif shutil.which("rpm"):
-        rc, text, _ = run(["rpm", "-qa", "--qf", "%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{VENDOR}\\t%{SIZE}\\t%{ARCH}\\t%{INSTALLTIME}\\n"])
+        rc, text, _ = run(["rpm", "-qa", "--qf", "%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{VENDOR}\\t%{SIZE}\\t%{ARCH}\\t%{INSTALLTIME}\\t%{EPOCH}\\t%{SOURCERPM}\\n"])
         for line in text.splitlines():
             f = line.split("\t")
             if len(f) < 6 or f[0].startswith("gpg-pubkey"):
                 continue
             when = time.strftime("%Y-%m-%d", time.gmtime(int(f[5]))) if f[5].isdigit() else ""
-            out.append({"name": f[0][:150], "version": f[1][:60], "publisher": ("" if f[2] == "(none)" else f[2])[:100], "installed": when,
-                        "size_mb": round(int(f[3]) / 1048576, 1) if f[3].isdigit() else 0, "arch": f[4][:12], "scope": "machine"})
+            a = {"name": f[0][:150], "version": f[1][:60], "publisher": ("" if f[2] == "(none)" else f[2])[:100], "installed": when,
+                 "size_mb": round(int(f[3]) / 1048576, 1) if f[3].isdigit() else 0, "arch": f[4][:12], "scope": "machine"}
+            if len(f) >= 8:  # the source package and full version (with its epoch), as the distro's security data names them
+                m = re.match(r"^(.+)-[^-]+-[^-]+\.src\.rpm$", f[7])
+                a["src"] = (m.group(1) if m else f[0])[:150]
+                a["srcver"] = ((f[6] + ":") if f[6].isdigit() else "") + f[1][:60]
+            out.append(a)
     else:
         return None
     out.sort(key=lambda a: (a["name"].lower(), a["version"]))
@@ -402,7 +413,7 @@ def upgradable(state):
 
 
 def apps_hash(apps):
-    text = "\n".join("|".join(str(a.get(k, "")) for k in ("name", "version", "publisher", "arch", "scope", "available")) for a in apps)
+    text = "\n".join("|".join(str(a.get(k, "")) for k in ("name", "version", "publisher", "arch", "scope", "available", "src", "srcver")) for a in apps)
     return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 

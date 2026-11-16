@@ -161,6 +161,15 @@ configuration:
   software_updates:
     name: Highlight newer software versions
     description: Mark installed programs that have a newer version. Windows uses the winget catalogue, downloaded once a day; Linux uses the package manager. Never alerts.
+  vuln_checks:
+    name: Vulnerability alerts
+    description: "Check Windows builds and Linux packages against public lists of known vulnerabilities (CVEs), downloaded daily: Microsoft's security updates, OSV.dev for Linux, and CISA's list of exploited vulnerabilities. Amber when one scores at or above the level below; red when one is known to be exploited."
+  vuln_min_score:
+    name: Vulnerability score to alert on (CVSS)
+    description: "Vulnerabilities scoring this much or more out of 10 go amber. 9 means \"critical\"; 7 includes \"high\" too. Known-exploited ones always count."
+  vuln_linux_source:
+    name: Linux vulnerability data
+    description: "\"local\": download each distro's data from OSV.dev daily and match it here, so nothing about your computers is sent anywhere (larger downloads). \"online\": send OSV.dev one combined list of package names and versions and let it match (small downloads; no computer names or addresses). \"off\": don't check Linux."
   agent_secret_scan:
     name: Scan for passwords left in files
     description: Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details.

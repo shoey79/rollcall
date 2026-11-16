@@ -246,6 +246,9 @@ def normalize_report(r) -> dict:
         g = _as_dict(r["agent_integrity"])
         r["agent_integrity"] = {"at": str(g.get("at") or "")[:30], "first": g.get("first") is True,
                                 "what": [str(x)[:200] for x in (g.get("what") if isinstance(g.get("what"), list) else []) if x][:10]}
+    for k, n in (("os_id", 30), ("os_version_id", 20)):  # Linux agent 1.0.20+: the distro and release
+        if k in r:
+            r[k] = re.sub(r"[^A-Za-z0-9._-]", "", str(r[k] or ""))[:n].lower()
     if "last_patch_title" in r:
         r["last_patch_title"] = str(r["last_patch_title"] or "")[:200]
     for k in ("roles", "ips", "disks", "errors"):

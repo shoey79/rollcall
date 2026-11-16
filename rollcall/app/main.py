@@ -53,6 +53,8 @@ import sipcheck
 import syslogreadings
 import discovery
 import hadevice
+import ilo as ilolib
+import vulns as vulnlib
 import msi as msilib
 import settingslib
 from agents import AgentStore, clean_enrol_info, evaluate
@@ -100,6 +102,7 @@ SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer y
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
+VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vulnerability data, refreshed daily
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
@@ -107,7 +110,7 @@ AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
-SECURITY_KEYS = ("agent_security", "agent_domain", "agent_secrets", "agent_integrity")
+SECURITY_KEYS = ("agent_security", "agent_domain", "agent_secrets", "agent_integrity", "agent_vulns")
 UPS_LIMIT_KEYS = {"runtime_warn": (0, 600), "runtime_crit": (0, 600), "load_warn": (1, 100)}
 
 
@@ -185,6 +188,9 @@ DEFAULTS = {
     "agent_sql_backup_hours": 36,
     "printer_supply_warn": 10,
     "software_updates": True,
+    "vuln_checks": True,
+    "vuln_min_score": 9,
+    "vuln_linux_source": "local",
     "agent_secret_scan": "off",
     "name_line": "auto",
     "agent_exchange_queue_warn": 250,
@@ -272,6 +278,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("unifi-os", "UniFi OS console", _NET, [("UniFi", "https:443/")]),
     ("unifi-os-server", "UniFi OS Server", _NET, [("UniFi", "https:11443/"), ("Inform", "tcp:8080")]),
     ("idrac", "iDRAC / BMC", _NET, [("iDRAC", "https:443/")]),
+    ("hpilo", "HPE iLO health", _NET, [("iLO", "ilo:device")]),
     ("pihole", "Pi-hole", _NET, [("DNS", "tcp:53"), ("Pi-hole", "http:80/admin/")]),
     ("adguard", "AdGuard Home", _NET, [("DNS", "tcp:53"), ("AdGuard", "http:80/")]),
     ("npm", "Nginx Proxy Manager", _NET, [("NPM", "http:81/")]),
@@ -341,6 +348,7 @@ PRESET_NOTES = {
     "telnet": "Telnet (switches, old kit)", "unifi": "UniFi Network, old self-hosted controller",
     "unifi-os": "UniFi OS console, e.g. Cloud Key or UDM", "unifi-os-server": "UniFi OS Server, self-hosted",
     "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
+    "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
     "printer": "Network printer (raw printing on 9100)",
     "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
     "cert": "Warns before the HTTPS certificate on 443 expires",
@@ -360,6 +368,7 @@ ALIASES = {
     "tapo": "onvif", "heatmiser": "neohub", "neostat": "neohub", "zigbee": "zigbee2mqtt", "zwave": "zwavejs",
     "xmpp": "openfire", "jabber": "openfire", "winbox": "mikrotik", "rdgw": "rdgateway",
     "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
+    "ilo3": "hpilo", "ilo4": "hpilo", "hp-ilo": "hpilo", "hpe-ilo": "hpilo", "ilo-health": "hpilo",
     "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
     "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
     "mecm": "configmgr", "sftp": "ssh", "pve": "proxmox", "vmware": "esxi", "dsm": "synology",
@@ -381,6 +390,8 @@ def preset_summary(name: str) -> str:
             return "SNMP polling"
         if spec == "syslog:device":
             return "log messages"
+        if spec == "ilo:device":
+            return "health, with an iLO login"
         if kind == "tcp":
             return f"TCP {rest}"
         if kind == "cert":
@@ -516,6 +527,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "Syslog", "kind": "syslog", "port": 514, "url": None, "desc": "syslog"}]
     if low == "snmp:device":
         return [{"label": label or "SNMP", "kind": "snmp", "port": 161, "url": None, "desc": "snmp"}]
+    if low == "ilo:device":
+        return [{"label": label or "iLO", "kind": "ilo", "port": 443, "url": None, "desc": "ilo"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -790,6 +803,17 @@ def validate_entry(raw: dict) -> dict:
         if len(model) > 64 or not model.isprintable():
             raise ValueError("Make and model must be up to 64 ordinary characters")
         entry["model"] = model
+    if "ilo_user" in raw:
+        user = str(raw.get("ilo_user") or "").strip()
+        if len(user) > 39 or not user.isprintable():
+            raise ValueError("The iLO user name must be up to 39 ordinary characters")
+        entry["ilo_user"] = user
+        pw = raw.get("ilo_pass")
+        if pw not in (None, ""):
+            pw = str(pw)
+            if len(pw) > 63 or not pw.isprintable():
+                raise ValueError("The iLO password must be up to 63 ordinary characters")
+            entry["ilo_pass"] = pw
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1443,7 +1467,7 @@ class HomeAssistant:
 # --------------------------------------------------------------------------
 # Monitor
 # --------------------------------------------------------------------------
-SECURITY_CHECKS = ("security", "defender", "secrets", "integrity", "domain")  # emailed under "Security"
+SECURITY_CHECKS = ("security", "defender", "secrets", "integrity", "domain", "vulns")  # emailed under "Security"
 TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
 NO_ACK = ("defender",)  # cleared on the computer itself (a threat removed), then the next report shows it
 TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
@@ -1526,6 +1550,16 @@ class Host:
     vpn_down_prev: set = field(default_factory=set)  # VPN connections down at the previous poll
     vpn_polled: bool = False                         # polled since the add-on started
     readings_cfg: dict = field(default_factory=dict)  # syslog readings: {"temp0": {"name": "CPU", "warn": 80, "crit": 90}}
+    ilo_user: str = ""                 # HPE iLO login for its health (ilo:device)
+    ilo_pass: str = ""
+    ilo_data: dict | None = None       # latest iLO reading
+    ilo_items: list[dict] = field(default_factory=list)  # problems found in it
+    ilo_polled: float | None = None    # when it was last read (or tried)
+    ilo_result: tuple | None = None    # the check result from that reading, reused until the next one
+    ilo_err: str | None = None         # the last reading failed: "login" (refused) or "read"
+    ilo_recheck: bool = False          # something new failed: read it again at the next check
+    ilo_acks: dict = field(default_factory=dict)  # acknowledged problems: what -> its level (warn / crit) then
+    ilo_ignore: list[str] = field(default_factory=list)  # problems that never alert here, e.g. "Power redundancy"
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
@@ -1574,6 +1608,12 @@ class Monitor:
         self.winget_info: dict = {}
         self._newer: dict = {}       # (agent id, list hash, catalogue) -> {program index: newer version}
         self.want_apps: set = set()  # agents whose software list Rollcall is missing
+        self.vulnfeeds = vulnlib.Feeds(VULN_DIR, log)  # known vulnerabilities: Microsoft, OSV.dev, CISA (vulns.py)
+        try:
+            self.vulnfeeds.load()
+        except Exception as err:  # noqa: BLE001 - a damaged cache is downloaded again
+            log.warning("Couldn't read the saved vulnerability data (%s); it will be downloaded again", err)
+        self._vf: dict = {}          # agent id -> (what it was worked out from, findings)
         self.opts = opts
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
@@ -1709,6 +1749,9 @@ class Monitor:
                             **({"snmp_acks": h.snmp_acks} if h.snmp_acks else {}),
                             **({"snmp_vpn_ignore": h.snmp_vpn_ignore} if h.snmp_vpn_ignore else {}),
                 **({"snmp_ignore": h.snmp_ignore} if h.snmp_ignore else {}),
+                **({"ilo_user": h.ilo_user, "ilo_pass": h.ilo_pass} if h.ilo_user or h.ilo_pass else {}),
+                **({"ilo_acks": h.ilo_acks} if h.ilo_acks else {}),
+                **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1736,6 +1779,10 @@ class Monitor:
         h.snmp_ignore = [str(x)[:100] for x in entry.get("snmp_ignore") or [] if str(x).strip()][:200]
         h.ups_limits = clean_ups_limits(entry.get("ups_limits"))
         h.readings_cfg = clean_readings_cfg(entry.get("readings_cfg"))
+        h.ilo_user, h.ilo_pass = str(entry.get("ilo_user") or "")[:39], str(entry.get("ilo_pass") or "")[:63]
+        h.ilo_acks = ({str(k)[:100]: v for k, v in entry["ilo_acks"].items() if v in ("warn", "crit")}
+                      if isinstance(entry.get("ilo_acks"), dict) else {})
+        h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
             h.snmp_acks = ({str(k)[:200]: v for k, v in entry["snmp_acks"].items() if v in ("warn", "crit")}
@@ -1773,6 +1820,11 @@ class Monitor:
         h.critical = bool(entry.get("critical")) and not h.no_alerts
         if entry.get("snmp_community"):  # blank keeps the one already set
             h.snmp_community = entry["snmp_community"]
+        if "ilo_user" in entry:
+            pw = entry.get("ilo_pass") or h.ilo_pass  # blank keeps the one already set
+            if (entry["ilo_user"], pw) != (h.ilo_user, h.ilo_pass):
+                h.ilo_user, h.ilo_pass = entry["ilo_user"], pw
+                h.ilo_polled = h.ilo_result = None  # read it again with the new login
         if "check_by" in entry:
             h.check_by = entry["check_by"]
             h.next_due = 0
@@ -2074,6 +2126,12 @@ class Monitor:
             self.store.prune(now - int(self.opts["history_days"]) * DAY)
             self.logs.prune(now - int(self.opts["history_days"]) * DAY)
             notes.append("older history has been removed")
+        if {"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys():
+            self._vf.clear()
+            task = getattr(self, "_vulns_task", None)
+            if task:  # fetch what the new settings need now, then work every computer out again
+                task.cancel()
+                self._vulns_task = asyncio.create_task(self.vulns_loop(first_wait=1, reeval=True))
         if "software_updates" in changed and bool(changed["software_updates"]) != bool(old.get("software_updates", True)):
             task = getattr(self, "_winget_task", None)
             if task:
@@ -2282,6 +2340,8 @@ class Monitor:
                 return self.syslog_state(h, now)
             if s.kind == "hadev":
                 return await self.hadev_check(h, now)
+            if s.kind == "ilo":
+                return await self.ilo_check(h, now)
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -2472,6 +2532,88 @@ class Monitor:
         detail = "; ".join(f"{i['what']} {i['detail']}".strip() for i in items if i["level"] == worst and not i.get("acked") and not i.get("ignored"))
         return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
 
+    ILO_EVERY = 300          # read an iLO at most every 5 minutes: its health takes it a few seconds to gather
+    ILO_LOGIN_RETRY = 1800   # after it turned the login down, so its security log isn't filled with failures
+
+    def ilo_eval(self, h: Host, d: dict, prune: bool = False) -> tuple[str, list]:
+        """ilolib.evaluate, then what someone acknowledged or ignored, as for SNMP: an acknowledged
+        problem doesn't count while it's there and no worse; an ignored one never alerts here.
+        prune (after a real reading): forget acknowledgements of problems that have cleared."""
+        items = ilolib.evaluate(d)
+        acks, ignore = h.ilo_acks or {}, {x.lower() for x in h.ilo_ignore}
+        for i in items:
+            if i["what"].lower() in ignore:
+                i["ignored"] = True
+            elif acks.get(i["what"]) == i["level"] or acks.get(i["what"]) == "crit":
+                i["acked"] = True
+        if prune:
+            keep = {i["what"]: acks[i["what"]] for i in items if i.get("acked")}
+            if keep != acks:
+                h.ilo_acks = keep
+                self._save_hosts()
+        live = [i for i in items if not i.get("acked") and not i.get("ignored")]
+        return ("crit" if any(i["level"] == "crit" for i in live) else "warn" if live else "ok"), items
+
+    def ilo_result(self, h: Host) -> tuple:
+        """The check result from the last reading, with acknowledgements as they are now."""
+        d = h.ilo_data or {}
+        worst, items = self.ilo_eval(h, d)
+        h.ilo_items = items
+        if worst == "ok":
+            bits = [ilolib.summary(d)]
+            acked = [i["what"] for i in items if i.get("acked")]
+            if acked:
+                bits.append("acknowledged: " + ", ".join(acked))
+            ignored = [f"{i['what']} {i['detail']}" for i in items if i.get("ignored")]
+            if ignored:
+                bits.append("ignored: " + ", ".join(ignored))
+            return True, d.get("took_ms"), "; ".join(bits)
+        detail = "; ".join(f"{i['what']}: {i['detail']}" for i in items if i["level"] == worst and not i.get("acked") and not i.get("ignored"))
+        return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
+
+    async def ilo_check(self, h: Host, now: float) -> tuple:
+        """An HPE iLO's health (ilo.py), read every ILO_EVERY seconds with its login. A new failure is
+        read again at the next check, and goes red only if it's still there."""
+        if not h.ilo_user or not h.ilo_pass:
+            h.ilo_items = []
+            return False, None, "enter the iLO user name and password (Edit)", "warn"
+        res = h.ilo_result
+        wait = self.ILO_LOGIN_RETRY if h.ilo_err == "login" else self.ILO_EVERY
+        if res is not None and h.ilo_polled and now - h.ilo_polled < wait and not h.ilo_recheck:
+            if not h.ilo_err and h.ilo_data:
+                res = h.ilo_result = self.ilo_result(h)  # acknowledgements may have changed
+            return res
+        was_red = res is not None and not res[0] and len(res) == 3
+        h.ilo_polled = now
+        try:
+            try:
+                d = await ilolib.poll(h.ip or h.host, h.ilo_user, h.ilo_pass, health_tls_context(), timeout=60)
+            except ilolib.IloError:
+                raise
+            except Exception as err:  # noqa: BLE001 - anything unexpected is a failed reading, not a stale "OK"
+                log.warning("%s: reading the iLO failed: %s", h.name, err)
+                raise ilolib.IloError(f"unexpected error ({type(err).__name__})") from err
+        except ilolib.IloError as err:
+            if err.login:
+                h.ilo_err = "login"
+                h.ilo_items = [{"level": "warn", "what": "iLO", "detail": str(err)}]
+                log.warning("%s: the iLO refused the login; trying again in %d minutes", h.name, self.ILO_LOGIN_RETRY // 60)
+                h.ilo_result = (False, None, str(err), "warn")
+            else:
+                h.ilo_err = "read"
+                h.ilo_items = [{"level": "crit", "what": "iLO", "detail": str(err)}]
+                h.ilo_result = (False, None, f"can't read the iLO: {err}")
+            h.ilo_recheck = not was_red and not err.login
+            return h.ilo_result
+        h.ilo_err = None
+        d["read"] = now
+        h.ilo_data = d
+        self.ilo_eval(h, d, prune=True)
+        h.ilo_result = self.ilo_result(h)
+        # Something new has failed: read it again at the next check, and only then does it go red
+        h.ilo_recheck = not h.ilo_result[0] and len(h.ilo_result) == 3 and not was_red
+        return h.ilo_result
+
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
 
@@ -2588,12 +2730,12 @@ class Monitor:
         if old == RED and new == GREEN and s.kind == "syslog":
             await self.dismiss(tag)
             return
-        if new == RED and s.kind == "snmp":
+        if new == RED and s.kind in ("snmp", "ilo"):
             msg = f"{h.name} ({h.ip or h.host}): {s.detail}."
             await self.notify(f"🟠 {h.name}: {str(s.detail).split(';')[0]}", msg, tag, critical=h.critical, cat=cat)
-            await self.persist(tag, f"Rollcall: {h.name} SNMP", msg)
+            await self.persist(tag, f"Rollcall: {h.name} {'SNMP' if s.kind == 'snmp' else 'iLO'}", msg)
             return
-        if old == RED and new == GREEN and s.kind == "snmp":
+        if old == RED and new == GREEN and s.kind in ("snmp", "ilo"):
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
                 await self.notify(f"🟢 {h.name}: OK again", f"{h.name}: {s.detail}.", tag, cat=cat)
@@ -2631,7 +2773,7 @@ class Monitor:
         if s.kind == "agent":
             k = s.key.removeprefix("agent_")
             return "backups" if k == "backups" else "security" if k in SECURITY_CHECKS else "agents"
-        return "network" if s.kind in ("snmp", "syslog", "vpn") else "services"
+        return "network" if s.kind in ("snmp", "syslog", "vpn", "ilo") else "services"
 
     async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False,
                      level: str | None = None, cat: str | None = None) -> None:
@@ -3022,6 +3164,7 @@ class Monitor:
                           "size_mb": a["size_mb"] if isinstance(a.get("size_mb"), (int, float)) and a["size_mb"] >= 0 else 0,
                           "arch": str(a.get("arch") or "")[:12], "scope": "user" if a.get("scope") == "user" else "machine",
                           **({"code": str(a["code"])[:100]} if a.get("code") else {}),
+                          **({"src": str(a["src"])[:150], "srcver": str(a.get("srcver") or "")[:60]} if a.get("src") else {}),
                           **({"available": str(a["available"])[:60]} if a.get("available") else {})})
             if len(clean) >= 5000:
                 break
@@ -3128,14 +3271,154 @@ class Monitor:
                 self.winget_info = {**self.winget_info, "error": str(err)[:200]}
             await asyncio.sleep(3600)
 
-    def software_search(self, q: str) -> list:
+    # -- known vulnerabilities (vulns.py) --------------------------------------
+    def _vuln_key(self, h: Host) -> str | None:
+        r = h.agent_report or {}
+        return vulnlib.os_key(r.get("os_id"), r.get("os_version_id")) if r.get("os_family") == "linux" else None
+
+    def vuln_findings(self, h: Host) -> list | None:
+        """This computer's known vulnerabilities at or above the score (or known to be exploited), or
+        None when it can't be checked (turned off, an older agent, a distro that isn't covered, no data)."""
+        r = h.agent_report or {}
+        if not self.opts.get("vuln_checks", True) or not h.agent_id or not r:
+            return None
+        f, ms, mode = self.vulnfeeds, float(self.opts.get("vuln_min_score", 9)), str(self.opts.get("vuln_linux_source") or "local")
+        sw = self.software(h.agent_id)
+        key = (r.get("os_family"), r.get("os_build"), r.get("os_id"), r.get("os_version_id"), sw.get("hash"), sw.get("updated"), f.version, ms, mode)
+        hit = self._vf.get(h.agent_id)
+        if hit and hit[0] == key:
+            return hit[1]
+        out = None
+        if r.get("os_family") == "linux":
+            k = self._vuln_key(h)
+            if k and mode != "off" and (k in f.osv or k in f.covered) and any(a.get("src") for a in sw.get("apps") or []):
+                out = vulnlib.linux_findings(sw["apps"], k, f.osv, f.kev, ms)
+        else:
+            b = str(r.get("os_build") or "")
+            if f.msrc and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b) and b.rsplit(".", 1)[0] in f.msrc:
+                out = vulnlib.windows_findings(b, f.msrc, f.kev, ms)
+        self._vf[h.agent_id] = (key, out)
+        return out
+
+    def _vuln_why_not(self, h: Host) -> str:
+        """Why a computer isn't checked, for the check's detail."""
+        r, f = h.agent_report or {}, self.vulnfeeds
+        if r.get("os_family") == "linux":
+            k = self._vuln_key(h)
+            if not r.get("os_id"):
+                return "Not checked yet: needs Linux agent 1.0.20 or later"
+            if not k:
+                return "Not checked: Rollcall has vulnerability data for Debian, Ubuntu, AlmaLinux and Rocky Linux only"
+            if not any(a.get("src") for a in self.software(h.agent_id).get("apps") or []):
+                return "Waiting for the agent to send its package list"
+            return (f.info.get("errors") or {}).get("OSV") and f"Linux vulnerability data couldn't be downloaded ({f.info['errors']['OSV']})" \
+                or "Waiting for the Linux vulnerability data to download (checked hourly)"
+        b = str(r.get("os_build") or "")
+        if not f.msrc:
+            err = (f.info.get("errors") or {}).get("Microsoft")
+            return f"Microsoft's update data couldn't be downloaded ({err})" if err else "Waiting for Microsoft's update data to download"
+        if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b):
+            return "Not checked: the agent didn't report the Windows build with its update revision"
+        return (f"Not checked: Microsoft hasn't released security updates for this Windows version (build {b.rsplit('.', 1)[0]}) "
+                "in the last 12 months, so it's probably out of support")
+
+    def vuln_check(self, h: Host) -> dict | None:
+        """The Vulnerabilities agent check: amber at or above the score, red if any is known to be exploited."""
+        if not self.opts.get("vuln_checks", True):
+            return None
+        r = h.agent_report or {}
+        if r.get("os_family") == "linux" and str(self.opts.get("vuln_linux_source") or "local") == "off":
+            return None
+        found = self.vuln_findings(h)
+        if found is None:
+            return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": self._vuln_why_not(h), "ids": []}
+        level, detail = vulnlib.summarise(found, float(self.opts.get("vuln_min_score", 9)))
+        return {"key": "vulns", "label": "Vulnerabilities", "detail": detail, "ids": sorted({x["cve"] for x in found}),
+                "level": {"ok": agentlib.OK, "warn": agentlib.WARN, "crit": agentlib.CRIT}[level]}
+
+    def vulns_by_app(self, h: Host) -> dict:
+        """{index into the software list: [{"cve", "score", "exploited", "fixed"}]} for Linux packages."""
+        found = self.vuln_findings(h) or []
+        if not found or (h.agent_report or {}).get("os_family") != "linux":
+            return {}
+        by_src: dict = {}
+        for x in found:
+            by_src.setdefault(x["what"], []).append({k: x[k] for k in ("cve", "score", "exploited", "fixed")})
+        inst = {x["what"]: x["installed"] for x in found}  # the version that was checked (the newest installed)
+        out = {}
+        for i, a in enumerate(self.software(h.agent_id).get("apps") or []):
+            for n in (a.get("src"), a.get("name")):
+                if n in by_src and (a.get("srcver") or a.get("version")) == inst[n]:
+                    out[i] = by_src[n]
+                    break
+        return out
+
+    def vulns_view(self, h: Host) -> dict | None:
+        """For the Software tab: everything found, and where the data came from."""
+        if not self.opts.get("vuln_checks", True) or not h.agent_id:
+            return None
+        found = self.vuln_findings(h)
+        return {"found": sorted(found or [], key=lambda f: (not f["exploited"], -(f["score"] or 0), f["cve"]))[:500],
+                "checked": found is not None, "why_not": None if found is not None else self._vuln_why_not(h),
+                "min_score": int(self.opts.get("vuln_min_score", 9)), "linux_source": str(self.opts.get("vuln_linux_source") or "local"),
+                "info": self.vulnfeeds.info}
+
+    def _vuln_wanted(self, mode: str) -> tuple[set, list]:
+        """The Linux releases the agents run, and (online) every package and version to ask OSV about."""
+        wanted, queries = set(), set()
+        for h in list(self.hosts.values()):
+            k = self._vuln_key(h) if h.agent_id else None
+            if not k:
+                continue
+            wanted.add(k)
+            if mode == "online":
+                rpm = k.split(":")[0] in vulnlib.RPM_DISTROS
+                for a in self.software(h.agent_id).get("apps") or []:
+                    if a.get("src") and (a.get("srcver") or a.get("version")):
+                        queries.add((k, a["src"], a.get("srcver") or a["version"]))
+                        if rpm and a.get("name") and a["name"] != a["src"]:  # RPM advisories may name binary packages
+                            queries.add((k, a["name"], a.get("srcver") or a["version"]))
+        if len(queries) > 50000:
+            log.warning("Vulnerabilities: %d packages to ask OSV about; only the first 50,000 are checked", len(queries))
+        return wanted, sorted(queries)[:50000]
+
+    async def vulns_loop(self, first_wait: float = 40, reeval: bool = False) -> None:
+        """Keep the vulnerability data about a day old (each source is only fetched when it's due),
+        and work every computer out again when it changes."""
+        await asyncio.sleep(first_wait)
+        while True:
+            try:
+                if self.opts.get("vuln_checks", True):
+                    mode = str(self.opts.get("vuln_linux_source") or "local")
+                    wanted, queries = self._vuln_wanted(mode)
+                    async with ClientSession(timeout=ClientTimeout(total=3600, sock_connect=30, sock_read=300)) as session:
+                        changed = await self.vulnfeeds.refresh(session, time.time(), mode, wanted if mode == "local" else set(), queries)
+                    if changed or reeval:
+                        self._vf.clear()
+                        for h in list(self.hosts.values()):
+                            if h.agent_id:
+                                await self.reevaluate(h)
+                    reeval = False
+                elif reeval:
+                    for h in list(self.hosts.values()):
+                        if h.agent_id:
+                            await self.reevaluate(h)
+                    reeval = False
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                log.warning("Vulnerabilities: update failed (%s); trying again in an hour", err)
+            await asyncio.sleep(3600)
+
+    def software_search(self, q: str, include_security: bool = True) -> list:
         """Every computer with software whose name or publisher contains q."""
         q, out = q.strip().lower(), []
         for h in self.hosts.values():
             sw = self.software(h.agent_id) if h.agent_id else {}
             newer = self.software_newer(h.agent_id) if sw else {}
-            hits = [{**a, "newer": (newer.get(i) or {}).get("version")} for i, a in enumerate(sw.get("apps") or [])
-                    if q in a["name"].lower() or q in a["publisher"].lower()]
+            vul = self.vulns_by_app(h) if sw and include_security else {}
+            hits = [{**a, "newer": (newer.get(i) or {}).get("version"), **({"cves": len(vul[i])} if i in vul else {})}
+                    for i, a in enumerate(sw.get("apps") or []) if q in a["name"].lower() or q in a["publisher"].lower()]
             if hits:
                 out.append({"key": h.key, "name": h.name, "updated": sw.get("updated"), "apps": hits[:50]})
         return sorted(out, key=lambda x: x["name"].lower())
@@ -3586,6 +3869,9 @@ class Monitor:
         for i in h.snmp_items:
             if i.get("acked"):
                 out.append({"type": "snmp", "key": i["what"], "label": i["what"], "detail": i["detail"]})
+        for i in h.ilo_items:
+            if i.get("acked"):
+                out.append({"type": "ilo", "key": i["what"], "label": "iLO: " + i["what"], "detail": i["detail"]})
         hidden = (self.agent_settings.get("ack_hidden") or {}).get(h.key) or {}
         for a in out:
             if f"{a['type']}:{a['key']}" in hidden and hidden[f"{a['type']}:{a['key']}"] == self._ack_mark(a):
@@ -3636,6 +3922,8 @@ class Monitor:
             if check in TIME_ACK_KINDS or check == "agent" or not sv or sv.status not in (AMBER, RED):
                 raise ValueError("that check has nothing to acknowledge")
             acks[check] = {"status": sv.status, "at": time.time(), "by": who or "", "detail": sv.detail[:300]}
+            if check == "vulns":  # a vulnerability that isn't in this list alerts again
+                acks[check]["ids"] = sorted({f["cve"] for f in self.vuln_findings(h) or []})
         self._save_agent_settings()
         log.info("%s: %s %s%s", h.name, "un-acknowledged" if undo else "acknowledged", check, f" by {who}" if who else "")
         await self.reevaluate(h)
@@ -3887,6 +4175,9 @@ class Monitor:
         checks = [{"key": "agent", "label": "Agent", "confirm": False, "detail": agent_detail,
                    "level": agentlib.WARN if slow_limit and run_s > slow_limit else agentlib.OK}]
         checks += result["checks"]
+        vc = self.vuln_check(h)
+        if vc:
+            checks.append(vc)
         new_list = []
         for c in checks:
             key = f"agent_{c['key']}"
@@ -3933,6 +4224,11 @@ class Monitor:
             # Acknowledged (Overview or details): OK while it stays as it is or better. Worse, or cleared,
             # and the acknowledgement goes, so it alerts again (now, or when it comes back).
             ack = (self.agent_settings["hosts"].get(h.key) or {}).get("check_acks", {}).get(c["key"])
+            if ack and c["key"] == "vulns" and "ids" in ack and set(c.get("ids") or []) - set(ack["ids"]):
+                ack = None  # a new vulnerability since it was acknowledged: it alerts again
+                if not restoring:
+                    self.agent_settings["hosts"][h.key]["check_acks"].pop("vulns", None)
+                    self._save_agent_settings()
             sv.acked = False
             if ack:
                 if status in (AMBER, RED) and (ack.get("status") == RED or status == AMBER):
@@ -4206,12 +4502,14 @@ class Monitor:
             settings["admin_changes"] = hs.get("admins_changes") or []
         sw = self.software(h.agent_id)
         if sw:
-            newer = self.software_newer(h.agent_id)
-            sw = {**sw, "apps": [{**a, "newer": newer[i]["version"]} if i in newer else a for i, a in enumerate(sw.get("apps") or [])],
+            newer, vul = self.software_newer(h.agent_id), self.vulns_by_app(h) if include_security else {}
+            sw = {**sw, "apps": [{**a, **({"newer": newer[i]["version"]} if i in newer else {}), **({"vulns": vul[i]} if i in vul else {})}
+                                 for i, a in enumerate(sw.get("apps") or [])],
                   "updates_from": "package manager" if (self.agents.agents.get(h.agent_id) or {}).get("os_family") == "linux"
                   else ("winget" if self.winget else None), "winget": self.winget_info}
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
                 "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first", "updates_from", "winget")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
+                "vulns": self.vulns_view(h) if include_security else None,
                 "received": h.agent_seen, "security_visible": include_security, "secrets": secrets_out,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN,
@@ -4333,6 +4631,7 @@ class Monitor:
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
+                "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
@@ -4345,7 +4644,8 @@ class Monitor:
                     "uptime_24h": self.uptime_24h(svc_key(h, s)),
                     "last_check": s.last_check, "last_change": s.last_change,
                     "agent": s.kind == "agent", **({"acked": True} if s.acked else {}),
-                    **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") and not i.get("ignored") for i in h.snmp_items)} if s.kind == "snmp" else {}),
+                    **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") and not i.get("ignored") for i in h.snmp_items)} if s.kind == "snmp" else
+                       {"ackable": any(i["what"] != "iLO" and not i.get("acked") and not i.get("ignored") for i in h.ilo_items)} if s.kind == "ilo" else {}),
                 } for s in h.services + h.agent_checks],
                 "acks": self.acks_summary(h),
                 "agent": self._agent_summary(h),
@@ -4808,7 +5108,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         q = (req.query.get("q") or "").strip()
         if len(q) < 2 or len(q) > 100:
             return web.json_response({"error": "search for at least 2 characters"}, status=400)
-        return web.json_response({"results": monitor.software_search(q)})
+        user = await access.who(req)
+        return web.json_response({"results": monitor.software_search(q, include_security=user["can_edit"])})
 
     async def agent_secret_scan(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -5360,6 +5661,72 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 h.next_due = 0  # re-check so the status updates
         return web.json_response({"acks": h.snmp_acks})
 
+    def _ilo_redo(h):
+        """Re-judge the last iLO reading now (after an acknowledgement or ignore) and re-check soon."""
+        if h.ilo_data and not h.ilo_err:
+            h.ilo_result = monitor.ilo_result(h)
+            svc = next((s for s in h.services if s.kind == "ilo"), None)
+            if svc and svc.status != UNKNOWN:
+                h.next_due = 0
+
+    async def host_ilo(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        svc = next((s for s in h.services if s.kind == "ilo"), None)
+        return web.json_response({"name": h.name, "polled": h.ilo_polled, "data": h.ilo_data, "items": h.ilo_items,
+                                  "ignore": h.ilo_ignore, "every": monitor.ILO_EVERY,
+                                  "status": svc.status if svc else None, "detail": svc.detail if svc else None})
+
+    async def host_ilo_ack(req):
+        """Acknowledge an iLO problem (e.g. a drive that's on order): it stops counting while it's there
+        and no worse. {what, undo}, or {all: true} for everything it shows now (the Overview)."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        what = str(body.get("what") or "")
+        acks = dict(h.ilo_acks or {})
+        user = await access.who(req)
+        if body.get("all"):
+            for i in h.ilo_items:
+                if i["what"] != "iLO" and not i.get("acked") and not i.get("ignored"):
+                    acks[i["what"]] = i["level"]
+            log.info("%s: all iLO problems acknowledged by %s", h.name, user["display"] or "someone")
+        elif body.get("undo"):
+            acks.pop(what, None)
+            log.info("%s: iLO %s no longer acknowledged (%s)", h.name, what, user["display"] or "someone")
+        else:
+            item = next((i for i in h.ilo_items if i["what"] == what and what != "iLO"), None)
+            if not item:
+                return web.json_response({"error": "That problem has cleared"}, status=400)
+            acks[what] = item["level"]
+            log.info("%s: iLO %s (%s) acknowledged by %s", h.name, what, item["detail"], user["display"] or "someone")
+        h.ilo_acks = acks
+        monitor._save_hosts()
+        _ilo_redo(h)
+        return web.json_response({"acks": h.ilo_acks})
+
+    async def host_ilo_ignore(req):
+        """Never alert on an iLO problem on this server (e.g. power redundancy on a server that's only
+        ever had one power supply), or stop ignoring it. {what, ignore}"""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        what = str(body.get("what") or "").strip()[:100]
+        if not what or what == "iLO":
+            return web.json_response({"error": "That can't be ignored"}, status=400)
+        keep = [x for x in h.ilo_ignore if x.lower() != what.lower()]
+        h.ilo_ignore = keep + [what] if body.get("ignore") else keep
+        if body.get("ignore"):
+            h.ilo_acks = {k: v for k, v in (h.ilo_acks or {}).items() if k.lower() != what.lower()}
+        monitor._save_hosts()
+        user = await access.who(req)
+        log.info("%s: iLO %s %s by %s", h.name, what, "ignored" if body.get("ignore") else "no longer ignored", user["display"] or "someone")
+        _ilo_redo(h)
+        return web.json_response({"ignore": h.ilo_ignore})
+
     async def host_snmp_ack(req):
         """Acknowledge a restart (e.g. a planned one): it stops showing amber. A later restart still shows."""
         h = monitor.hosts.get(req.match_info["key"])
@@ -5592,6 +5959,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/snmp/ack", editor_only(host_snmp_ack_item))
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
+    app.router.add_get("/api/hosts/{key}/ilo", host_ilo)
+    app.router.add_post("/api/hosts/{key}/ilo/ack", editor_only(host_ilo_ack))
+    app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
@@ -6249,6 +6619,7 @@ async def main() -> None:
         log.info("Schedules use the %s time zone", TZ)
         await monitor.attach_agents(AgentStore(AGENTS_PATH, AGENT_REPORTS))
         monitor._winget_task = asyncio.create_task(monitor.winget_loop())
+        monitor._vulns_task = asyncio.create_task(monitor.vulns_loop())
         access = Access(opts, ha)
         if access.enabled:
             log.info("Changes allowed for HA admins%s", f" and {', '.join(sorted(access.editors))}"

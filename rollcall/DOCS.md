@@ -27,14 +27,15 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding computers, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, linked Home Assistant devices
+4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, linked Home Assistant devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent)
-7. [Agent addresses and updates](#agent-addresses-and-updates)
-8. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
-9. [Administration](#administration): settings, who can change things, export and import, security
-10. [Reference](#reference): every option, ports, sensors and events, files
-11. [Troubleshooting](#troubleshooting)
+7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
+8. [Agent addresses and updates](#agent-addresses-and-updates)
+9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
+10. [Administration](#administration): settings, who can change things, export and import, security
+11. [Reference](#reference): every option, ports, sensors and events, files
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -299,6 +300,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `unifi-os` | UniFi OS console: UniFi OS console, e.g. Cloud Key or UDM | https:443/ |
 | `unifi-os-server` | UniFi OS Server: UniFi OS Server, self-hosted | UniFi https:11443/ · Inform 8080 |
 | `idrac` (or `ilo`, `bmc`, `ipmi`) | iDRAC / BMC: Dell iDRAC or another server management controller | https:443/ |
+| `hpilo` (or `ilo3`, `ilo4`) | HPE iLO health: HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login) | health, with an iLO login (see [HPE iLO](#hpe-ilo)) |
 | `pihole` (or `pi-hole`) | Pi-hole | DNS 53 · Pi-hole http:80/admin/ |
 | `adguard` | AdGuard Home | DNS 53 · AdGuard http:80/ |
 | `npm` | Nginx Proxy Manager | http:81/ |
@@ -541,6 +543,20 @@ The **Syslog** check goes red, and notifies, when:
 
 It turns green again when the line registers. Tip: add `getOptRdata` to the adapter's **Never alert on these words**, because its mDNS service logs that harmless error constantly.
 
+### HPE iLO
+
+For HPE servers with **iLO 3** or **iLO 4**, Rollcall can log in to the iLO and read the server's health: each drive, fans, temperatures and power supplies. Add the iLO as a device, using the iLO's own address, tick **HPE iLO health** (`hpilo`) and enter an iLO user name and password. In the iLO, create a user with only the **Login** privilege: Rollcall only reads.
+
+- It's read every 5 minutes over HTTPS, using HPE's RIBCL interface (an HTTPS POST to `/ribcl`), which both iLO 3 and iLO 4 have. The iLO's self-signed certificate and older TLS are accepted.
+- An **iLO** tab in Details shows the power state, inlet temperature, each problem found, then:
+  - **Storage:** each Smart Array controller with its cache, each logical drive with its RAID level, and each physical drive. iLO 4 reports drives when HPE's Agentless Management Service is installed on the server (it comes with HPE's Service Pack for ProLiant). iLO 3 lists drive bays on servers that have a drive backplane.
+  - power supplies, fans and temperature sensors with their limits, and the iLO's own **Health at a glance**.
+- **Red:** a failed drive, fan or power supply, a controller or other part that has failed, or a temperature at its critical limit. Like SNMP, a new failure is read again at the next check and goes red (and notifies) only if it's still there.
+- **Amber:** a drive predicting failure or rebuilding, a degraded logical drive, a temperature over its caution limit, fans or power supplies no longer redundant, memory or processors degraded, and the server powered off. A server with a single power supply is never counted as not redundant.
+- **Acknowledge** and **Ignore** work as for SNMP: acknowledged, a problem stops counting while it's there and no worse; ignored, it never alerts on that server.
+- If the iLO turns the user name or password down, the check goes amber and Rollcall waits 30 minutes before trying again, so the iLO's log doesn't fill with failed logins.
+- iLO 2 and earlier, and iLO 5 and later, aren't supported by this check. The `idrac` preset (or `ilo`) still checks that any management controller's web page answers.
+
 ### Linked Home Assistant devices
 
 If Home Assistant already has an integration for a device, link its Home Assistant device and Rollcall reads all of the integration's entities, with no extra passwords. In **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. To remove it, choose **Unlink**.
@@ -615,6 +631,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Disk** | A volume under `agent_disk_warn` (15%) free | Under `agent_disk_crit` (5%) free |
 | **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row) |
 | **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off). The details say what asked for the restart (Windows Update, component servicing, Configuration Manager, files waiting to be replaced) and what was installed since the last one | |
+| **Vulnerabilities** | A known vulnerability in Windows scoring `vuln_min_score` (9) or more that a later Windows update fixes (see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
 | **IIS** | | An app pool or site stopped (two reports) |
 | **Storage** | A disk predicting failure, or a RAID volume rebuilding | A failed disk, a degraded mirror, RAID-5 or Storage Space, a missing dynamic disk, or an unhealthy disk (two reports) |
 | **Hardware** (Dell OMSA) | Non-Critical chassis health | Critical chassis health |
@@ -993,6 +1010,7 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 | **Services** | A failed systemd unit | A Docker container that should be up is stopped, unhealthy or restarting, or docker, containerd, ssh or cron stopped (two reports in a row) |
 | **Storage** | An array rebuilding | A degraded software RAID (mdadm, from `/proc/mdstat`) array or ZFS pool, or a failed member |
 | **Updates** | Reboot required, security updates waiting with nothing installed for a week, or nothing installed for `agent_patch_days` | |
+| **Vulnerabilities** | A known vulnerability scoring `vuln_min_score` (9) or more in a package that a newer version fixes (Debian, Ubuntu, AlmaLinux and Rocky Linux; agent 1.0.20 or later; see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
 | **Immich** | A job queue paused or with failed jobs, or a newer Immich release out | Immich's API not answering (two reports) |
 | **Security** | Notable events in 24 h | `agent_failed_logons` or more failed SSH/sudo logins in one report |
 | **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
@@ -1004,6 +1022,29 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 - **Immich updates:** when a newer release is out, the Immich check turns amber ("update available: v2.2.3 (running v2.1.0)"), with one notification per release linking to its release notes. The newest release comes from Immich's own version check if the API key can read it (`systemMetadata.read`, and **Version check** on in Immich's Administration → Settings), otherwise from GitHub, at most every 6 hours. To stop flagging them, use **Ignore** next to the version in Details (`update:immich`).
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors, any critical journal entry, users created or deleted, and users added to groups such as `sudo` or `docker`. SSH logins are listed in Details but not alerted.
 - **Administrators** (Security tab, admins only, agent 1.0.11 or later): who can act as root. That's members of the `sudo`, `wheel` and `admin` groups (including users whose main group it is), other accounts with uid 0, and users and `%groups` given rules in sudoers (marked "some commands" if a rule doesn't allow everything). Additions and removals are tracked as on Windows.
+
+---
+
+## Known vulnerabilities
+
+Computers with an agent get a **Vulnerabilities** check: known vulnerabilities (CVEs) in what's installed, from public data the add-on downloads once a day. Only vulnerabilities that an update fixes count, so each one has something to do about it.
+
+- **Amber:** a vulnerability scoring `vuln_min_score` or more out of 10 (its CVSS base score; 9 by default, which is "critical"). Amber isn't notified, like other amber checks.
+- **Red, and notified:** any vulnerability on CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, or that Microsoft says is being exploited, whatever its score.
+- The **Software** tab in Details lists each one, worst first: the CVE (linked to cve.org), its score, what it's in, the installed version and the version or Windows build that fixes it. Vulnerable packages are marked in the list, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
+- **Acknowledge** keeps it green while the list stays the same; a new vulnerability alerts again. It clears by itself once the update is installed.
+- Like other security details, the list is only shown to Home Assistant admins and editors; others see the check's colour.
+- Turn it off with `vuln_checks`. Its alerts are emailed under **Security**.
+
+**Windows** (any agent version): Microsoft publishes, for each CVE, the Windows build that fixes it, e.g. `10.0.17763.6414`. Rollcall downloads the last 12 months of Microsoft's security update data (the MSRC API, `api.msrc.microsoft.com`) and compares each computer's build, which the agent already reports with its update revision. A computer further behind than 12 months is flagged by the **Updates** check anyway; a Windows version Microsoft hasn't updated in that time is shown as probably out of support. Only Windows itself is checked: other programs (including Office, SQL Server and Exchange) aren't yet. Computers that get hotpatch updates are compared with the monthly updates, so they may show fixes as missing until their next baseline update.
+
+**Linux** (Linux agent 1.0.20 or later, which sends each package's source package and the distro's release): Debian, Ubuntu (not the Pro or FIPS streams), AlmaLinux and Rocky Linux, using [OSV.dev](https://osv.dev)'s data. A package counts when a newer version fixes a vulnerability, not for issues the distro hasn't fixed. Where several versions of a package are installed (e.g. an old kernel left beside the running one), the newest counts. Scores come from the CVSS 3 vector in OSV's record; a vulnerability without one counts only if it's known to be exploited. `vuln_linux_source` chooses where the matching is done:
+
+- `local` (the default): the add-on downloads OSV's data for each distro your agents run, once a day (`storage.googleapis.com`), and matches it itself. Nothing about your computers is sent anywhere. These downloads are larger, and building the index takes a little while on slow hardware.
+- `online`: the add-on sends OSV.dev's API (`api.osv.dev`) one combined list of the package names and versions across all your Linux computers, once a day and when a list changes, and fetches the details of what applies. No computer names, addresses or which computer has which package are sent. Downloads are small.
+- `off`: Linux computers aren't checked.
+
+The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Software tab says so, and the data already downloaded is used until it can.
 
 ---
 
@@ -1183,7 +1224,7 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 
 **Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
 
-- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP passwords. The email password and Microsoft 365 client secret are left out.
+- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP and iLO passwords. The email password and Microsoft 365 client secret are left out.
 - **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
 
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.
@@ -1261,6 +1302,9 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
+| `vuln_checks` | true | The **Vulnerabilities** check on computers with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
+| `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
+| `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
 | `agent_secret_scan` | off | Which computers look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
 | `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
@@ -1342,6 +1386,7 @@ In the add-on's data folder (included in Home Assistant backups):
 | `views.json` | Tabs |
 | `agents.json` | Agent approvals, token hashes and the enrolment key |
 | `agent_settings.json` | Ignores, thresholds, acknowledgements, agent addresses |
+| `vulns/` | Downloaded vulnerability data (Microsoft, CISA, OSV.dev), refreshed daily |
 | `secrets/` | Where each agent's password scan found passwords: path, line, kind, setting name and length (never the passwords) |
 | `icons/` | Uploaded icons |
 | SQLite database | Uptime history and syslog messages |
@@ -1360,6 +1405,8 @@ rollcall/              the add-on (its internal ID is ping_monitor)
     ├── agents.py      agent enrolment, tokens and report evaluation
     ├── snmp.py        SNMP client and device readers
     ├── syslogrx.py, syslogreadings.py   syslog receiver and readings
+    ├── ilo.py         HPE iLO health over RIBCL
+    ├── vulns.py       known vulnerabilities: Microsoft, OSV.dev and CISA data
     ├── certcheck.py, sipcheck.py, hadevice.py, msi.py
     ├── agent/PingMonitorAgent.ps1       the Windows agent
     ├── agent/pingmonitor-agent.py       the Linux agent

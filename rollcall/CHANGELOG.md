@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.84.0 - 2026-11-16
+
+### Added
+- **Vulnerability alerts.** Computers with an agent get a **Vulnerabilities** check: known vulnerabilities (CVEs) that an update fixes, from public data downloaded once a day ([#10](https://github.com/shoey79/rollcall/issues/10), thanks to [tomvining](https://github.com/tomvining) for the request).
+  - **Windows:** each computer's build is compared with Microsoft's security update data for the last 12 months, which lists the build that fixes each CVE. Works with every Windows agent version.
+  - **Linux:** Debian, Ubuntu, AlmaLinux and Rocky Linux packages are checked against OSV.dev's data. Needs Linux agent 1.0.20.
+  - Amber for a vulnerability scoring `vuln_min_score` (9) or more; red, and notified, for one on CISA's Known Exploited Vulnerabilities list or that Microsoft says is being exploited, whatever its score.
+  - The **Software** tab lists each one with its score, what it's in and the version that fixes it, and marks vulnerable packages; **Find software** marks them too. **Acknowledge** keeps it green until a new vulnerability appears.
+  - New options: `vuln_checks`, `vuln_min_score`, and `vuln_linux_source`: `local` (download each distro's data and match it in the add-on, so nothing about your computers is sent anywhere), `online` (send OSV.dev one combined list of package names and versions) or `off`.
+- **HPE iLO 3 and iLO 4 health.** The new **HPE iLO health** preset (`hpilo`) logs in to the iLO with a read-only user and reads each drive, fans, temperatures and power supplies every 5 minutes. A failed drive, fan or power supply goes red; a drive predicting failure or rebuilding, a degraded logical drive or a temperature over its caution limit goes amber. An **iLO** tab in Details shows it all, with **Acknowledge** and **Ignore** as for SNMP ([#11](https://github.com/shoey79/rollcall/issues/11), thanks to [tomvining](https://github.com/tomvining) for the request).
+
+### Changed
+- Linux agent 1.0.20 also sends the distro's ID and release, and each package's source package, for the vulnerability check. Package lists are sent again once after the update.
+
 ## 1.83.0 - 2026-11-16
 
 ### Added
