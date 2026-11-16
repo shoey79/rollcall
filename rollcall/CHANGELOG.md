@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.83.0 - 2026-11-16
+
+### Added
+- **Ignore an SNMP problem on one device.** **Ignore** next to a problem in a device's SNMP **Checks** stops it ever alerting on that device, e.g. **Server: powered off** on the iDRAC of a server that's only on some of the time. Unlike **Acknowledge**, it stays ignored when the problem clears and comes back. Ignored problems stay listed, greyed out, with **Stop ignoring**; other devices and other problems still alert.
+
 ## 1.82.2 - 2026-11-16
 
 ### Fixed
