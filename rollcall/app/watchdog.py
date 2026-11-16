@@ -63,7 +63,8 @@ class QuietDisconnects(logging.Filter):
 
     def __init__(self, log: logging.Logger, every: float = 60.0):
         super().__init__()
-        self.log, self.every, self.last, self.count = log, every, 0.0, 0
+        self.log, self.every, self.count = log, every, 0
+        self.last: float | None = None  # not 0: the clock (seconds since boot) can be under a minute
 
     def filter(self, record: logging.LogRecord) -> bool:
         exc = record.exc_info[1] if record.exc_info else None
@@ -71,7 +72,7 @@ class QuietDisconnects(logging.Filter):
             return True
         self.count += 1
         now = time.monotonic()
-        if now - self.last >= self.every:
+        if self.last is None or now - self.last >= self.every:
             self.last = now
             n, self.count = self.count, 0
             self.log.warning("%s closed the connection before Rollcall answered (it gave up waiting, or the "

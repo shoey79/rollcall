@@ -37,7 +37,8 @@ def test_a_blocked_loop_is_reported_with_where_it_is_stuck(caplog):
     assert any(m.startswith("Rollcall was held up for") and "answering again" in m for m in msgs), msgs
 
 
-def test_dropped_connections_are_one_line(caplog):
+def test_dropped_connections_are_one_line(caplog, monkeypatch):
+    monkeypatch.setattr(W.time, "monotonic", lambda: 12.0)  # a machine started 12 s ago (e.g. a fresh CI runner)
     log = logging.getLogger("test_quiet")
     server = logging.getLogger("test_aiohttp_server")
     server.addFilter(W.QuietDisconnects(log))
