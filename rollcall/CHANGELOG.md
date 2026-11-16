@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.86.0 - 2026-11-16
+
+### Added
+- **Time check** on domain-joined Windows computers (Windows agent 1.0.46). The agent measures the clock against the domain with `w32tm /stripchart`: members against the domain controller they use, other DCs against the PDC emulator. **Amber** at 60 s out or when Windows Time isn't syncing from anything, **red** at 240 s (Kerberos sign-ins fail at 5 minutes); both are settings (`agent_time_warn_seconds`, `agent_time_crit_seconds`). The PDC emulator is checked for a real time source instead. If the DC can't be reached it says so rather than alerting. On the **Roles** tab.
+- **Rollcall's log in the dashboard:** **Manage → Log** shows the add-on's own log (the same as Settings → Apps → Rollcall → Log), with warnings-and-errors and errors-only views, search, follow and download. Passwords, tokens and keys are masked.
+
+### Changed
+- **DFS Replication flags any DFS-R error**, not only the ones it had a rule for: e.g. 6404, a replicated folder's local path invalid or unreachable. Errors in the last 24 hours turn the check amber until the folder is back to normal or the error stops recurring, listed with how often they happened; warnings are listed without alerting. An error can be ignored by its ID (Windows agent 1.0.46).
+- **The agent summary chip says what it counts:** "Windows ✓ all 14 OK" when everything's fine, and "Windows: 14 of 16 OK" next to the chips for the two that need attention (was "Windows ✓ 14 checks" and "Windows: 14 OK").
+
 ## 1.85.3 - 2026-11-16
 
 ### Fixed

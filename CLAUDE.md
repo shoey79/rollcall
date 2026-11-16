@@ -23,27 +23,10 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Overview: the agent summary chip should say what it counts. All OK: "Windows ✓ all 14 OK" (was "Windows ✓ 14
-  checks"); with problems: "Windows: 14 of 16 OK" (was "Windows: 14 OK", which didn't count the problem chips beside
-  it). Same for Linux. In `svcChips()` in `rollcall/app/web/index.html`.
+(none)
 
 ## Requested features (not started)
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- Time check on domain-joined Windows computers (Windows agent): measure the clock offset with `w32tm /stripchart`
-  against the DC in use (members) or the PDC emulator (other DCs). On the PDC emulator, check Windows Time syncs
-  from a real source, not "Local CMOS Clock" / "Free-running System Clock". Amber over 1 minute out or not syncing,
-  red over 4 minutes (Kerberos fails at 5); both thresholds as settings. Show offset, the DC compared against and
-  the sync source; if the DC can't be reached, say so rather than going red. Skip computers not in a domain.
-- Add-on log in the dashboard (Manage menu), so it doesn't need Settings > Apps > Rollcall > Log. The add-on
-  already has `hassio_api`, so read its own log from the Supervisor (`GET /addons/self/logs`, which covers before
-  the last restart too); fall back to an in-memory buffer of recent lines if that's refused. Admins only; filter
-  by level (warnings and errors) and search; refresh/follow; download. Mask anything secret-looking.
-- DFS Replication check (1.85.0) misses errors it doesn't know by ID: it only reads 2104, 2212-2214, 4012, 46xx and
-  500x, so e.g. 6404 (a replicated folder's local path is invalid or can't be reached) doesn't flag. Also read every
-  Error-level event in the DFS Replication log (last 24 h; Warning-level too, shown but not alerting), name the
-  common ones (6404 and other 64xx config/path errors, 4302/4304 sharing violations, 4202/4204 staging space,
-  2010/2012 volume and database problems) and show the rest with their ID and first line. Amber for an error in
-  the last 24 h until the folder is back to normal or the same ID hasn't recurred for a day; keep the existing red
-  cases. Ignorable by event ID per server (`dfsr:event:6404`). Needs a Windows agent version.
+(none)
