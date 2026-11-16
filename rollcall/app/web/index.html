@@ -363,7 +363,7 @@ body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!im
 .ackd{border-top:1px solid var(--line)}.ackd summary{cursor:pointer;padding:10px 14px;font-size:13px;color:var(--muted);font-weight:600}
 .ackd summary small{font-weight:400;margin-left:6px}
 .ackrow{display:flex;align-items:center;gap:10px;padding:8px 14px 8px 22px;border-top:1px solid var(--line);font-size:13px;opacity:.85}
-.ackrow .what{flex:1;min-width:0}.ackrow.gone{opacity:.55}
+.ackrow .what{flex:1;min-width:0}
 .ackmore{display:flex;gap:16px;justify-content:flex-end;padding:8px 14px;border-top:1px solid var(--line)}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent,#2563eb);font:inherit;font-size:13px;cursor:pointer}.linkbtn:hover{text-decoration:underline}.ackrow small{display:block;color:var(--muted)}
 .alertwrap:last-child{border-bottom:none}
@@ -1239,24 +1239,18 @@ function alerts() {
 }
 // Everything acknowledged, under the alerts, folded away, each with Undo
 let ackedOpen = false;
-let ackShowHidden = false;
 function ackedList() {
-  const all = [];
-  for (const h of data.hosts) for (const k of h.acks || []) all.push({h, ...k});
-  all.sort((a, b) => (b.at || 0) - (a.at || 0) || collator.compare(a.h.name, b.h.name));
-  const rows = all.filter(r => !r.hidden), hidden = all.filter(r => r.hidden);
-  if (!rows.length && !hidden.length) return "";
+  // Dismissed ones stay acknowledged but leave the Overview entirely; they alert again if the problem does.
+  const rows = [];
+  for (const h of data.hosts) for (const k of h.acks || []) if (!k.hidden) rows.push({h, ...k});
+  if (!rows.length) return "";
+  rows.sort((a, b) => (b.at || 0) - (a.at || 0) || collator.compare(a.h.name, b.h.name));
   const id = r => esc(JSON.stringify([r.h.key, r.type, r.key]));
-  const row = r => `<div class="ackrow${r.hidden ? " gone" : ""}"><span class="dot unknown"></span><span class="what"><b>${esc(r.h.name)}</b> <span class="chk">· ${esc(r.label)}</span><small>${esc(r.detail || "")}${r.at ? ` · acknowledged ${esc(ago(r.at, data.now))}${r.by ? " by " + esc(r.by) : ""}` : ""}</small></span>
-      ${r.hidden ? `<button type="button" class="ackmini edit-only" data-ackshow="${id(r)}" title="Put it back on this list">Show again</button>`
-        : `<button type="button" class="ackmini edit-only" data-ackhide="${id(r)}" title="Take it off this list. It stays acknowledged, and comes back if it alerts again">Dismiss</button>`}
-      <button type="button" class="ackmini edit-only" data-unackalert="${id(r)}" title="Count it again">Undo</button></div>`;
-  const more = hidden.length ? `<div class="ackmore"><button type="button" class="linkbtn" data-ackshowhidden>${ackShowHidden ? "Hide" : "Show"} ${hidden.length} dismissed</button>${rows.length > 1 ? `<button type="button" class="linkbtn edit-only" data-ackhideall>Dismiss all</button>` : ""}</div>`
-    : rows.length > 1 ? `<div class="ackmore"><button type="button" class="linkbtn edit-only" data-ackhideall>Dismiss all</button></div>` : "";
-  if (!rows.length)  // all dismissed: just a quiet line to bring them back
-    return `<div class="ackd"><div class="ackmore" style="justify-content:space-between;border-top:0"><small class="muted">${hidden.length} acknowledged, dismissed from this list</small><button type="button" class="linkbtn" data-ackshowhidden>${ackShowHidden ? "Hide" : "Show"}</button></div>${ackShowHidden ? hidden.map(row).join("") : ""}</div>`;
-  return `<details class="ackd"${ackedOpen ? " open" : ""}><summary>${rows.length} acknowledged${hidden.length ? ` <small>+ ${hidden.length} dismissed</small>` : ""} <small>not counted while they stay as they are; they alert again if they get worse, or clear and come back</small></summary>` +
-    rows.map(row).join("") + (ackShowHidden ? hidden.map(row).join("") : "") + more + `</details>`;
+  return `<details class="ackd"${ackedOpen ? " open" : ""}><summary>${rows.length} acknowledged <small>not counted while they stay as they are; they alert again if they get worse, or clear and come back</small></summary>` +
+    rows.map(r => `<div class="ackrow"><span class="dot unknown"></span><span class="what"><b>${esc(r.h.name)}</b> <span class="chk">· ${esc(r.label)}</span><small>${esc(r.detail || "")}${r.at ? ` · acknowledged ${esc(ago(r.at, data.now))}${r.by ? " by " + esc(r.by) : ""}` : ""}</small></span>
+      <button type="button" class="ackmini edit-only" data-ackhide="${id(r)}" title="Remove it from the Overview. It stays acknowledged, and alerts again if the problem does">Dismiss</button>
+      <button type="button" class="ackmini edit-only" data-unackalert="${id(r)}" title="Count it again">Undo</button></div>`).join("")
+    + (rows.length > 1 ? `<div class="ackmore"><button type="button" class="linkbtn edit-only" data-ackhideall>Dismiss all</button></div>` : "") + `</details>`;
 }
 async function ackHide(items, undo) {
   const r = await fetch("api/acks/dismiss", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({items, undo})});
@@ -1463,16 +1457,15 @@ document.getElementById("home").addEventListener("click", async e => {
     else { aa.disabled = false; aa.textContent = "Acknowledge"; }
     return;
   }
-  const ah = e.target.closest("[data-ackhide],[data-ackshow],[data-ackhideall],[data-ackshowhidden]");
+  const ah = e.target.closest("[data-ackhide],[data-ackhideall]");
   if (ah) {
     const d = ah.dataset;
-    if (d.ackshowhidden !== undefined) { ackShowHidden = !ackShowHidden; renderHome(); return; }
     ah.disabled = true;
     if (d.ackhideall !== undefined) {
       const items = []; for (const h of data.hosts) for (const k of h.acks || []) if (!k.hidden) items.push([h.key, k.type, k.key]);
       return ackHide(items, false);
     }
-    return ackHide([JSON.parse(d.ackhide || d.ackshow)], d.ackshow !== undefined);
+    return ackHide([JSON.parse(d.ackhide)], false);
   }
   const ua = e.target.closest("[data-unackalert]");
   if (ua) {

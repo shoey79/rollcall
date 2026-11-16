@@ -658,7 +658,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 - **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
 - **Defender:** a threat is cleared on the computer itself; the next agent report then clears the alert. There's no Acknowledge for it.
 
-Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Ones you don't need to see, e.g. passwords in files that have to stay, can be **Dismiss**ed (or **Dismiss all**): they stay acknowledged but leave the list, which then shrinks to one line with **Show**. A dismissed item comes back if it's acknowledged again after alerting. Only Home Assistant admins and Rollcall editors can acknowledge.
+Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Ones you don't need to see, e.g. passwords in files that have to stay, can be **Dismiss**ed (or **Dismiss all**): they stay acknowledged but disappear from the Overview. If the problem comes back or gets worse, it alerts again as usual. Only Home Assistant admins and Rollcall editors can acknowledge.
 
 **Graphs over time.** Rollcall keeps the disk space, network traffic, CPU and memory from each agent report, so you can see how they change, e.g. for capacity planning. **Graph** opens a graph under the item, with ranges of 24 hours, 7 days, 30 days, 90 days and a year. Hover for the figures at that time.
 
