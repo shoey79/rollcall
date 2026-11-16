@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.82.0 - 2026-11-16
+
+### Added
+- **Filter expected failed logons.** **Filter…** next to a line in **Failed logons** (Security tab) stops failed logons that happen every time, such as a Remote Desktop Gateway signing in to itself as the server's name, from counting as an attack. Match by account, where it came from and Windows' reason, with `*` wildcards, on this server or all servers. Filtered ones stay listed, greyed out, and don't turn Security red; others still do. They're managed with the event filters under **Security filters**.
+- **Dismiss acknowledged items** from the Overview's acknowledged list, one at a time or **Dismiss all**. They stay acknowledged but stop taking up room; when everything's dismissed the list is one line with **Show**. A dismissed item comes back if it alerts and is acknowledged again ([#8](https://github.com/shoey79/rollcall/issues/8), thanks to [tomvining](https://github.com/tomvining) for the request).
+- **Merge two entries for the same computer.** When a computer has an entry without the agent (e.g. one added for ping) and another one that has it, the first one's details say so and offer **Merge into this entry**: the agent, its checks, settings and graphs move onto it and the other entry is removed. It keeps its name, history and Home Assistant sensors, and nothing re-alerts ([#9](https://github.com/shoey79/rollcall/issues/9), thanks to [tomvining](https://github.com/tomvining) for the report).
+
+### Fixed
+- After the add-on restarted, agent checks that were red (e.g. a stopped service) came back amber, then turned red again at the next report and alerted a second time. They now stay red. A problem seen in only one report before the restart still waits for the next one, as before. The first restart after updating still behaves the old way, once.
+
+### Changed
+- On a phone, the security filter forms fit the screen.
+
 ## 1.81.0 - 2026-11-15
 
 ### Added
