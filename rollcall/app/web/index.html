@@ -174,6 +174,11 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+.lgrow{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:flex-start;justify-content:space-between;padding:3px 0}
+.lgrow>span{min-width:0;flex:1 1 200px;overflow-wrap:break-word;white-space:normal}
+
+.lgrow+.lgrow{border-top:1px dashed var(--line)}
+.lgrow.dim{opacity:.55}
 .st-sub{grid-column:1/-1;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .st-f{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--text)}
 .st-f small{font-weight:400;color:var(--muted);line-height:1.4}
@@ -468,6 +473,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 }
 .subh{margin:12px 0 4px;font-size:13px;font-weight:600}
 .rdform{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}.rdform label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:2px}.rdform input{width:110px}.rdform label:first-child input{width:160px}.rdform .unit{color:var(--muted);font-size:12px;padding-bottom:6px}
+@media (max-width:760px){.secflt{max-width:calc(100vw - 84px);position:sticky;left:0;white-space:normal}.secflt .rdform label{flex:1 1 100%}.secflt .rdform input,.secflt .rdform select{width:100%!important}}
 .secflt .chk{display:flex;gap:6px;align-items:center;margin:0 0 8px;font-size:13px}.secflt .rdform input{width:190px}.secflt code{background:var(--chip,rgba(127,127,127,.15));padding:0 3px;border-radius:3px}
 </style>
 </head>
@@ -2724,9 +2730,12 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   if (d.security_visible) {
     const fl = (hist.failed_logons || []).slice().reverse();
     html += ackBar("security", "security alert(s) (events or failed-logon bursts)");
-    html += sect("Failed logons (last 24 h)", tbl(["Reported", "Count", "Top accounts"], fl.map(x =>
-      `<tr class="${alertCls(x, "security")}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}</td><td>${(x.top || []).map(t => `${esc(t.account)} from ${esc(t.source)}${t.machine ? ` (${esc(t.machine)})` : ""} (${t.count})`
-        + (t.reason || t.type || t.via ? `<br><small class="muted">${esc([t.reason, t.type && t.type + " logon", t.via].filter(Boolean).join(" · "))}</small>` : "")).join("<br>")}</td></tr>`)) ||
+    detLogons = fl;
+    html += sect("Failed logons (last 24 h)", tbl(["Reported", "Count", "Top accounts"], fl.map((x, i) =>
+      `<tr class="${x.filtered >= x.count ? "dim" : alertCls(x, "security")}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}${x.filtered ? `<br><small class="muted">${x.filtered} filtered</small>` : ""}</td><td>${(x.top || []).map((t, j) => `<div class="lgrow${t.filtered ? " dim" : ""}" data-lgrow="${i}:${j}"><span>${esc(t.account)} from ${esc(t.source)}${t.machine ? ` (${esc(t.machine)})` : ""} (${t.count})`
+        + (t.reason || t.type || t.via ? `<br><small class="muted">${esc([t.reason, t.type && t.type + " logon", t.via].filter(Boolean).join(" · "))}</small>` : "")
+        + (t.filtered ? `<br><small class="muted">Filtered${t.filtered !== "filter" ? ": " + esc(t.filtered) : ""}</small>` : "")
+        + `</span>${t.filtered ? "" : `<button type="button" class="mini edit-only" data-lgflt="${i}:${j}" title="Don't count expected failed logons like these">Filter…</button>`}</div>`).join("")}</td></tr>`)) ||
       `<p class="empty-note">None.</p>`);
     const sec = (hist.security || []).slice().reverse();
     detSec = {events: sec, host: String(r.hostname || "").toUpperCase(), linux};
@@ -3030,7 +3039,13 @@ const SEC_NAMES = {4740: "Account locked out", 4720: "User account created", 472
   4722: "User account enabled", 4725: "User account disabled", 4673: "Not allowed to use sudo", 4624: "Logged on over SSH"};
 // * is any run of characters, ? any one; everything else is literal. Same rules as the add-on.
 function wildRe(p) { return new RegExp("^" + [...p].map(c => c === "*" ? ".*" : c === "?" ? "." : c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("") + "$", "is"); }
+let detLogons = [];
+function logonMatches(f, t) {
+  if (f.kind !== "logon") return false;
+  return ["account", "source", "reason"].every(k => !f[k] || !f[k].replace(/[*?]/g, "") || wildRe(f[k]).test(String(t[k] || "").trim()));
+}
 function secMatches(f, x) {
+  if (f.kind === "logon") return false;
   if ((f.events || []).length && !f.events.includes(+x.id)) return false;
   for (const k of ["account", "group", "by"]) {
     if (!f[k] || !f[k].replace(/[*?]/g, "")) continue;
@@ -3039,20 +3054,25 @@ function secMatches(f, x) {
   return true;
 }
 function secFilterText(f) {
+  if (f.kind === "logon") {
+    const parts = [["account", "account"], ["source", "from"], ["reason", "reason"]].filter(([k]) => f[k]).map(([k, w]) => `${w} <code>${esc(f[k])}</code>`);
+    return `Failed logons<br>${parts.join(" · ")}${f.note ? `<br><small class="muted">${esc(f.note)}</small>` : ""}`;
+  }
   const ev = (f.events || []).length ? f.events.map(i => `${esc(SEC_NAMES[i] || "Event")} <small class="muted">${i}</small>`).join(", ") : "Any security event";
   const parts = [["account", "account"], ["group", "group"], ["by", "done by"]].filter(([k]) => f[k]).map(([k, w]) => `${w} <code>${esc(f[k])}</code>`);
   return `${ev}${parts.length ? "<br>" + parts.join(" · ") : ""}${f.note ? `<br><small class="muted">${esc(f.note)}</small>` : ""}`;
 }
 function secFiltersSection(st) {
   const rows = [...(st.sec_filters || []).map(f => ({f, scope: "host"})), ...(st.global_sec_filters || []).map(f => ({f, scope: "all"}))];
-  if (!rows.length) return `<p class="hint">Expected changes, such as a managed account being recreated, can be filtered so they don't alert: use <b>Filter…</b> on an event. Filtered events stay in the list.</p>`;
+  if (!rows.length) return `<p class="hint">Expected changes, such as a managed account being recreated, or expected failed logons, such as a service that tries a wrong account, can be filtered so they don't alert: use <b>Filter…</b> on an event or failed logon. Filtered ones stay in the list.</p>`;
   return sect(`Security filters (${rows.length})`, tbl(["Doesn't alert when", "Applies to", "Added", ""], rows.map(({f, scope}) => {
-    const n = detSec.events.filter(x => secMatches(f, x)).length;
-    return `<tr><td>${secFilterText(f)}</td><td>${scope === "host" ? "This server" : "All servers"}<br><small class="muted">${n} of the events listed</small></td>
+    const n = f.kind === "logon" ? detLogons.reduce((a, x) => a + (x.top || []).filter(t => logonMatches(f, t)).reduce((b, t) => b + (+t.count || 0), 0), 0)
+      : detSec.events.filter(x => secMatches(f, x)).length;
+    return `<tr><td>${secFilterText(f)}</td><td>${scope === "host" ? "This server" : "All servers"}<br><small class="muted">${n} of the ${f.kind === "logon" ? "failed logons" : "events"} listed</small></td>
       <td><small class="muted">${esc(f.by_user || "")}${f.at ? "<br>" + when(new Date(f.at * 1000).toISOString()) : ""}</small></td>
       <td><div class="actions">${scope === "host" ? `<button type="button" class="mini edit-only" data-secflt-all="${esc(f.id)}">Apply to all servers</button>` : ""}
         <button type="button" class="mini danger edit-only" data-secflt-rm="${esc(f.id)}" data-scope="${scope}">Remove</button></div></td></tr>`;
-  })) + `<p class="hint">An event that matches a filter is still listed, greyed out, but doesn't notify or turn the Security check amber. Removing a filter makes matching events from the last 24 hours count again.</p>`);
+  })) + `<p class="hint">An event or failed logon that matches a filter is still listed, greyed out, but doesn't notify, turn the Security check amber or red, or count towards the failed-logon limit. Removing a filter makes matching ones from the last 24 hours count again.</p>`);
 }
 function secFilterForm(i) {
   const x = detSec.events[i];
@@ -3079,6 +3099,63 @@ function secFilterForm(i) {
     <p class="hint" style="margin:6px 0 0"><code>*</code> stands for anything, e.g. <code>*\\LAPSAdmin</code> is that account on any computer, and <code>svc_*</code> any account starting svc_. Leave a box empty to match anything. Keep filters narrow: matching events are still listed, but nobody is told about them.</p>
   </div></td></tr>`;
 }
+function logonFilterForm(key) {
+  const [i, j] = key.split(":").map(Number), t = detLogons[i].top[j];
+  const acct = String(t.account || "");
+  return `<tr class="rdedit" data-lgform="${key}"><td colspan="3"><div class="secflt">
+    <p style="margin:0 0 6px"><b>Don't count failed logons when all of these match</b></p>
+    <div class="rdform">
+      <label>Account<input data-f="account" maxlength="128" value="${esc(acct)}" placeholder="any" spellcheck="false"></label>
+      <label>From<input data-f="source" maxlength="128" value="${esc(t.source || "")}" placeholder="anywhere" spellcheck="false"></label>
+      <label>Reason<input data-f="reason" maxlength="128" value="${esc(t.reason || "")}" placeholder="any" spellcheck="false"></label>
+    </div>
+    <div class="rdform" style="margin-top:6px">
+      <label>Applies to<select data-f="scope"><option value="host">This server</option><option value="all">All servers</option></select></label>
+      <label style="flex:1;min-width:200px">Note (optional)<input data-f="note" maxlength="80" placeholder="e.g. the Remote Desktop Gateway checking itself" style="width:100%"></label>
+    </div>
+    <p class="hint" data-lgflt-preview style="margin:6px 0"></p>
+    <div class="actions"><button type="button" class="mini primary" data-lgflt-save="1">Save filter</button><button type="button" class="mini" data-lgflt-cancel="1">Cancel</button></div>
+    <p class="hint" style="margin:6px 0 0"><code>*</code> stands for anything, e.g. <code>*\\scanner</code> is that account in any domain. Leave a box empty to match anything. Keep filters narrow: matching failed logons are still listed, but don't count as an attack.</p>
+  </div></td></tr>`;
+}
+function logonFormValue(row) {
+  const v = f => row.querySelector(`[data-f="${f}"]`).value.trim();
+  return {filter: {kind: "logon", account: v("account"), source: v("source"), reason: v("reason"), note: v("note")}, scope: v("scope")};
+}
+function logonFormPreview(row) {
+  const {filter, scope} = logonFormValue(row), el = row.querySelector("[data-lgflt-preview]");
+  const empty = !["account", "source", "reason"].some(k => filter[k].replace(/[*?]/g, ""));
+  const n = detLogons.reduce((a, x) => a + (x.top || []).filter(t => logonMatches(filter, t)).reduce((b, t) => b + (+t.count || 0), 0), 0);
+  const total = detLogons.reduce((a, x) => a + (+x.count || 0), 0);
+  el.innerHTML = empty ? `<b class="old">Fill in a box: a filter has to match something.</b>`
+    : `Matches <b>${n}</b> of the ${total} failed logons listed here${scope === "all" ? ", and the same on every other server" : ""}.`
+      + (!filter.account.replace(/[*?]/g, "") ? ` <b class="old">With no account, this covers failed logons by anyone.</b>` : "");
+  row.querySelector("[data-lgflt-save]").disabled = empty;
+}
+document.getElementById("detBody").addEventListener("input", e => {
+  const row = e.target.closest("[data-lgform]");
+  if (row) logonFormPreview(row);
+});
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-lgflt],[data-lgflt-save],[data-lgflt-cancel]");
+  if (!b) return;
+  e.stopPropagation();
+  const d = b.dataset;
+  if (d.lgflt !== undefined) {
+    document.querySelectorAll("[data-lgform]").forEach(r => r.remove());
+    const tr = b.closest("tr");
+    tr.insertAdjacentHTML("afterend", logonFilterForm(d.lgflt));
+    const row = tr.nextElementSibling;
+    logonFormPreview(row); row.querySelector('[data-f="account"]').focus();
+  } else if (d.lgfltCancel) {
+    b.closest("[data-lgform]").remove();
+  } else if (d.lgfltSave) {
+    const {filter, scope} = logonFormValue(b.closest("[data-lgform]"));
+    if (scope === "all" && !confirm("Apply this filter to every server?")) return;
+    b.disabled = true;
+    if (!await detPost("/agent/sec-filter", {action: "add", filter, scope})) b.disabled = false;
+  }
+}, true);
 function secFormValue(row) {
   const v = f => row.querySelector(`[data-f="${f}"]`).value.trim(), i = +row.dataset.secform;
   return {filter: {events: row.querySelector('[data-f="ev"]').checked ? [+detSec.events[i].id] : [], account: v("account"), group: v("group"), by: v("by"), note: v("note")},

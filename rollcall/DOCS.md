@@ -832,7 +832,7 @@ The Security tab (admins only, agent 1.0.17 or later) lists every direct member 
 - **Disks → Change** sets that disk's own amber and red levels (% free), e.g. amber below 8% and red below 3% for a large data volume. Leave a box blank to use the default, or enter 0 to turn that level off. **Use defaults** removes the override.
 - **Acknowledge**: the Events and Security checks stay amber for 24 hours after something alert-worthy. **Acknowledge** (on the check's card in the Overview, or at the top of the Events or Security tab) turns them green without ignoring anything. The items stay listed, greyed out, and anything new turns the check amber again. On the Security tab it also covers a burst of failed logons, which turns Security red: acknowledging it turns the check green until a later report has another burst. It records who acknowledged it and when; **Undo** puts it back. To stop a recurring event alerting at all, use **Ignore** on it instead.
 
-- **Security filters**: for security events that are expected and low-risk, so they stop alerting. See below.
+- **Security filters**: for security events and failed logons that are expected and low-risk, so they stop alerting. See below.
 
 These settings are kept in the add-on's data folder (`agent_settings.json`), across restarts and agent updates.
 
@@ -859,6 +859,18 @@ On the **Security** tab, choose **Filter…** next to an event (admins and edito
 - **What a filter does:** matching events don't notify and don't turn the Security check amber. They're still listed, greyed out, with the note. It applies straight away, including to events from the last 24 hours, so an alert it covers clears now.
 - **Security filters**, under the events, lists every filter for this server and for all servers, with who added it and when. **Apply to all servers** widens one; **Remove** deletes it, and matching events from the last 24 hours count again.
 - A filter needs at least an event type or one pattern. Each add and removal is logged with who did it.
+
+**Failed logons** can be filtered the same way, for ones that are expected every time, such as a service that tries the wrong account, or a Remote Desktop Gateway that signs in to its own Remote Desktop service as the server's name and gets "user name doesn't exist" for each user who logs in. Choose **Filter…** next to a line in **Failed logons**:
+
+| Part | Matches | Example |
+|---|---|---|
+| Account | The account in the failed logon | `CONTOSO\SRV01`, `*\scanner` |
+| From | The address or computer it came from | `::1` (the server itself), `192.168.1.*` |
+| Reason | Windows' reason | `user name doesn't exist`, `wrong password` |
+
+Matching failed logons stay listed, greyed out with the note, and the count shows how many were filtered. They don't count towards `agent_failed_logons`, so they no longer turn Security red; failed logons that don't match still do, and the Security check names only those. They're listed under **Security filters** with the event filters.
+
+The agent sends the five busiest groups of failed logons in each report, plus the total, so a filter works on those five. That suits expected noise, which is always among the busiest.
 
 Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the change you want to hear about; "LAPSAdmin added to Administrators by SYSTEM" doesn't. Filters work for the Linux agent's security events too.
 
@@ -1098,7 +1110,7 @@ Some amber states clear themselves after a while. **Acknowledge** clears them no
 - **Agent Events and Security**: on the check's card or at the top of its tab, including Security's red for a burst of failed logons. **Undo** puts it back. For security events that are expected every time, use a [security filter](#security-filters) instead.
 - **An SNMP device's restart**: in the SNMP tab or on the Overview.
 
-Problems that clear themselves once fixed, such as a reading over its limit or a SIP line not registered, can't be acknowledged; they turn green when they're resolved. To stop something alerting at all, use **Ignore** (agents), a [security filter](#security-filters) (security events) or **Never alert on these words** (syslog).
+Problems that clear themselves once fixed, such as a reading over its limit or a SIP line not registered, can't be acknowledged; they turn green when they're resolved. To stop something alerting at all, use **Ignore** (agents), a [security filter](#security-filters) (security events and failed logons) or **Never alert on these words** (syslog).
 
 ### Pausing for reboots (maintenance mode)
 

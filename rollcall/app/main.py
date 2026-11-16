@@ -3583,7 +3583,8 @@ class Monitor:
         if action == "add" and flt:
             if len(lst) >= 100:
                 raise ValueError("that's the limit of 100 filters; remove one first")
-            same = next((f for f in lst if all(f.get(k) == flt.get(k) for k in ("events", *agentlib.SEC_FILTER_FIELDS))), None)
+            keys = ("kind", "events", *agentlib.SEC_FILTER_FIELDS, *agentlib.LOGON_FILTER_FIELDS)
+            same = next((f for f in lst if all(f.get(k) == flt.get(k) for k in keys)), None)
             done = same or {**flt, "id": secrets.token_hex(4), "at": time.time(), "by_user": who or ""}
             if not same:
                 lst.append(done)
@@ -3602,7 +3603,7 @@ class Monitor:
         self._save_agent_settings()
         log.info("Security filter %s (%s) %s by %s: %s", done.get("id"), "all servers" if scope == "all" else h.name,
                  {"add": "added", "remove": "removed", "promote": "applied to all servers"}[action], who or "someone",
-                 {k: done.get(k) for k in ("events", *agentlib.SEC_FILTER_FIELDS, "note") if done.get(k)})
+                 {k: done.get(k) for k in ("kind", "events", *agentlib.SEC_FILTER_FIELDS, "source", "reason", "note") if done.get(k)})
         for x in ([x for x in self.hosts.values() if x.agent_report] if scope == "all" else [h]):
             await self.reevaluate(x)
         return done
@@ -3755,6 +3756,8 @@ class Monitor:
         # Security filters added or removed since an event arrived apply to it too.
         agentlib.apply_sec_filters(h.agent_history.get("security", []), settings["sec_filters"],
                                    set(int(i) for i in self.opts.get("agent_security_alert_ids", agentlib.DEFAULT_SECURITY_ALERT_IDS)))
+        for fl in h.agent_history.get("failed_logons", []):
+            agentlib.apply_logon_filters(fl, settings["sec_filters"], int(self.opts.get("agent_failed_logons", 20)))
         if not restoring and not reeval:
             self._history_add(h, "events", notable["events"], received)
             self._history_add(h, "security", notable["security"], received)

@@ -448,6 +448,7 @@ class Ignore:
 # Security filters: expected, low-risk security events that shouldn't alert
 # --------------------------------------------------------------------------
 SEC_FILTER_FIELDS = ("account", "group", "by")
+LOGON_FILTER_FIELDS = ("account", "source", "reason")  # a failed-logon filter ("kind": "logon")
 
 
 def _pretty_account(value) -> str:
@@ -471,6 +472,8 @@ def clean_sec_filter(raw) -> dict:
     Every part that's given has to match. An empty events list means any event; an empty pattern
     means anything. A filter with nothing in it, or only wildcards, is refused."""
     raw = raw if isinstance(raw, dict) else {}
+    if raw.get("kind") == "logon":
+        return _clean_logon_filter(raw)
     events = []
     for e in raw.get("events") or []:
         try:
@@ -498,7 +501,45 @@ def clean_sec_filter(raw) -> dict:
     return out
 
 
+def _clean_logon_filter(raw: dict) -> dict:
+    """A failed-logon filter: {"kind": "logon", "account": "CONTOSO\\PC01", "source": "::1",
+    "reason": "user name doesn't exist", "note": "..."}. Each part given has to match."""
+    out = {"kind": "logon"}
+    for k in (*LOGON_FILTER_FIELDS, "note"):
+        v = str(raw.get(k) or "").strip()
+        if len(v) > (80 if k == "note" else 128) or not v.isprintable():
+            raise ValueError("patterns are up to 128 ordinary characters, the note up to 80")
+        out[k] = v if k == "note" or v.strip("*?") else ""
+    if not any(out[k] for k in LOGON_FILTER_FIELDS):
+        raise ValueError("a failed-logon filter needs an account, source or reason to match")
+    return out
+
+
+def logon_filter_matches(f: dict, t: dict) -> bool:
+    if f.get("kind") != "logon":
+        return False
+    return all(_wild(f[k]).match(str(t.get(k) or "").strip()) for k in LOGON_FILTER_FIELDS if f.get(k))
+
+
+def apply_logon_filters(entry: dict, filters: list, threshold: int) -> None:
+    """Mark the failed-logon groups a filter covers, and take them off the count that's compared with
+    the threshold. The agent sends the five busiest groups, so expected noise is always among them."""
+    filtered = 0
+    for t in entry.get("top") or []:
+        hit = next((f for f in filters or [] if logon_filter_matches(f, t)), None)
+        if hit:
+            t["filtered"], t["filter_id"] = hit.get("note") or "filter", hit.get("id") or ""
+            filtered += int(t.get("count") or 0)
+        else:
+            t.pop("filtered", None)
+            t.pop("filter_id", None)
+    entry["filtered"] = min(filtered, int(entry.get("count") or 0))
+    entry["alert"] = int(entry.get("count") or 0) - entry["filtered"] >= threshold
+
+
 def sec_filter_matches(f: dict, item: dict) -> bool:
+    if f.get("kind") == "logon":
+        return False
     if f.get("events") and int(item.get("id") or 0) not in f["events"]:
         return False
     for k in SEC_FILTER_FIELDS:
@@ -1614,16 +1655,20 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     alert_ids = set(int(i) for i in opts.get("agent_security_alert_ids", DEFAULT_SECURITY_ALERT_IDS))
     notable["security"] = [dict(item) for item in sec.get("items") or []]
     apply_sec_filters(notable["security"], settings.get("sec_filters") or [], alert_ids)
-    fl = sec.get("failed_logons") or {}
     threshold = int(opts.get("agent_failed_logons", 20))
+    fl = {**(sec.get("failed_logons") or {})}
+    fl["top"] = [dict(t) for t in fl.get("top") or []]
+    apply_logon_filters(fl, settings.get("sec_filters") or [], threshold)
     if fl.get("count"):
-        notable["failed_logons"] = {**fl, "alert": fl["count"] >= threshold}
+        notable["failed_logons"] = fl
 
-    # Security check: red while a burst of failed logons is happening.
-    if fl.get("count", 0) >= threshold:
-        top = fl.get("top") or []
+    # Security check: red while a burst of failed logons is happening (not counting filtered ones).
+    if fl["alert"]:
+        top = [t for t in fl["top"] if not t.get("filtered")]
         who = ", ".join(f"{t.get('account') or '?'} from {t.get('source') or '?'} ({t.get('count')})" for t in top[:3])
-        checks.append(_check("security", "Security", CRIT, f"{fl['count']} failed logons since last report. {who}"))
+        more = f" ({fl['filtered']} more filtered)" if fl["filtered"] else ""
+        checks.append(_check("security", "Security", CRIT,
+                             f"{fl['count'] - fl['filtered']} failed logons since last report{more}. {who}"))
     else:
         checks.append(_check("security", "Security", OK, "No unusual activity"))
 
