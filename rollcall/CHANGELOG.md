@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.85.3 - 2026-11-16
+
+### Fixed
+- **The dashboard held Rollcall up for several seconds at every refresh** with many devices and checks, so agents, Home Assistant and other requests had to wait (shown by 1.85.2's new "Rollcall is held up" log lines). Each device's 24-hour uptime and history strip are now worked out in one pass over its results, instead of once per half-hour segment, and kept for 30 seconds. They're the same figures as before; on a test with 800 devices and checks, a refresh went from about 5 s to 0.02 s.
+
 ## 1.85.2 - 2026-11-16
 
 ### Fixed
