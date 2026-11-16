@@ -23,7 +23,9 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- Overview: the agent summary chip should say what it counts. All OK: "Windows ✓ all 14 OK" (was "Windows ✓ 14
+  checks"); with problems: "Windows: 14 of 16 OK" (was "Windows: 14 OK", which didn't count the problem chips beside
+  it). Same for Linux. In `svcChips()` in `rollcall/app/web/index.html`.
 
 ## Requested features (not started)
 
