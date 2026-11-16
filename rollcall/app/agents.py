@@ -364,6 +364,15 @@ def normalize_report(r) -> dict:
                        "frs_running": v.get("frs_running") is True, "wmi_error": str(v.get("wmi_error") or "")[:160],
                        "events": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0, **{k: str(e.get(k) or "")[:240] for k in ("time", "partner", "message")}}
                                   for e in _as_list(v.get("events")) if isinstance(e, dict)][:40]}
+    if "dfsr" in c:
+        v = _as_dict(c["dfsr"])
+        c["dfsr"] = {"folders": [{"name": str(f.get("name") or "")[:120], "group": str(f.get("group") or "")[:120],
+                                  "state": f.get("state") if isinstance(f.get("state"), int) else None}
+                                 for f in _as_list(v.get("folders")) if isinstance(f, dict)][:100],
+                     "service": str(v.get("service") or "")[:20], "wmi_error": str(v.get("wmi_error") or "")[:160],
+                     "events": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0,
+                                 **{k: str(e.get(k) or "")[:240] for k in ("time", "partner", "folder", "volume", "message")}}
+                                for e in _as_list(v.get("events")) if isinstance(e, dict)][:40]}
     if "sql" in c:
         insts = []
         for i in _as_list(_as_dict(c["sql"]).get("instances"))[:8]:
@@ -717,7 +726,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange", "domain", "aduser", "secret")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "dfsr", "exchange", "domain", "aduser", "secret")
 
 
 def disk_key(name) -> str:
@@ -1029,6 +1038,49 @@ def sysvol_state(v: dict, now: float) -> tuple[str, str]:
     if st == 4:
         return OK, "SYSVOL replicating normally (DFS-R)"
     return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
+
+
+def dfsr_state(v: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str]:
+    """DFS Replication on a file server: red when replication has stopped (after an unclean shutdown,
+    or offline too long) or a folder is in error; amber while a folder is syncing or recovering (e.g. its
+    volume being scanned after an unclean shutdown, when files may be unavailable), or a partner has
+    been unreachable for over an hour."""
+    ev = sorted(v.get("events") or [], key=lambda e: _ts(e.get("time")) or 0)
+    latest = lambda ids: max((e for e in ev if e["id"] in ids), key=lambda e: _ts(e.get("time")) or 0, default=None)  # noqa: E731
+    t = lambda e: (_ts(e.get("time")) or 0) if e else 0  # noqa: E731
+    vol = lambda e: f" on {e['volume']}" if e and e.get("volume") else ""  # noqa: E731
+    folders = [f for f in v.get("folders") or [] if not (ign and ign.has("dfsr", f.get("name")))]
+    crit, warn = [], []
+    if v.get("service") and v["service"] != "Running":
+        crit.append(f"the DFS Replication service is {v['service'].lower()}")
+    dirty, resumed, recovering = latest({2213}), latest({2214}), latest({2212})
+    if dirty and t(dirty) > t(resumed):
+        crit.append(f"stopped replicating{vol(dirty)} after an unclean shutdown (event 2213); it needs resuming")
+    elif recovering and t(recovering) > t(resumed) and t(recovering) > t(dirty) and not (folders and all(f.get("state") == 4 for f in folders)):
+        warn.append(f"recovering its database{vol(recovering)} after an unclean shutdown (event 2212); replication waits until it finishes")
+    failed = latest({2104})
+    if failed and t(failed) > t(resumed):
+        crit.append(f"couldn't recover its database{vol(failed)} (event 2104)")
+    stale = latest({4012})
+    if stale and t(stale) > t(latest({4602, 4604, 4614})):
+        what = f" {stale['folder']}" if stale.get("folder") else ""
+        crit.append(f"stopped replicating{what}: offline too long (event 4012); it needs a non-authoritative sync")
+    for f in folders:
+        if f.get("state") == 5:
+            crit.append(f"{f['name']} in error")
+        elif f.get("state") in (0, 1, 2, 3):
+            warn.append(f"{f['name']} in {SYSVOL_STATES[f['state']]}")
+    down, up = latest({5002, 5008, 5014}), latest({5004})
+    if down and t(down) > t(up) and now - t(down) > 3600:
+        who = f" {down['partner']}" if down.get("partner") else " a partner"
+        warn.append(f"can't reach{who} (event {down['id']})")
+    if crit:
+        return CRIT, "DFS-R: " + "; ".join(crit + warn)
+    if warn:
+        return WARN, "DFS-R: " + "; ".join(warn)
+    if not folders and v.get("wmi_error"):
+        return OK, f"No problems logged (couldn't read the folders' state: {v['wmi_error'][:80]})"
+    return OK, f"{len(folders)} replicated folder(s) replicating normally"
 
 
 PRIVILEGED_GROUPS = ("Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators")
@@ -1569,6 +1621,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         res = gpo_state(gp, now)
         if res:
             checks.append(_check("gpo", "Group Policy", res[0], res[1]))
+    dr = rc.get("dfsr")
+    if dr and not ign.has("dfsr", "dfsr"):
+        res = dfsr_state(dr, now, ign)
+        checks.append(_check("dfsr", "DFS Replication", res[0], res[1], confirm=res[0] == CRIT))
+
     sv = rc.get("sysvol")
     if sv and not ign.has("sysvol", "sysvol"):
         res = sysvol_state(sv, now)

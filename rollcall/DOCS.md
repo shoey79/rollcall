@@ -648,6 +648,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Exchange** (Exchange servers) | Back pressure Medium, `agent_exchange_queue_warn` (250) or more messages waiting, anything in the poison queue, maintenance mode or a component inactive, a copy suspended or behind | Back pressure High, or a database copy failed or dismounted (two reports) |
 | **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
 | **SYSVOL replication** (domain controllers) | A partner unreachable for over an hour, initial sync or recovery, or still using FRS | Replication stopped (dirty shutdown, offline too long, or in error; two reports) |
+| **DFS Replication** (DFS Replication role) | Recovering its database after an unclean shutdown, a folder in initial sync or recovery, or a partner unreachable for over an hour | Replication stopped (dirty shutdown, offline too long, database not recovered, a folder in error, or the service stopped; two reports) |
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
 | **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
 | **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
@@ -777,6 +778,14 @@ To leave the check off a server, ignore it (`exchange:exchange`).
 - **Amber** while it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since), during initial sync or recovery, or while SYSVOL still replicates with FRS. FRS isn't supported from Windows Server 2019; migrate with `dfsrmig`.
 
 Both are on the **Roles** tab. Each can be ignored on a computer (`gpo:gpo`, `sysvol:sysvol`).
+
+### DFS Replication
+
+**DFS Replication** is checked on servers with the DFS Replication role (agent 1.0.44 or later), for every replicated folder except SYSVOL (checked above on domain controllers). It uses DFS-R's state for each folder and its event log over the last 7 days, and is on the **Roles** tab with each folder's state and the recent DFS-R events.
+
+- **Red** when replication has stopped: after an unclean shutdown (event 2213, which needs resuming with the command in the event), because the server was offline longer than DFS-R allows (4012, which needs a non-authoritative sync), its database couldn't be recovered (2104), a folder is in error, or the DFS Replication service isn't running. Like other serious agent checks, it turns red on the second report in a row.
+- **Amber** while DFS-R recovers its database after an unclean shutdown (2212, until 2214 or every folder is back to normal). This is often a long scan of the volume, during which files can be slow or unavailable even though the server answers. Also amber while a folder is in initial sync or auto recovery, or when it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since).
+- A folder that's expected to be out of step can be ignored with **Ignore** next to it (`dfsr:Folder name`); the whole check with `dfsr:dfsr`.
 
 ### SQL Server
 

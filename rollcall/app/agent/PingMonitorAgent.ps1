@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.43'
+$AgentVersion = '1.0.44'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1311,6 +1311,31 @@ function Get-SysvolStatus {
         $partner = ''
         if ([string]$_.Message -match '(?im)^\s*(Partner|Connected Partner|Partner DNS Address|Partner Name)\s*:\s*(\S+)') { $partner = $Matches[2] }
         [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated; partner = Limit-Text $partner 120
+            message = Limit-Text (([string]$_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 240 } })
+    return $out
+}
+
+function Get-DfsrStatus {
+    # DFS Replication on a file server: DFS-R's state for each replicated folder (SYSVOL is checked
+    # separately on domain controllers), and the events that mean replication has stopped, is
+    # recovering its database (e.g. scanning the volume after an unclean shutdown) or can't reach a partner.
+    $out = [ordered]@{ folders = @() }
+    try {
+        $out.folders = @(Get-CimInstance -Namespace 'root\MicrosoftDFS' -ClassName DfsrReplicatedFolderInfo -ErrorAction Stop |
+            Where-Object { $_.ReplicatedFolderName -ne 'SYSVOL Share' } | Select-Object -First 100 | ForEach-Object {
+                [ordered]@{ name = Limit-Text ([string]$_.ReplicatedFolderName) 120; group = Limit-Text ([string]$_.ReplicationGroupName) 120; state = [int]$_.State } })
+    } catch { $out.wmi_error = Limit-Text ([string]$_.Exception.Message) 160 }
+    try { $out.service = [string](Get-Service -Name DFSR -ErrorAction Stop).Status } catch { }
+    if ($out.folders.Count -eq 0 -and -not $out.wmi_error) { return $null }   # only SYSVOL, or nothing set up yet
+    $ids = 2104, 2212, 2213, 2214, 4012, 4602, 4604, 4614, 5002, 5004, 5008, 5014
+    $ev = @(Get-LogEvents 'DFS Replication' $null $ids (Get-Date).AddDays(-7) 300)
+    $out.events = @($ev | Sort-Object TimeCreated -Descending | Select-Object -First 40 | ForEach-Object {
+        $partner = ''; $folder = ''; $volume = ''
+        if ([string]$_.Message -match '(?im)^\s*(Partner|Connected Partner|Partner DNS Address|Partner Name)\s*:\s*(\S+)') { $partner = $Matches[2] }
+        if ([string]$_.Message -match '(?im)^\s*Replicated Folder Name\s*:\s*(.+?)\s*$') { $folder = $Matches[1] }
+        if ([string]$_.Message -match '(?im)^\s*Volume\s*:\s*(.+?)\s*$') { $volume = $Matches[1] }
+        [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated; partner = Limit-Text $partner 120
+            folder = Limit-Text $folder 120; volume = Limit-Text $volume 120
             message = Limit-Text (([string]$_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 240 } })
     return $out
 }
@@ -2616,6 +2641,12 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     } catch { Add-CollectorError 'network' $_ }
     if ($sys -and $sys.part_of_domain) {
         try { $report.checks.gpo = Measure-Step 'group policy' { Get-GroupPolicyStatus } } catch { Add-CollectorError 'group policy' $_ }
+    }
+    if ($discovery.roles -contains 'DFS Replication') {
+        try {
+            $dfsr = Measure-Step 'dfs replication' { Get-DfsrStatus }
+            if ($dfsr) { $report.checks.dfsr = $dfsr }
+        } catch { Add-CollectorError 'dfs replication' $_ }
     }
     if ($discovery.roles -contains 'Domain controller') {
         try { $report.checks.sysvol = Measure-Step 'sysvol replication' { Get-SysvolStatus } } catch { Add-CollectorError 'sysvol replication' $_ }
