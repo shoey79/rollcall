@@ -2670,7 +2670,8 @@ class Monitor:
             saved = store.load_report(agent["id"])
             if saved and saved.get("report"):
                 h.agent_history = saved.get("history") or h.agent_history
-                await self._apply(h, agent, agentlib.normalize_report(saved["report"]), saved.get("received") or time.time(), restoring=True)
+                await self._apply(h, agent, agentlib.normalize_report(saved["report"]), saved.get("received") or time.time(), restoring=True,
+                                  failures=saved.get("failures"))  # None: saved by an older version
         n = sum(1 for h in self.hosts.values() if h.agent_id)
         if store.agents or store.pending:
             log.info("Agents: %d approved (%d on the dashboard), %d waiting for approval",
@@ -2882,7 +2883,8 @@ class Monitor:
             self.agents.save_report(agent["id"], {"report": report, "received": now})
             return
         await self._apply(h, agent, report, now)
-        self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history})
+        self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history,
+                                              "failures": {c.key: c.failures for c in h.agent_checks if c.failures}})
 
     # -- password exposure scan -------------------------------------------
     # Agents send only where a password is (file, line, setting name, length), never the password;
@@ -3813,7 +3815,7 @@ class Monitor:
                               reeval=True)
 
     async def _apply(self, h: Host, agent: dict, report: dict, received: float, restoring: bool = False,
-                     reeval: bool = False) -> None:
+                     reeval: bool = False, failures: dict | None = None) -> None:
         if not restoring and not reeval:
             self._track_domain(h, report, received)
         if not reeval:
@@ -3895,7 +3897,11 @@ class Monitor:
                     level, detail = agentlib.WARN, (f"{len(recent)} notable security event(s) in 24h; latest: "
                                                     f"{last.get('what')}" + (f" ({acct})" if acct else ""))
             if level == agentlib.CRIT:
-                if not reeval:
+                if restoring and failures is not None:
+                    # Back as it was before the restart: a problem already confirmed stays red, so the
+                    # next report doesn't turn it amber -> red and alert a second time.
+                    sv.failures = int(failures.get(sv.key) or 1)
+                elif not reeval:
                     sv.failures += 1
                 elif sv.failures == 0:
                     # Re-checking after a settings change (e.g. Stop ignoring): the problem
