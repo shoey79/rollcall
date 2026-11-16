@@ -38,7 +38,7 @@ jobs:
             echo "agent=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "$changed"
-          if echo "$changed" | grep -qE '^(rollcall/app/agent/|rollcall/app/msi\.py$|tests/(test_agent_|test_secret_scan|secret_corpus|build_test_msi|msi_check)|\.github/workflows/)'; then
+          if echo "$changed" | grep -qE '^(rollcall/app/agent/|rollcall/app/msi\.py$|tests/(test_agent_|test_secret_scan|secret_corpus|build_test_msi|msi_check)|\.github/)'; then
             echo "agent=true" >> "$GITHUB_OUTPUT"
           elif python3 .github/agent_source_changed.py "$BEFORE" "$AFTER"; then
             echo "agent=true" >> "$GITHUB_OUTPUT"   # main.py's code that builds the agent script changed
