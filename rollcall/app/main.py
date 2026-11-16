@@ -1166,6 +1166,7 @@ class HomeAssistant:
     def __init__(self, session: ClientSession):
         self.session = session
         self.enabled = bool(SUPERVISOR_TOKEN)
+        self.sem = asyncio.Semaphore(6)  # a few updates at a time, so a slow Home Assistant isn't swamped
         if not self.enabled:
             log.warning("SUPERVISOR_TOKEN not set; Home Assistant updates disabled")
 
@@ -1173,7 +1174,7 @@ class HomeAssistant:
         if not self.enabled:
             return
         try:
-            async with self.session.request(
+            async with self.sem, self.session.request(
                 method,
                 HA_API + path,
                 json=payload,
@@ -1182,6 +1183,8 @@ class HomeAssistant:
                 if resp.status >= 400:
                     body = (await resp.text())[:200]
                     log.warning("HA API %s %s -> %s %s", method, path, resp.status, body)
+        except asyncio.TimeoutError:
+            log.warning("HA API %s %s failed: Home Assistant didn't answer in time", method, path)
         except Exception as err:  # noqa: BLE001
             log.warning("HA API %s %s failed: %s", method, path, err)
 
@@ -1560,6 +1563,9 @@ def svc_entity(h: Host, s: Service) -> str:
 
 class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
+        self._pub_pending: set = set()  # hosts to send to Home Assistant in the background
+        self._pub_task: asyncio.Task | None = None
+        self._pub_all: asyncio.Task | None = None
         self._sw: dict = {}          # agent id -> its software list, loaded when first needed
         self._sec: dict = {}         # agent id -> where its password scan found passwords, loaded when first needed
         self.want_secrets: set = set()  # agents whose scan findings Rollcall is missing
@@ -1808,7 +1814,7 @@ class Monitor:
         h.next_due = 0
         self._save_hosts()
         log.info("Updated %s (%s) with checks %s", h.name, h.host, h.checks or "none")
-        await self.publish(h)
+        self.publish_soon(h)
 
     @staticmethod
     def _apply_syslog(h: Host, entry: dict) -> None:
@@ -2016,7 +2022,7 @@ class Monitor:
             await self.dismiss(f"ping_monitor_{h.key}")
         await self.reset_services(h)
         await self.ha.fire("ping_monitor_status_changed", self._event(h, old, MAINT))
-        await self.publish(h)
+        self.publish_soon(h)
 
     async def resume(self, h: Host) -> None:
         """Manual resume: check straight away, starting the amber/red count fresh."""
@@ -2103,9 +2109,8 @@ class Monitor:
                 last_publish = now
                 self.rollout_watch(now)
                 await self.email_summary_tick(now)
-                for h in list(self.hosts.values()):
-                    if h.status != UNKNOWN and not h.removed:
-                        await self.publish(h)
+                if not self._pub_all or self._pub_all.done():  # in the background: a slow Home Assistant mustn't hold up checks
+                    self._pub_all = asyncio.create_task(self._publish_all())
             if now - last_prune >= 3600:
                 last_prune = now
                 self.store.prune(now - int(self.opts["history_days"]) * DAY)
@@ -2723,7 +2728,7 @@ class Monitor:
         h.agent_history = {"events": [], "security": [], "detections": [], "failed_logons": []}
         if h.status == DEGRADED and not any(s.status == RED for s in h.services):
             h.status = GREEN
-        await self.publish(h)
+        self.publish_soon(h)
 
     async def _relink_if_better(self, agent: dict, h: Host | None) -> Host | None:
         """Move an agent off an entry matched only by IP when one matches its name."""
@@ -2818,7 +2823,7 @@ class Monitor:
                         setattr(c, f, getattr(was[c.key], f))
             await self._recompute(h, quiet=True)
         self._save_hosts()
-        await self.publish(h)
+        self.publish_soon(h)
         log.info("Merged %s into %s: its agent now reports to %s (by %s)", other.name, h.name, h.name, who or "someone")
 
     async def approve_agent(self, pid: str) -> dict:
@@ -2846,7 +2851,7 @@ class Monitor:
                 h.agent_id, h.agent_checks, h.agent_report, h.agent_seen = None, [], None, None
                 h.agent_history = {"events": [], "security": [], "detections": [], "failed_logons": []}
                 await self._recompute(h)
-                await self.publish(h)
+                self.publish_soon(h)
         log.info("Revoked the agent on %s", agent["hostname"])
         return agent
 
@@ -3946,7 +3951,7 @@ class Monitor:
             self._track_admins(h, report, received)
         await self._recompute(h, quiet=restoring)
         if not restoring:
-            await self.publish(h)
+            self.publish_soon(h)
 
     async def _recompute(self, h: Host, quiet: bool = False) -> None:
         """Agent reports arrive between pings: update Up/Degraded straight away."""
@@ -4052,7 +4057,7 @@ class Monitor:
                 log.info("%s: agent stopped reporting (%s)", h.name, chip.detail)
                 await self.on_agent_check_change(h, chip, old, RED)
                 await self._recompute(h)
-                await self.publish(h)
+                self.publish_soon(h)
             elif chip.status == RED and age <= limit:
                 pass  # recovered by the next report
             elif chip.status == RED:
@@ -4232,7 +4237,7 @@ class Monitor:
         return out
 
     async def publish(self, h: Host) -> None:
-        await self.ha.set_state(
+        sends = [self.ha.set_state(
             h.entity_id,
             h.status,
             {
@@ -4252,9 +4257,9 @@ class Monitor:
                 "critical": h.critical,
                 "services": {s.label: s.status for s in h.services + h.agent_checks},
             },
-        )
+        )]
         for s in h.services + h.agent_checks:
-            await self.ha.set_state(
+            sends.append(self.ha.set_state(
                 svc_entity(h, s),
                 s.status,
                 {
@@ -4268,9 +4273,31 @@ class Monitor:
                     "last_check": iso(s.last_check),
                     "last_change": iso(s.last_change),
                 },
-            )
-        for eid, value, attrs in self._metrics(h):
-            await self.ha.set_state(eid, value, attrs)
+            ))
+        sends += [self.ha.set_state(eid, value, attrs) for eid, value, attrs in self._metrics(h)]
+        await asyncio.gather(*sends)
+
+    def publish_soon(self, h: Host) -> None:
+        """Send a host's sensors to Home Assistant in the background, so a dashboard action or an
+        agent report doesn't wait for it (Home Assistant can be slow, e.g. while the host is busy)."""
+        self._pub_pending.add(h.key)
+        if not self._pub_task or self._pub_task.done():
+            self._pub_task = asyncio.create_task(self._publish_pending())
+
+    async def _publish_pending(self) -> None:
+        await asyncio.sleep(0.5)  # several changes in a row: each host is sent once
+        while self._pub_pending:
+            h = self.hosts.get(self._pub_pending.pop())
+            if h and not h.removed:
+                try:
+                    await self.publish(h)
+                except Exception:  # noqa: BLE001
+                    log.exception("Couldn't update %s in Home Assistant", h.name)
+
+    async def _publish_all(self) -> None:
+        for h in list(self.hosts.values()):
+            if h.status != UNKNOWN and not h.removed:
+                await self.publish(h)
 
     def snapshot(self) -> dict:
         hosts = []
