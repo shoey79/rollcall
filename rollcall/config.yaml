@@ -85,6 +85,8 @@ options:
   agent_secret_scan: "off"
   name_line: auto
   agent_exchange_queue_warn: 250
+  agent_time_warn_seconds: 60
+  agent_time_crit_seconds: 240
   agent_patch_days: 60
   agent_event_alerts: true
   agent_security_alerts: true
@@ -169,6 +171,8 @@ schema:
   agent_secret_scan: list(off|servers|workstations|all)
   name_line: list(auto|model|os|address|user|none)
   agent_exchange_queue_warn: int(1,1000000)
+  agent_time_warn_seconds: int(5,3600)?
+  agent_time_crit_seconds: int(10,3600)?
   agent_patch_days: int(0,3650)
   agent_event_alerts: bool
   agent_security_alerts: bool

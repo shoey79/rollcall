@@ -233,6 +233,7 @@ Agents (Windows 1.0.13 and Linux 1.0.7 or later) report the machine's manufactur
 
 - **Ping** decides whether a computer is up. One miss turns it amber; a second miss in a row turns it red and notifies. The re-check after a miss comes `retry_interval` seconds later.
 - **Every other check** runs only while the computer answers. Each has its own count: one failure turns its chip amber, two in a row turn it red.
+- **Agent checks** fold into one chip while they're fine: **Windows ✓ all 14 OK** (or Linux). Any that need attention get their own chip, and the summary says how many of the total are OK, e.g. **Windows: 14 of 16 OK** next to the two problem chips.
 - **A red check** makes the computer **Degraded** and sends an alert naming it, e.g. "🟠 SQL01: SQL is down". Recovery sends "🟢 SQL01: SQL is back up" if `notify_recovery` is on.
 - **When the whole computer stops answering**, you get one "down" alert, not one per check. Its checks start counting again once it's back, which gives services time to start after a reboot.
 - **Pausing** a computer pauses its checks too.
@@ -647,6 +648,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Domain security** (the PDC emulator) | For 24 h after someone is added to a privileged group; KRBTGT password over 180 days old; an enabled account that doesn't require a password | |
 | **Exchange** (Exchange servers) | Back pressure Medium, `agent_exchange_queue_warn` (250) or more messages waiting, anything in the poison queue, maintenance mode or a component inactive, a copy suspended or behind | Back pressure High, or a database copy failed or dismounted (two reports) |
 | **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
+| **Time** (domain members) | Clock `agent_time_warn_seconds` (60) out from its domain controller, or Windows Time not syncing; on the PDC emulator, running on its own clock | `agent_time_crit_seconds` (240) out (two reports) |
 | **SYSVOL replication** (domain controllers) | A partner unreachable for over an hour, initial sync or recovery, or still using FRS | Replication stopped (dirty shutdown, offline too long, or in error; two reports) |
 | **DFS Replication** (DFS Replication role) | Recovering its database after an unclean shutdown, a folder in initial sync or recovery, or a partner unreachable for over an hour | Replication stopped (dirty shutdown, offline too long, database not recovered, a folder in error, or the service stopped; two reports) |
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
@@ -765,6 +767,16 @@ On Exchange servers (agent 1.0.27 or later), Rollcall checks mail flow and the d
 
 To leave the check off a server, ignore it (`exchange:exchange`).
 
+### Time
+
+On every domain-joined Windows computer (agent 1.0.46 or later), the agent measures how far its clock is from the domain with `w32tm /stripchart`, the same as running it by hand. It's on the **Roles** tab.
+
+- **Domain members** are compared with the domain controller they use; **other domain controllers** with the PDC emulator, which the rest of the domain takes its time from.
+- **Amber** when the clock is `agent_time_warn_seconds` (60) or more out, or Windows Time isn't syncing from anything ("Local CMOS Clock", "Free-running System Clock" or NoSync). **Red** at `agent_time_crit_seconds` (240) on two reports in a row: Kerberos refuses sign-ins at 5 minutes, so that's a warning before people can't log on.
+- **The PDC emulator** has nothing to compare with, so it's checked for a real time source instead: amber when it runs on its own clock, since the whole domain then drifts with it. Point it at an NTP server (`w32tm /config /manualpeerlist:"pool.ntp.org" /syncfromflags:manual /reliable:yes /update`).
+- If the domain controller can't be reached for the comparison, the check says so and stays green, rather than alerting for something the time isn't to blame for.
+- Can be ignored on a computer (`time:time`).
+
 ### Group Policy and SYSVOL replication
 
 **Group Policy** is checked on every domain-joined computer (agent 1.0.26 or later), from Group Policy's own results in the System log.
@@ -785,7 +797,8 @@ Both are on the **Roles** tab. Each can be ignored on a computer (`gpo:gpo`, `sy
 
 - **Red** when replication has stopped: after an unclean shutdown (event 2213, which needs resuming with the command in the event), because the server was offline longer than DFS-R allows (4012, which needs a non-authoritative sync), its database couldn't be recovered (2104), a folder is in error, or the DFS Replication service isn't running. Like other serious agent checks, it turns red on the second report in a row.
 - **Amber** while DFS-R recovers its database after an unclean shutdown (2212, until 2214 or every folder is back to normal). This is often a long scan of the volume, during which files can be slow or unavailable even though the server answers. Also amber while a folder is in initial sync or auto recovery, or when it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since).
-- A folder that's expected to be out of step can be ignored with **Ignore** next to it (`dfsr:Folder name`); the whole check with `dfsr:dfsr`.
+- **Any other DFS-R error** in its event log in the last 24 hours also turns it amber, e.g. **6404** (a replicated folder's local path is invalid or can't be reached), until that folder has been back to normal for an hour or the error hasn't recurred for a day. They're listed under **Other errors and warnings** with how many times each happened; common ones are named (6404, sharing violations 4302/4304, staging space 4202/4206) and the rest show Windows' own first line. Warnings are listed but don't alert (agent 1.0.46).
+- A folder that's expected to be out of step can be ignored with **Ignore** next to it (`dfsr:Folder name`); an error by its ID (`dfsr:event:6404`); the whole check with `dfsr:dfsr`.
 
 ### SQL Server
 
@@ -1309,6 +1322,8 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
+| `agent_time_warn_seconds` | 60 | Time: amber when a domain computer's clock is this far from its domain controller's |
+| `agent_time_crit_seconds` | 240 | Time: red at this (Kerberos sign-ins fail at 300) |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
 | `vuln_checks` | true | The **Vulnerabilities** check on computers with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
@@ -1438,6 +1453,12 @@ Rollcall's dashboard, notifications and Home Assistant entities are in English. 
 The agents work on Windows and Linux in any language:
 - Text that comes from the system, such as Windows event messages, service names and program names, is shown as the system wrote it, so it may be in another language.
 - Anything the agents read to make decisions doesn't depend on the system's language. Linux commands run in the C locale. On Windows, the agents use IDs and values rather than translated labels, and the signed-in user check understands the common languages' words for an active session.
+
+## Rollcall's own log
+
+**Manage → Log** (admins and editors) shows the add-on's log, the same one as Home Assistant's **Settings → Apps → Rollcall → Log**, including lines from before the last restart. Choose **Warnings and errors** or **Errors only** (an error's traceback stays with it), search, and **Download** what's loaded as a text file. **Follow** reloads it every 5 seconds while it's open.
+
+Anything that looks like a password, token, key or SNMP community is masked before it leaves the add-on. If Home Assistant's copy can't be read, it shows the lines logged since Rollcall last started, and says so.
 
 ## Troubleshooting
 

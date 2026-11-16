@@ -364,6 +364,12 @@ def normalize_report(r) -> dict:
                        "frs_running": v.get("frs_running") is True, "wmi_error": str(v.get("wmi_error") or "")[:160],
                        "events": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0, **{k: str(e.get(k) or "")[:240] for k in ("time", "partner", "message")}}
                                   for e in _as_list(v.get("events")) if isinstance(e, dict)][:40]}
+    if "time" in c:
+        v = _as_dict(c["time"])
+        off = v.get("offset_s")
+        c["time"] = {"role": v.get("role") if v.get("role") in ("member", "dc", "pdc") else "member",
+                     "offset_s": float(off) if isinstance(off, (int, float)) and not isinstance(off, bool) and abs(off) < 1e9 else None,
+                     **{k: str(v.get(k) or "")[:160] for k in ("target", "error", "source", "type")}}
     if "dfsr" in c:
         v = _as_dict(c["dfsr"])
         c["dfsr"] = {"folders": [{"name": str(f.get("name") or "")[:120], "group": str(f.get("group") or "")[:120],
@@ -372,7 +378,12 @@ def normalize_report(r) -> dict:
                      "service": str(v.get("service") or "")[:20], "wmi_error": str(v.get("wmi_error") or "")[:160],
                      "events": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0,
                                  **{k: str(e.get(k) or "")[:240] for k in ("time", "partner", "folder", "volume", "message")}}
-                                for e in _as_list(v.get("events")) if isinstance(e, dict)][:40]}
+                                for e in _as_list(v.get("events")) if isinstance(e, dict)][:40],
+                     "errors": [{"id": e.get("id") if isinstance(e.get("id"), int) else 0,
+                                 "level": e.get("level") if e.get("level") in (1, 2, 3) else 2,
+                                 "count": e.get("count") if isinstance(e.get("count"), int) else 1,
+                                 **{k: str(e.get(k) or "")[:240] for k in ("time", "folder", "message")}}
+                                for e in _as_list(v.get("errors")) if isinstance(e, dict)][:20]}
     if "sql" in c:
         insts = []
         for i in _as_list(_as_dict(c["sql"]).get("instances"))[:8]:
@@ -726,7 +737,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "dfsr", "exchange", "domain", "aduser", "secret")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "dfsr", "time", "exchange", "domain", "aduser", "secret")
 
 
 def disk_key(name) -> str:
@@ -1040,6 +1051,59 @@ def sysvol_state(v: dict, now: float) -> tuple[str, str]:
     return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
 
 
+FREE_RUNNING = ("local cmos clock", "free-running system clock")
+
+
+def _secs(x: float) -> str:
+    x = abs(x)
+    return f"{x:.1f} s" if x < 90 else f"{x / 60:.1f} min"
+
+
+def time_state(t: dict, warn_s: float = 60, crit_s: float = 240) -> tuple[str, str]:
+    """The clock against the domain: amber over warn_s out or not syncing from anything, red over crit_s
+    (Kerberos refuses sign-ins at 5 minutes). The PDC emulator is checked for a real time source."""
+    src = t.get("source") or ""
+    loose = src.lower().startswith(FREE_RUNNING) or (t.get("type") or "").lower() == "nosync"
+    if t.get("role") == "pdc":
+        if loose:
+            return WARN, f"The PDC emulator isn't syncing from a time source ({src or 'NoSync'}); the whole domain drifts with it. Point it at an NTP server"
+        return OK, "PDC emulator, syncing from " + (src or "its configured source")
+    off = t.get("offset_s")
+    vs = t.get("target") or "the domain controller"
+    if off is None:
+        note = f"Couldn't compare with {vs}" + (f": {t['error']}" if t.get("error") else "")
+        return (WARN, note + f"; and Windows Time isn't syncing ({src or 'NoSync'})") if loose else (OK, note)
+    way = "ahead of" if off > 0 else "behind"
+    if abs(off) >= crit_s:
+        return CRIT, f"{_secs(off)} {way} {vs}; Kerberos sign-ins fail at 5 minutes"
+    if abs(off) >= warn_s:
+        return WARN, f"{_secs(off)} {way} {vs}"
+    if loose:
+        return WARN, f"Within {_secs(off)} of {vs}, but Windows Time isn't syncing ({src or 'NoSync'})"
+    return OK, f"Within {_secs(off)} of {vs}" + (f"; syncing from {src}" if src else "")
+
+
+DFSR_EVENT_NAMES = {6404: "a replicated folder's local path is invalid or can't be reached",
+                    4302: "a file couldn't be replicated because it's in use (sharing violation)",
+                    4304: "files repeatedly blocked by sharing violations",
+                    4202: "staging space above its limit", 4206: "couldn't clean up staging space"}
+
+
+def dfsr_errors(v: dict, now: float, ign: "Ignore | None" = None) -> list[dict]:
+    """DFS-R errors (not warnings) from the last 24 hours that alert: not ignored by ID, and not about a
+    folder that's been back to normal for over an hour since."""
+    normal = {(f.get("name") or "").lower() for f in v.get("folders") or [] if f.get("state") == 4}
+    out = []
+    for e in v.get("errors") or []:
+        t = _ts(e.get("time")) or 0
+        if e.get("level") not in (1, 2) or now - t > DAY or (ign and ign.has("dfsr", f"event:{e['id']}")):
+            continue
+        if e.get("folder") and e["folder"].lower() in normal and now - t > 3600:
+            continue
+        out.append(e)
+    return out
+
+
 def dfsr_state(v: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str]:
     """DFS Replication on a file server: red when replication has stopped (after an unclean shutdown,
     or offline too long) or a folder is in error; amber while a folder is syncing or recovering (e.g. its
@@ -1074,6 +1138,11 @@ def dfsr_state(v: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, s
     if down and t(down) > t(up) and now - t(down) > 3600:
         who = f" {down['partner']}" if down.get("partner") else " a partner"
         warn.append(f"can't reach{who} (event {down['id']})")
+    for e in dfsr_errors(v, now, ign):
+        what = DFSR_EVENT_NAMES.get(e["id"]) or e.get("message") or "error"
+        where = f" ({e['folder']})" if e.get("folder") else ""
+        times = f", {e['count']} times in 24 h" if e.get("count", 1) > 1 else ""
+        warn.append(f"event {e['id']}{where}: {what[:120]}{times}")
     if crit:
         return CRIT, "DFS-R: " + "; ".join(crit + warn)
     if warn:
@@ -1621,6 +1690,11 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         res = gpo_state(gp, now)
         if res:
             checks.append(_check("gpo", "Group Policy", res[0], res[1]))
+    tm = rc.get("time")
+    if tm and not ign.has("time", "time"):
+        res = time_state(tm, float(opts.get("agent_time_warn_seconds", 60)), float(opts.get("agent_time_crit_seconds", 240)))
+        checks.append(_check("time", "Time", res[0], res[1], confirm=res[0] == CRIT))
+
     dr = rc.get("dfsr")
     if dr and not ign.has("dfsr", "dfsr"):
         res = dfsr_state(dr, now, ign)

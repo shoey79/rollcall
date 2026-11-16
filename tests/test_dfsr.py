@@ -26,8 +26,8 @@ def folders(*states):
     return [{"name": n, "group": "Files", "state": s} for n, s in zip(("Projects", "Shared", "Archive"), states)]
 
 
-def state(folders_, events=(), **kw):
-    return A.dfsr_state({"folders": folders_, "events": list(events), "service": "Running", "wmi_error": "", **kw}, NOW)
+def state(folders_, events=(), errors=(), **kw):
+    return A.dfsr_state({"folders": folders_, "events": list(events), "errors": list(errors), "service": "Running", "wmi_error": "", **kw}, NOW)
 
 
 def test_normal():
@@ -64,3 +64,52 @@ def test_ignored_folder_and_report_tidying():
                                                 "events": [{"id": 2212, "time": at(1), "volume": "D:"}]}}})
     d = r["checks"]["dfsr"]
     assert d["folders"] == [{"name": "Projects", "group": "Files", "state": None}] and d["events"][0]["volume"] == "D:"
+
+
+def err(i, hours_ago, level=2, count=1, folder=""):
+    return {"id": i, "level": level, "count": count, "time": at(hours_ago), "folder": folder, "message": f"The DFS Replication service had problem {i}."}
+
+
+def test_other_errors_alert_and_warnings_dont():
+    level, detail = state(folders(4, 4), errors=[err(6404, 0.2, count=3, folder="Projects")])
+    assert level == A.WARN
+    assert detail == "DFS-R: event 6404 (Projects): a replicated folder's local path is invalid or can't be reached, 3 times in 24 h"
+    assert state(folders(3, 4), errors=[err(9999, 1)])[1].endswith("event 9999: The DFS Replication service had problem 9999.")
+    assert state(folders(4, 4), errors=[err(4302, 0.5, level=3)])[0] == A.OK          # warnings are listed only
+    assert state(folders(4, 4), errors=[err(6404, 25)])[0] == A.OK                     # not in the last day
+    assert state(folders(4, 4), errors=[err(6404, 2, folder="Projects")])[0] == A.OK   # folder normal again since
+
+
+def test_an_error_can_be_ignored_by_id():
+    ign = A.Ignore(["dfsr:event:6404"])
+    v = {"folders": folders(4), "events": [], "service": "Running", "errors": [err(6404, 0.1), err(4206, 0.1)]}
+    level, detail = A.dfsr_state(v, NOW, ign)
+    assert level == A.WARN and "6404" not in detail and "4206" in detail
+    r = A.normalize_report({"checks": {"dfsr": {"folders": [], "errors": [{"id": 6404, "level": 9, "count": "x", "time": at(1)}, 5]}}})
+    assert r["checks"]["dfsr"]["errors"] == [{"id": 6404, "level": 2, "count": 1, "time": at(1), "folder": "", "message": ""}]
+
+
+# -- the Time check (domain-joined Windows computers) --------------------------------------------
+def tm(**kw):
+    return {"role": "member", "target": "DC01.contoso.local", "offset_s": 0.2, "error": "", "source": "DC01.contoso.local", "type": "NT5DS", **kw}
+
+
+def test_time_offsets():
+    assert A.time_state(tm()) == (A.OK, "Within 0.2 s of DC01.contoso.local; syncing from DC01.contoso.local")
+    assert A.time_state(tm(offset_s=-75.0)) == (A.WARN, "75.0 s behind DC01.contoso.local")
+    level, detail = A.time_state(tm(offset_s=262.5))
+    assert level == A.CRIT and detail.startswith("4.4 min ahead of DC01.contoso.local")
+    assert A.time_state(tm(offset_s=20), warn_s=10, crit_s=30)[0] == A.WARN
+
+
+def test_time_not_syncing_and_unreachable():
+    assert A.time_state(tm(source="Local CMOS Clock"))[0] == A.WARN
+    assert A.time_state(tm(offset_s=None, error="error: 0x800705B4"))[0] == A.OK      # says so, doesn't alert
+    assert A.time_state(tm(offset_s=None, error="x", source="Free-running System Clock"))[0] == A.WARN
+
+
+def test_pdc_emulator_needs_a_real_source():
+    assert A.time_state(tm(role="pdc", source="Local CMOS Clock", offset_s=None))[0] == A.WARN
+    assert A.time_state(tm(role="pdc", source="time.windows.com,0x9", offset_s=None)) == (A.OK, "PDC emulator, syncing from time.windows.com,0x9")
+    r = A.normalize_report({"checks": {"time": {"role": "boss", "offset_s": "1", "source": "x" * 500}}})
+    assert r["checks"]["time"]["role"] == "member" and r["checks"]["time"]["offset_s"] is None and len(r["checks"]["time"]["source"]) == 160

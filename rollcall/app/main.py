@@ -52,6 +52,7 @@ import certcheck
 import sipcheck
 import syslogreadings
 import watchdog as watchdoglib
+import addonlog
 import discovery
 import hadevice
 import ilo as ilolib
@@ -65,6 +66,7 @@ DB_PATH = Path(os.environ.get("PM_DB", "/data/ping_monitor.db"))
 WEB_DIR = Path(__file__).parent / "web"
 PORT = int(os.environ.get("PM_PORT", "8099"))
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+LOG_BUFFER = addonlog.Buffer()
 HA_API = os.environ.get("PM_HA_API", "http://supervisor/core/api")
 SUPERVISOR_API = os.environ.get("PM_SUPERVISOR_API", "http://supervisor")
 HA_WS = os.environ.get("PM_HA_WS", "ws://supervisor/core/websocket")
@@ -195,6 +197,8 @@ DEFAULTS = {
     "agent_secret_scan": "off",
     "name_line": "auto",
     "agent_exchange_queue_warn": 250,
+    "agent_time_warn_seconds": 60,
+    "agent_time_crit_seconds": 240,
     "agent_patch_days": 60,
     "agent_security_alerts": True,
     "agent_event_alerts": True,
@@ -2172,7 +2176,7 @@ class Monitor:
                 self._winget_task = asyncio.create_task(self.winget_loop())
         thresholds = {"cert_warn_days", "cert_crit_days", "agent_disk_warn", "agent_disk_crit", "agent_patch_days",
                       "agent_laps_overdue_days", "agent_bitlocker_require", "agent_sql_backup_hours",
-                      "agent_exchange_queue_warn", "agent_failed_logons", "agent_event_watch", "agent_security_alert_ids",
+                      "agent_exchange_queue_warn", "agent_time_warn_seconds", "agent_time_crit_seconds", "agent_failed_logons", "agent_event_watch", "agent_security_alert_ids",
                       "agent_watch_services", "agent_ignore", "ups_runtime_warn_minutes", "ups_runtime_crit_minutes",
                       "ups_load_warn", "printer_supply_warn", "agent_secret_scan"}
         if thresholds & changed.keys():
@@ -4694,7 +4698,7 @@ class Monitor:
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
-                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)), "name_line": str(self.opts.get("name_line", "auto")),
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)), "time_warn": int(self.opts.get("agent_time_warn_seconds", 60)), "time_crit": int(self.opts.get("agent_time_crit_seconds", 240)), "name_line": str(self.opts.get("name_line", "auto")),
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
@@ -4800,6 +4804,15 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                     content_type="application/json")
             return await handler(req)
         return wrapped
+
+    async def addon_log(req):
+        """The add-on's log (Manage > Log), newest last, with secrets masked."""
+        try:
+            limit = max(100, min(5000, int(req.query.get("lines", 1000))))
+        except ValueError:
+            limit = 1000
+        source, lines = await addonlog.read(monitor.ha.session, SUPERVISOR_API, SUPERVISOR_TOKEN, LOG_BUFFER, limit)
+        return web.json_response({"source": source, "lines": lines}, headers={"Cache-Control": "no-store"})
 
     async def index(_req):
         # The browser may keep a copy but must check it each time (a 304 when unchanged), so the
@@ -6047,6 +6060,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/servers", editor_only(agents_servers))
     app.router.add_post("/api/agents/networks", editor_only(agents_networks))
     app.router.add_post("/api/email/test", editor_only(email_test))
+    app.router.add_get("/api/log", editor_only(addon_log))
     app.router.add_post("/api/acks/dismiss", editor_only(acks_dismiss))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
@@ -6640,6 +6654,7 @@ async def main() -> None:
     )
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     logging.getLogger("aiohttp.server").addFilter(watchdoglib.QuietDisconnects(log))
+    logging.getLogger().addHandler(LOG_BUFFER)  # for Manage > Log if the Supervisor's log can't be read
     watchdog = watchdoglib.Watchdog(log)
     watchdog_task = watchdog.start()  # says where the add-on is stuck if something holds it up  # noqa: F841
     apply_pending_restore()

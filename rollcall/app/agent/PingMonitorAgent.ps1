@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.45'
+$AgentVersion = '1.0.46'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -251,6 +251,16 @@ function Invoke-RepAdmin([string[]]$Arguments) {
     $exe = Join-Path $env:windir 'system32\repadmin.exe'
     if (-not $env:windir -or -not (Test-Path $exe)) { return $null }
     return (& $exe @Arguments 2>$null)
+}
+function Invoke-W32tm([string[]]$Arguments) {
+    $exe = Join-Path $env:windir 'system32\w32tm.exe'
+    if (-not $env:windir -or -not (Test-Path $exe)) { return $null }
+    return @(& $exe @Arguments 2>$null)
+}
+function Invoke-Nltest([string[]]$Arguments) {
+    $exe = Join-Path $env:windir 'system32\nltest.exe'
+    if (-not $env:windir -or -not (Test-Path $exe)) { return $null }
+    return @(& $exe @Arguments 2>$null)
 }
 function Get-FtpSiteState([string]$Name, [string]$Fallback) {
     try {
@@ -1337,6 +1347,51 @@ function Get-DfsrStatus {
         [ordered]@{ id = [int]$_.Id; time = ConvertTo-UtcString $_.TimeCreated; partner = Limit-Text $partner 120
             folder = Limit-Text $folder 120; volume = Limit-Text $volume 120
             message = Limit-Text (([string]$_.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 240 } })
+    # Every other error and warning in the last 24 hours (e.g. 6404, a replicated folder's path can't be
+    # reached), grouped by event ID, so problems it has no specific rule for still show.
+    $other = @(Get-WinEventSafe @{ LogName = 'DFS Replication'; Level = 2, 3; StartTime = (Get-Date).AddHours(-24) } 500 |
+        Where-Object { $ids -notcontains [int]$_.Id -and [string]$_.Message -notmatch 'SYSVOL Share|Domain System Volume' })
+    $out.errors = @($other | Group-Object Id | ForEach-Object {
+        $last = $_.Group | Sort-Object TimeCreated -Descending | Select-Object -First 1
+        $folder = ''
+        if ([string]$last.Message -match '(?im)^\s*Replicated Folder Name\s*:\s*(.+?)\s*$') { $folder = $Matches[1] }
+        [ordered]@{ id = [int]$_.Name; level = [int]$last.Level; count = $_.Count; time = ConvertTo-UtcString $last.TimeCreated
+            folder = Limit-Text $folder 120
+            message = Limit-Text (([string]$last.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1) -join ' ') 240 }
+    } | Sort-Object @{ Expression = { $_.level } }, @{ Expression = { $_.time }; Descending = $true } | Select-Object -First 20)  # errors first, newest first
+    return $out
+}
+
+function Get-WinEventSafe([hashtable]$Filter, [int]$Max = 200) {
+    # Get-WinEvent with "no events found" as an empty list rather than an error.
+    try { @(Get-WinEvent -FilterHashtable $Filter -MaxEvents $Max -ErrorAction Stop) }
+    catch { if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -match 'No events were found|specified query') { @() } else { throw } }
+}
+
+function Get-TimeStatus([string]$Domain, [bool]$IsDc) {
+    # This computer's clock against the domain: members against the DC they use, other DCs against the
+    # PDC emulator (which the domain takes its time from). The PDC emulator itself reports where it syncs from.
+    $out = [ordered]@{ role = 'member'; target = ''; offset_s = $null; error = ''; source = ''; type = '' }
+    try { $out.type = [string](Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters' -ErrorAction Stop).Type } catch { }
+    $src = @(Invoke-W32tm @('/query', '/source') | Where-Object { [string]$_ -match '\S' })
+    if ($src.Count) { $out.source = Limit-Text ([string]$src[0]).Trim() 120 }
+    if ($IsDc) {
+        $out.role = 'dc'
+        try { if (Test-IsPdc) { $out.role = 'pdc'; return $out } } catch { }
+    }
+    $dc = @(Invoke-Nltest (@("/dsgetdc:$Domain") + $(if ($IsDc) { @('/pdc') } else { @() })))
+    $line = @($dc | Where-Object { [string]$_ -match '^\s*DC:\s*\\\\(\S+)' } | Select-Object -First 1)
+    if ($line.Count -and [string]$line[0] -match '^\s*DC:\s*\\\\(\S+)') { $out.target = $Matches[1] }
+    if (-not $out.target) { $out.error = "couldn't find a domain controller"; return $out }
+    if ($out.target -replace '\..*$', '' -eq $env:COMPUTERNAME) { $out.error = 'this computer is the domain controller it would compare with'; return $out }
+    $chart = @(Invoke-W32tm @("/stripchart", "/computer:$($out.target)", '/samples:1', '/dataonly'))
+    $hit = @($chart | Where-Object { [string]$_ -match ',\s*([+-]?\d+(?:[.,]\d+)?)s\s*$' } | Select-Object -First 1)
+    if ($hit.Count -and [string]$hit[0] -match ',\s*([+-]?\d+(?:[.,]\d+)?)s\s*$') {
+        $out.offset_s = [Math]::Round([double]($Matches[1] -replace ',', '.'), 3)
+    } else {
+        $e = @($chart | Where-Object { [string]$_ -match 'error|0x[0-9a-f]{8}' } | Select-Object -First 1)
+        $out.error = if ($e.Count) { Limit-Text ([string]$e[0]).Trim() 160 } else { "no answer from $($out.target)" }
+    }
     return $out
 }
 
@@ -2641,6 +2696,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     } catch { Add-CollectorError 'network' $_ }
     if ($sys -and $sys.part_of_domain) {
         try { $report.checks.gpo = Measure-Step 'group policy' { Get-GroupPolicyStatus } } catch { Add-CollectorError 'group policy' $_ }
+        try { $report.checks.time = Measure-Step 'time' { Get-TimeStatus $sys.domain ($discovery.roles -contains 'Domain controller') } } catch { Add-CollectorError 'time' $_ }
     }
     if ($discovery.roles -contains 'DFS Replication') {
         try {
