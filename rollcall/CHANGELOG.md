@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.85.0 - 2026-11-16
+
+### Added
+- **DFS Replication check** on servers with the DFS Replication role (Windows agent 1.0.44). It reads DFS-R's state for every replicated folder (SYSVOL is still checked separately on domain controllers) and its events over the last 7 days.
+  - **Amber** while DFS-R recovers its database after an unclean shutdown (event 2212), often a long scan of the volume when files can be unavailable although the server looks fine; while a folder is in initial sync or auto recovery; or when a partner has been unreachable for over an hour.
+  - **Red** when replication has stopped: after an unclean shutdown (2213, needs resuming), offline too long (4012), the database couldn't be recovered (2104), a folder is in error, or the service isn't running.
+  - On the **Roles** tab, with each folder's state and the recent DFS-R events. A folder, or the whole check, can be ignored.
+
 ## 1.84.0 - 2026-11-16
 
 ### Added
