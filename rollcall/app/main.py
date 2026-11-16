@@ -941,6 +941,37 @@ def coverage(rows, start: float, end: float, max_gap: float) -> tuple[float, flo
     return up, down, maint
 
 
+def day_summary(rows, first: float, now: float, size: float, n: int, max_gap: float) -> tuple[float | None, list[str]]:
+    """24-hour uptime % and the history strip (n segments of `size` seconds from `first`), in one pass
+    over the rows. Same rules as coverage() and uptime_pct(): each result holds until the next check,
+    for at most max_gap; maintenance counts as neither up nor down."""
+    day0 = now - DAY
+    up = down = 0.0
+    acc = [[0.0, 0.0, 0.0] for _ in range(n)]  # up, down, maintenance seconds per segment
+    for i, (ts, ok) in enumerate(rows):
+        end = rows[i + 1][0] if i + 1 < len(rows) else now
+        end = min(end, now, ts + max_gap)
+        if end <= ts:
+            continue
+        kind = 2 if ok == MAINT_OK else 0 if ok else 1
+        if kind != 2 and end > day0:
+            d = end - max(ts, day0)
+            if kind == 0:
+                up += d
+            else:
+                down += d
+        a = max(ts, first)
+        while a < end:
+            b = int((a - first) // size)
+            if b >= n:
+                break
+            stop = min(first + (b + 1) * size, end)
+            acc[b][kind] += stop - a
+            a = stop
+    strip = [("m" if m > 0 else "n") if u + dn <= 0 else ("g" if dn == 0 else "r" if u == 0 else "a") for u, dn, m in acc]
+    return (round(100.0 * up / (up + down), 2) if up + down > 0 else None), strip
+
+
 def uptime_pct(rows, start: float, end: float, max_gap: float) -> float | None:
     """Time-weighted % up. Maintenance time counts as neither up nor down."""
     up, down, _ = coverage(rows, start, end, max_gap)
@@ -1599,6 +1630,7 @@ def svc_entity(h: Host, s: Service) -> str:
 
 class Monitor:
     def __init__(self, opts: dict, store: Store, ha: HomeAssistant):
+        self._day_cache: dict = {}  # key -> (worked out at, strip start, (uptime %, strip)); see _day
         self._pub_pending: set = set()  # hosts to send to Home Assistant in the background
         self._pub_task: asyncio.Task | None = None
         self._pub_all: asyncio.Task | None = None
@@ -4525,9 +4557,22 @@ class Monitor:
                            for s in h.agent_checks]}
 
     # -- reporting --------------------------------------------------------
-    def uptime_24h(self, key: str) -> float | None:
+    DAY_CACHE_SECONDS = 30
+
+    def _day(self, key: str) -> tuple[float | None, list[str]]:
+        """24-hour uptime and history strip for a host or check, worked out in one pass and kept for
+        DAY_CACHE_SECONDS: the dashboard and Home Assistant ask for them for everything, often."""
         now = time.time()
-        return uptime_pct(self.store.rows(key, now - DAY), now - DAY, now, self.max_gap)
+        first = self.history_start(now)
+        hit = self._day_cache.get(key)
+        if hit and now - hit[0] < self.DAY_CACHE_SECONDS and hit[1] == first:
+            return hit[2]
+        res = day_summary(self.store.rows(key, now - DAY), first, now, DAY / BUCKETS, BUCKETS, self.max_gap)
+        self._day_cache[key] = (now, first, res)
+        return res
+
+    def uptime_24h(self, key: str) -> float | None:
+        return self._day(key)[0]
 
     @staticmethod
     def history_start(now: float | None = None) -> int:
@@ -4537,19 +4582,7 @@ class Monitor:
         return int((now or time.time()) // size * size - (BUCKETS - 1) * size)
 
     def history(self, key: str) -> list[str]:
-        now = time.time()
-        first = self.history_start(now)
-        rows = self.store.rows(key, first)
-        size = DAY / BUCKETS
-        out = []
-        for b in range(BUCKETS):
-            start = first + b * size
-            up, down, maint = coverage(rows, start, min(start + size, now), self.max_gap)
-            if up + down <= 0:
-                out.append("m" if maint > 0 else "n")
-            else:
-                out.append("g" if down == 0 else "r" if up == 0 else "a")
-        return out
+        return self._day(key)[1]
 
     async def publish(self, h: Host) -> None:
         sends = [self.ha.set_state(
