@@ -3284,7 +3284,7 @@ class Monitor:
             return None
         f, ms, mode = self.vulnfeeds, float(self.opts.get("vuln_min_score", 9)), str(self.opts.get("vuln_linux_source") or "local")
         sw = self.software(h.agent_id)
-        key = (r.get("os_family"), r.get("os_build"), r.get("os_id"), r.get("os_version_id"), sw.get("hash"), sw.get("updated"), f.version, ms, mode)
+        key = (r.get("os_family"), r.get("os"), r.get("os_build"), r.get("os_id"), r.get("os_version_id"), sw.get("hash"), sw.get("updated"), f.version, ms, mode)
         hit = self._vf.get(h.agent_id)
         if hit and hit[0] == key:
             return hit[1]
@@ -3295,10 +3295,16 @@ class Monitor:
                 out = vulnlib.linux_findings(sw["apps"], k, f.osv, f.kev, ms)
         else:
             b = str(r.get("os_build") or "")
-            if f.msrc and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b) and b.rsplit(".", 1)[0] in f.msrc:
-                out = vulnlib.windows_findings(b, f.msrc, f.kev, ms)
+            server = self._vuln_server(h)
+            if f.msrc and re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b) and vulnlib.msrc_key(b.rsplit(".", 1)[0], "server" if server else "client") in f.msrc:
+                out = vulnlib.windows_findings(b, f.msrc, f.kev, ms, server=server)
         self._vf[h.agent_id] = (key, out)
         return out
+
+    @staticmethod
+    def _vuln_server(h: Host) -> bool:
+        """Windows Server, rather than desktop Windows: they can share a build number but are updated separately."""
+        return vulnlib.msrc_family(str((h.agent_report or {}).get("os") or "")) == "server"
 
     def _vuln_why_not(self, h: Host) -> str:
         """Why a computer isn't checked, for the check's detail."""
@@ -3319,7 +3325,8 @@ class Monitor:
             return f"Microsoft's update data couldn't be downloaded ({err})" if err else "Waiting for Microsoft's update data to download"
         if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b):
             return "Not checked: the agent didn't report the Windows build with its update revision"
-        return (f"Not checked: Microsoft hasn't released security updates for this Windows version (build {b.rsplit('.', 1)[0]}) "
+        return (f"Not checked: Microsoft hasn't released security updates for this Windows version "
+                f"({'Windows Server' if self._vuln_server(h) else 'Windows'}, build {b.rsplit('.', 1)[0]}) "
                 "in the last 12 months, so it's probably out of support")
 
     def vuln_check(self, h: Host) -> dict | None:

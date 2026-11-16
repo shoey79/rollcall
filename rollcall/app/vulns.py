@@ -28,6 +28,7 @@ from pathlib import Path
 
 MSRC_LIST = "https://api.msrc.microsoft.com/cvrf/v3.0/updates"
 MSRC_MONTHS = 12
+MSRC_FORMAT = 2  # 2: kept apart for Windows Server and desktop Windows (1.85.1); older saved data is downloaded again
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 OSV_ZIP = "https://storage.googleapis.com/osv-vulnerabilities/{eco}/all.zip"
 OSV_BATCH = "https://api.osv.dev/v1/querybatch"
@@ -231,8 +232,19 @@ def _val(d) -> str:
     return (d.get("Value") or "") if isinstance(d, dict) else ""
 
 
+def msrc_family(name: str) -> str:
+    """"server" for Windows Server, "client" for desktop Windows. Both can share a build number (Windows 11
+    24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 both 17763) but are updated
+    separately, with their own revision numbers, so they're matched apart."""
+    return "server" if re.search(r"\bServer\b", name or "", re.I) else "client"
+
+
+def msrc_key(build_prefix: str, family: str) -> str:
+    return f"{build_prefix}/{family}"
+
+
 def msrc_compact(doc: dict) -> dict:
-    """One month's CVRF document -> {"10.0.17763": {"CVE-…": [fixed revision, score, exploited, "KB…"]}}.
+    """One month's CVRF document -> {"10.0.17763/server": {"CVE-…": [fixed revision, score, exploited, "KB…"]}}.
     Only Windows itself (a product named Windows with a fixed build of the form 10.0.BUILD.REV)."""
     names = {}
     if not isinstance(doc, dict):
@@ -268,13 +280,15 @@ def msrc_compact(doc: dict) -> dict:
             pids = [str(p) for p in r.get("ProductID") or [] if _WINDOWS_OS.match(names.get(str(p), ""))]
             if not pids:  # not Windows itself (Office, SQL Server, the Windows SDK…), or a hotpatch-only edition
                 continue
-            prefix = f"{fb[0]}.{fb[1]}.{fb[2]}"
-            score = max((scores.get(p, 0) for p in pids), default=0) or max(scores.values(), default=0)
             kb = str(_val(r.get("Description")))[:20]
-            have = out.setdefault(prefix, {}).get(cve)
-            # Several editions on the same build (e.g. Windows 11 24H2 and Server 2025): the latest fix
-            if have is None or fb[3] > have[0]:
-                out[prefix][cve] = [fb[3], score, exploited, f"KB{kb}" if kb.isdigit() else kb]
+            for fam in sorted({msrc_family(names.get(p, "")) for p in pids}):
+                fp = [p for p in pids if msrc_family(names.get(p, "")) == fam]
+                score = max((scores.get(p, 0) for p in fp), default=0) or max(scores.values(), default=0)
+                key = msrc_key(f"{fb[0]}.{fb[1]}.{fb[2]}", fam)
+                have = out.setdefault(key, {}).get(cve)
+                # Several editions of the same family on one build (e.g. Server 2025 and its Server Core): the latest fix
+                if have is None or fb[3] > have[0]:
+                    out[key][cve] = [fb[3], score, exploited, f"KB{kb}" if kb.isdigit() else kb]
     return out
 
 
@@ -290,13 +304,13 @@ def msrc_merge(months: list[dict]) -> dict:
     return idx
 
 
-def windows_findings(build: str, idx: dict, kev: set, min_score: float) -> list[dict]:
-    """CVEs fixed in a later build of this computer's Windows version."""
+def windows_findings(build: str, idx: dict, kev: set, min_score: float, server: bool = False) -> list[dict]:
+    """CVEs fixed in a later build of this computer's Windows version (Server or desktop)."""
     b = _build(build)
     if not b or not idx:
         return []
     out = []
-    for cve, (rev, score, expl, kb) in (idx.get(f"{b[0]}.{b[1]}.{b[2]}") or {}).items():
+    for cve, (rev, score, expl, kb) in (idx.get(msrc_key(f"{b[0]}.{b[1]}.{b[2]}", "server" if server else "client")) or {}).items():
         if b[3] >= rev:
             continue
         exploited = expl or cve in kev
@@ -484,7 +498,8 @@ class Feeds:
 
     def load(self) -> None:
         self.meta = self._read("meta.json", {}) or {}
-        months = [self._read(f"msrc/{m}.json", {}) or {} for m in self.meta.get("msrc_ids") or []]
+        months = ([self._read(f"msrc/{m}.json", {}) or {} for m in self.meta.get("msrc_ids") or []]
+                  if self.meta.get("msrc_format") == MSRC_FORMAT else [])  # saved before 1.85.1: not used
         self.msrc = msrc_merge(list(reversed(months)))
         self.kev = set(self._read("kev.json", []) or [])
         self.osv = {}
@@ -521,6 +536,8 @@ class Feeds:
         return await asyncio.get_running_loop().run_in_executor(None, json.loads, body) if len(body) > 200_000 else json.loads(body)
 
     async def refresh_msrc(self, session, now: float) -> bool:
+        if self.meta.get("msrc_format") != MSRC_FORMAT:  # saved in the old layout: download it all again
+            self.meta.update(msrc_rev={}, msrc_at=0)
         if now - (self.meta.get("msrc_at") or 0) < self.DAY:
             return False
         lst = (await self._json(session, MSRC_LIST)).get("value") or []
@@ -546,7 +563,8 @@ class Feeds:
                 seen.pop(p.stem, None)
                 changed = True
         changed |= ids != self.meta.get("msrc_ids")
-        self.meta.update(msrc_ids=ids, msrc_at=now)
+        changed |= self.meta.get("msrc_format") != MSRC_FORMAT
+        self.meta.update(msrc_ids=ids, msrc_at=now, msrc_format=MSRC_FORMAT)
         return changed
 
     async def refresh_kev(self, session, now: float) -> bool:

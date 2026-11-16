@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.85.1 - 2026-11-16
+
+### Fixed
+- **Windows 11 computers showed Windows Server 2025's vulnerabilities.** Desktop Windows and Windows Server can share a build number (Windows 11 24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 are both 17763) but are updated separately, with different revisions. Rollcall mixed Microsoft's data for the two, so an up-to-date Windows 11 computer was listed as missing every Server 2025 fix, mostly in red because many of them are known to be exploited. Each computer is now compared with its own kind of Windows. Microsoft's data is downloaded again once after updating, and the check shows "Waiting for Microsoft's update data" until then ([#10](https://github.com/shoey79/rollcall/issues/10), thanks to [tomvining](https://github.com/tomvining) for the report).
+
+### Changed
+- The **Software** tab says more plainly that vulnerabilities known to be exploited are listed whatever their score, even below `vuln_min_score`, and turn the check red.
+
 ## 1.85.0 - 2026-11-16
 
 ### Added

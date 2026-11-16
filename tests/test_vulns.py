@@ -68,13 +68,14 @@ def msrc_doc():
 
 def test_msrc_windows():
     idx = vulns.msrc_merge([vulns.msrc_compact(msrc_doc())])
-    assert set(idx) == {"10.0.17763", "10.0.20348"}                       # Office and the SDK aren't Windows itself
-    assert idx["10.0.17763"]["CVE-2026-0001"] == [6414, 8.8, True, "KB5044277"]  # the monthly update, not the hotpatch
+    assert set(idx) == {"10.0.17763/server", "10.0.20348/server"}         # Office and the SDK aren't Windows itself
+    assert idx["10.0.17763/server"]["CVE-2026-0001"] == [6414, 8.8, True, "KB5044277"]  # the monthly update, not the hotpatch
     assert vulns.msrc_compact({"Vulnerability": ["odd", {"CVE": "CVE-2026-1", "Remediations": ["x", None]}]}) == {}
-    f = {x["cve"]: x for x in vulns.windows_findings("10.0.17763.6293", idx, set(), 9.0)}
+    f = {x["cve"]: x for x in vulns.windows_findings("10.0.17763.6293", idx, set(), 9.0, server=True)}
     assert set(f) == {"CVE-2026-0001", "CVE-2026-0002"}                     # 0001: exploited despite 8.8; 0004: 5.5
     assert f["CVE-2026-0002"]["fixed"] == "10.0.17763.6414" and not f["CVE-2026-0002"]["exploited"]
-    assert vulns.windows_findings("10.0.17763.6414", idx, set(), 9.0) == []  # up to date
+    assert vulns.windows_findings("10.0.17763.6414", idx, set(), 9.0, server=True) == []  # up to date
+    assert vulns.windows_findings("10.0.17763.6293", idx, set(), 9.0) == []  # Windows 10 1809: Server 2019's fixes aren't its own
     assert vulns.windows_findings("10.0.26100.100", idx, set(), 9.0) == []   # another Windows version
     assert vulns.windows_findings("10.0.17763", idx, set(), 9.0) == []       # no revision: can't tell
     # A later month revises the fix to a later build
@@ -82,7 +83,7 @@ def test_msrc_windows():
         {"CVE": "CVE-2026-0002", "CVSSScoreSets": [{"BaseScore": 9.8, "ProductID": ["1"]}],
          "Remediations": [{"Type": 2, "Description": {"Value": "5046615"}, "ProductID": ["1"], "FixedBuild": "10.0.17763.6532"}]}]})
     idx2 = vulns.msrc_merge([vulns.msrc_compact(msrc_doc()), later])
-    assert idx2["10.0.17763"]["CVE-2026-0002"][0] == 6532
+    assert idx2["10.0.17763/server"]["CVE-2026-0002"][0] == 6532
 
 
 def osv_rec(rid, eco, name, fixed, vector=None, introduced="0", upstream=None):
@@ -193,7 +194,7 @@ def test_online_and_feeds(tmp_path):
     assert asyncio.run(f.refresh(s, 1e9, "online", {"ubuntu:22.04"}, q)) is True
     assert s.posts[0] == {"queries": [{"package": {"name": "openssl", "ecosystem": "Ubuntu:22.04:LTS"}, "version": "3.0.2-0ubuntu1.15"}]}
     assert vulns.OSV_VULN.format(id="USN-7000-1") not in s.gets      # only the per-CVE records are fetched
-    assert "CVE-2026-0002" in f.kev and f.msrc["10.0.17763"]["CVE-2026-0002"][0] == 6414
+    assert "CVE-2026-0002" in f.kev and f.msrc["10.0.17763/server"]["CVE-2026-0002"][0] == 6414
     apps = [{"name": "libssl3", "src": "openssl", "srcver": "3.0.2-0ubuntu1.15", "version": "3.0.2-0ubuntu1.15"}]
     assert [x["cve"] for x in vulns.linux_findings(apps, "ubuntu:22.04", f.osv, f.kev, 9.0)] == ["CVE-2026-3000"]
     # Nothing changed: nothing fetched again; and it all comes back after a restart
@@ -218,6 +219,7 @@ def _mon(tmp_path, apps=None, opts=None):
     m.software = lambda aid: {"hash": "h1", "updated": 1, "apps": apps or []}
     for name in ("vuln_findings", "vuln_check", "_vuln_why_not", "_vuln_key", "vulns_by_app", "vulns_view", "_vuln_wanted"):
         setattr(m, name, types.MethodType(getattr(M, name), m))
+    m._vuln_server = M._vuln_server
     return m, main
 
 
@@ -288,3 +290,39 @@ def test_same_cve_in_two_packages():
             {"name": "thunderbird", "src": "thunderbird", "srcver": "1:128.4.0esr-1~deb12u1", "version": ""}]
     f = vulns.linux_findings(apps, "debian:12", idx, set(), 9.0)
     assert sorted((x["what"], x["fixed"]) for x in f) == [("firefox-esr", "128.5.0esr-1~deb12u1"), ("thunderbird", "1:128.5.0esr-1~deb12u1")]
+
+
+def test_server_and_desktop_share_a_build():
+    """Windows 11 24H2 and Windows Server 2025 are both build 26100, but numbered apart: November 2026's
+    updates were 26100.9974 (KB5132061) for Windows 11 and 26100.33822 (KB5131080) for Server 2025. A
+    Windows 11 computer on 26100.9711 mustn't be compared with Server 2025's builds."""
+    doc = {"ProductTree": {"FullProductName": [{"ProductID": "10", "Value": "Windows 11 Version 24H2 for x64-based Systems"},
+                                               {"ProductID": "11", "Value": "Windows 11 Version 24H2 for ARM64-based Systems"},
+                                               {"ProductID": "20", "Value": "Windows Server 2025"},
+                                               {"ProductID": "21", "Value": "Windows Server 2025 (Server Core installation)"}]},
+           "Vulnerability": [{"CVE": "CVE-2026-5000", "Threats": [{"Type": 1, "Description": {"Value": "Exploited:Yes"}}],
+                              "CVSSScoreSets": [{"BaseScore": 7.8, "ProductID": ["10", "11", "20", "21"]}],
+                              "Remediations": [{"Type": 2, "Description": {"Value": "5132061"}, "ProductID": ["10", "11"], "FixedBuild": "10.0.26100.9974"},
+                                               {"Type": 2, "Description": {"Value": "5131080"}, "ProductID": ["20", "21"], "FixedBuild": "10.0.26100.33822"}]}]}
+    idx = vulns.msrc_merge([vulns.msrc_compact(doc)])
+    assert idx["10.0.26100/client"]["CVE-2026-5000"][:1] == [9974] and idx["10.0.26100/server"]["CVE-2026-5000"][:1] == [33822]
+    pc = vulns.windows_findings("10.0.26100.9711", idx, set(), 9.0)            # October's Windows 11 build: missing November's fix
+    assert [(x["cve"], x["fixed"], x["ref"]) for x in pc] == [("CVE-2026-5000", "10.0.26100.9974", "KB5132061")]
+    assert vulns.windows_findings("10.0.26100.9974", idx, set(), 9.0) == []    # up to date: nothing (it was flagged before 1.85.1)
+    assert vulns.windows_findings("10.0.26100.33822", idx, set(), 9.0, server=True) == []
+    assert len(vulns.windows_findings("10.0.26100.33650", idx, set(), 9.0, server=True)) == 1
+    assert vulns.msrc_family("Microsoft Windows Server 2025 Standard") == "server" and vulns.msrc_family("Microsoft Windows 11 Pro") == "client"
+
+
+def test_old_saved_microsoft_data_is_downloaded_again(tmp_path):
+    (tmp_path / "msrc").mkdir()
+    (tmp_path / "msrc" / "2026-Nov.json").write_text(json.dumps({"10.0.26100": {"CVE-2026-5000": [33822, 7.8, True, "KB5131080"]}}))
+    (tmp_path / "meta.json").write_text(json.dumps({"msrc_ids": ["2026-Nov"], "msrc_at": 1e9, "msrc_rev": {"2026-Nov": "x"}}))
+    f = vulns.Feeds(tmp_path, logging.getLogger("t"))
+    f.load()
+    assert f.msrc == {}                                                     # 1.84's layout isn't used...
+    s = FakeSession({vulns.MSRC_LIST: {"value": [{"ID": "2026-Nov", "InitialReleaseDate": "2026-11-10", "CurrentReleaseDate": "x",
+                                                   "CvrfUrl": "https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2026-Nov"}]},
+                     "https://api.msrc.microsoft.com/cvrf/v3.0/cvrf/2026-Nov": msrc_doc(), vulns.KEV_URL: {"vulnerabilities": [{"cveID": "CVE-2026-0001"}]}})
+    asyncio.run(f.refresh(s, 1e9 + 60, "off", set(), []))                   # ...and is downloaded again straight away
+    assert "10.0.17763/server" in f.msrc and f.meta["msrc_format"] == vulns.MSRC_FORMAT
