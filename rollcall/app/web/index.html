@@ -3358,6 +3358,20 @@ document.getElementById("detBody").addEventListener("click", async e => {
   setTimeout(load, 2500);
   setTimeout(() => detMode === "snmp" ? openSnmp(detKey) : detMode === "overview" ? openOverview(detKey) : null, 2500);
 }, true);
+// Ignore an SNMP problem on this device for good (e.g. a server that's often off), or stop ignoring it
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-snmpignore]");
+  if (!b || !detKey) return;
+  e.stopPropagation();
+  const what = b.dataset.snmpignore, undo = !!b.dataset.undo;
+  if (!undo && !confirm(`Never alert on "${what}" for this device? It stays listed, greyed out, and you can stop ignoring it here.`)) return;
+  b.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/snmp/ignore", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({what, ignore: !undo})});
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.error || `That didn't work (${r.status})`); b.disabled = false; return; }
+  setTimeout(load, 2500);
+  if (detMode === "snmp") openSnmp(detKey); else if (detMode === "overview") openOverview(detKey);
+}, true);
 // Acknowledge any other SNMP problem (e.g. a server that's meant to be off), or undo that
 document.getElementById("detBody").addEventListener("click", async e => {
   const b = e.target.closest("[data-snmpackitem]");
@@ -3450,7 +3464,7 @@ function renderOverview(h, sn, lg, ha) {
     if (s.status === "green" || s.status === "unknown" || s.kind === "snmp" || s.kind === "syslog") continue;
     att.push({lvl: s.status === "red" ? "red" : "amber", what: s.label, detail: s.detail || "", jump: ""});
   }
-  for (const i of ((sn && sn.items) || []).filter(i => !i.acked)) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp", ack: i.ack});
+  for (const i of ((sn && sn.items) || []).filter(i => !i.acked && !i.ignored)) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "snmp", ack: i.ack});
   const snmpSvc = h.services.find(s => s.kind === "snmp");
   if (snmpSvc && !d && snmpSvc.status !== "green" && snmpSvc.status !== "unknown") att.push({lvl: "red", what: "SNMP", detail: snmpSvc.detail || "no reply", jump: "snmp"});
   for (const i of ((hd && hd.items) || []).filter(i => i.level !== "info")) att.push({lvl: i.level === "crit" ? "red" : "amber", what: i.what, detail: i.detail, jump: "ha"});
@@ -3566,10 +3580,16 @@ function renderSnmp(x) {
   let html = "";
   const items = x.items || [];
   if (d && (d.missing || []).length) html += `<p class="hint" style="margin:0 0 10px">⚠ The device didn't send its ${esc(d.missing.join(", "))} in time on the last poll. Rollcall tries again at each check.</p>`;
+  const ignBtn = w => `<button type="button" class="mini" data-snmpignore="${esc(w)}" style="margin-top:4px" title="Never alert on ${esc(w)} for this device, e.g. a server that's often meant to be off">Ignore</button>`;
+  const unignBtn = w => `<button type="button" class="mini" data-snmpignore="${esc(w)}" data-undo="1" style="margin-top:4px">Stop ignoring</button>`;
+  const ignoredNow = new Set(items.filter(i => i.ignored).map(i => i.what.toLowerCase()));
+  const ignoredIdle = (x.ignore || []).filter(w => !ignoredNow.has(w.toLowerCase()));  // ignored but not showing now
   html += sect("Checks", items.length
-    ? `<div class="checklist">${items.map(i => `<div${i.acked ? ` class="acked"` : ""}><span class="dot ${i.acked ? "unknown" : i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}${i.acked ? " · acknowledged: not counted while it stays like this; alerts again if it gets worse, or clears and comes back" : ""}</small>${!canEdit || i.what === "SNMP" ? "" : i.ack === "restart" ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>`
-      : i.acked ? `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" data-undo="1" style="margin-top:4px">Undo</button>`
-      : `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" style="margin-top:4px" title="Expected (e.g. a server that's meant to be off): stop counting it while it stays like this">Acknowledge</button>`}</span></div>`).join("")}</div>`
+    ? `<div class="checklist">${items.map(i => `<div${i.acked || i.ignored ? ` class="acked"` : ""}><span class="dot ${i.acked || i.ignored ? "unknown" : i.level === "crit" ? "red" : "amber"}" style="margin-top:4px"></span><span><b>${esc(i.what)}</b><small>${esc(i.detail)}${i.ignored ? " · ignored on this device: never alerts" : i.acked ? " · acknowledged: not counted while it stays like this; alerts again if it gets worse, or clears and comes back" : ""}</small>${!canEdit || i.what === "SNMP" ? "" : i.ignored ? unignBtn(i.what) : i.ack === "restart" ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>`
+      : i.acked ? `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" data-undo="1" style="margin-top:4px">Undo</button> ${ignBtn(i.what)}`
+      : `<button type="button" class="mini" data-snmpackitem="${esc(i.what)}" style="margin-top:4px" title="Expected now: stop counting it while it stays like this">Acknowledge</button> ${ignBtn(i.what)}`}</span></div>`).join("")}</div>`
+      + (ignoredIdle.length ? `<p class="hint" style="margin:8px 0 0">Also ignored on this device: ${ignoredIdle.map(w => `<b>${esc(w)}</b>${canEdit ? ` ${unignBtn(w)}` : ""}`).join(" · ")}</p>` : "")
+    : ignoredIdle.length ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p><p class="hint" style="margin:8px 0 0">Ignored on this device: ${ignoredIdle.map(w => `<b>${esc(w)}</b>${canEdit ? ` ${unignBtn(w)}` : ""}`).join(" · ")}</p>`
     : d ? `<p class="empty-note">✓ Everything reported over SNMP is OK.</p>` : `<p class="empty-note">${esc(x.detail || "Waiting for the first poll. SNMP is checked while the device answers ping.")}</p>`);
   if (!d) { body.innerHTML = html; return; }
   const pr = d.printer;
@@ -3681,7 +3701,7 @@ function renderSnmp(x) {
   html += sect("System", `<div class="kv">
     <div><span>Name</span>${esc(d.name || "—")}</div><div><span>Description</span>${esc(d.descr || "—")}</div>
     ${d.location ? `<div><span>Location</span>${esc(d.location)}</div>` : ""}
-    ${d.dell ? `<div><span>Server health</span>${dellSt(d.dell.system)}${d.dell.storage ? ` · storage ${dellSt(d.dell.storage)}` : ""}${d.dell.power ? ` · powered ${esc(d.dell.power)}` : ""}${d.dell.mib === "drac6" ? ` <small class="muted">(iDRAC6 reports overall health only)</small>` : ""}${(x.items || []).some(i => i.acked && /^(Server|Storage)/.test(i.what)) ? ` <small class="muted">(acknowledged)</small>` : ""}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
+    ${d.dell ? `<div><span>Server health</span>${dellSt(d.dell.system)}${d.dell.storage ? ` · storage ${dellSt(d.dell.storage)}` : ""}${d.dell.power ? ` · powered ${esc(d.dell.power)}` : ""}${d.dell.mib === "drac6" ? ` <small class="muted">(iDRAC6 reports overall health only)</small>` : ""}${(x.items || []).some(i => i.ignored && /^(Server|Storage)/.test(i.what)) ? ` <small class="muted">(ignored)</small>` : (x.items || []).some(i => i.acked && /^(Server|Storage)/.test(i.what)) ? ` <small class="muted">(acknowledged)</small>` : ""}</div>` : ""}<div><span>Up for</span>${fmtUp(d.uptime_s)}${d.uptime_source === "snmp" ? ` <small class="muted">(how long its SNMP service has been running; the device doesn't report its own uptime)</small>` : ""}</div>
     <div><span>Poll</span>${d.took_ms} ms, ${d.requests} requests${d.per && d.per < 25 ? `, ${d.per} rows at a time` : ""}</div></div>` +
     (d.timing ? `<p class="hint" style="margin-top:8px">Time per part: ${Object.entries(d.timing).map(([k, v]) => `${esc(k)} ${v} ms`).join(", ")}</p>` : ""));
   body.innerHTML = html;

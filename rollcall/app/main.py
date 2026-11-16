@@ -1521,6 +1521,7 @@ class Host:
     snmp_restart_ack: float = 0        # start time of an acknowledged restart (not flagged)
     snmp_acks: dict = field(default_factory=dict)  # acknowledged problems: what -> its level (warn / crit) then
     snmp_vpn_ignore: list[str] = field(default_factory=list)  # Sophos VPN connections that never alert
+    snmp_ignore: list[str] = field(default_factory=list)  # SNMP problems that never alert here, e.g. "Server" (powered off)
     vpn_alerted: set = field(default_factory=set)    # VPN connections already alerted as down
     vpn_down_prev: set = field(default_factory=set)  # VPN connections down at the previous poll
     vpn_polled: bool = False                         # polled since the add-on started
@@ -1707,6 +1708,7 @@ class Monitor:
                             **({"snmp_restart_ack": h.snmp_restart_ack} if h.snmp_restart_ack else {}),
                             **({"snmp_acks": h.snmp_acks} if h.snmp_acks else {}),
                             **({"snmp_vpn_ignore": h.snmp_vpn_ignore} if h.snmp_vpn_ignore else {}),
+                **({"snmp_ignore": h.snmp_ignore} if h.snmp_ignore else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1731,6 +1733,7 @@ class Monitor:
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
         h.snmp_vpn_ignore = [str(x)[:100] for x in entry.get("snmp_vpn_ignore") or [] if str(x).strip()][:200]
+        h.snmp_ignore = [str(x)[:100] for x in entry.get("snmp_ignore") or [] if str(x).strip()][:200]
         h.ups_limits = clean_ups_limits(entry.get("ups_limits"))
         h.readings_cfg = clean_readings_cfg(entry.get("readings_cfg"))
         try:
@@ -2340,7 +2343,7 @@ class Monitor:
             elif s.kind == "snmp" and new == RED and h.vpn_polled:
                 await self._vpn_more_down(h, s)
             if s.kind == "snmp":
-                down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and not i.get("acked") and i["what"].startswith(("VPN ", "RED "))}
+                down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and not i.get("acked") and not i.get("ignored") and i["what"].startswith(("VPN ", "RED "))}
                 if new == RED and not turned_red and h.vpn_polled and self.opts.get("notify_recovery"):
                     for what in sorted(h.vpn_alerted - down):  # back up while another is still down
                         await self.notify(f"🟢 {h.name}: {what} back up", f"{h.name}: {what} is up again.",
@@ -2391,15 +2394,18 @@ class Monitor:
         worst, items = snmplib.evaluate(d, set(h.snmp_watch) if watch is None else watch, prev, self.ups_limits(h),
                                         h.snmp_restart_ack, vpn_ignore=set(h.snmp_vpn_ignore))
         acks = h.snmp_acks or {}
+        ignore = {x.lower() for x in h.snmp_ignore}
         for i in items:
-            if i.get("ack") != "restart" and (acks.get(i["what"]) == i["level"] or acks.get(i["what"]) == "crit"):
+            if i["what"] != "SNMP" and i["what"].lower() in ignore:
+                i["ignored"] = True  # never alerts here, e.g. a server that's often meant to be off
+            elif i.get("ack") != "restart" and (acks.get(i["what"]) == i["level"] or acks.get(i["what"]) == "crit"):
                 i["acked"] = True
         if prune:
             keep = {i["what"]: acks[i["what"]] for i in items if i.get("acked")}
             if keep != acks:
                 h.snmp_acks = keep
                 self._save_hosts()
-        live = [i for i in items if not i.get("acked")]
+        live = [i for i in items if not i.get("acked") and not i.get("ignored")]
         worst = "crit" if any(i["level"] == "crit" for i in live) else "warn" if live else "ok"
         return worst, items
 
@@ -2459,8 +2465,11 @@ class Monitor:
             acked = [i["what"] for i in items if i.get("acked")]
             if acked:
                 bits.append("acknowledged: " + ", ".join(acked))
+            ignored = [f"{i['what']} {i['detail']}" for i in items if i.get("ignored")]
+            if ignored:
+                bits.append("ignored: " + ", ".join(ignored))
             return True, d.get("took_ms"), "; ".join(bits) or "answering"
-        detail = "; ".join(f"{i['what']} {i['detail']}".strip() for i in items if i["level"] == worst and not i.get("acked"))
+        detail = "; ".join(f"{i['what']} {i['detail']}".strip() for i in items if i["level"] == worst and not i.get("acked") and not i.get("ignored"))
         return (False, None, detail[:240]) + (("warn",) if worst == "warn" else ())
 
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
@@ -2546,7 +2555,7 @@ class Monitor:
     async def _vpn_more_down(self, h: Host, s: Service) -> None:
         """A firewall already alerting: another of its VPN connections has gone down (seen on two polls
         in a row, like the first), so it gets its own alert rather than going unnoticed."""
-        down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and not i.get("acked") and i["what"].startswith(("VPN ", "RED "))}
+        down = {i["what"] for i in h.snmp_items if i["level"] == "crit" and not i.get("acked") and not i.get("ignored") and i["what"].startswith(("VPN ", "RED "))}
         for what in sorted((down & h.vpn_down_prev) - h.vpn_alerted):
             msg = f"{h.name} ({h.ip or h.host}): {what} is down."
             tag = f"ping_monitor_{svc_key(h, s)}__{re.sub(r'[^a-z0-9]+', '_', what.lower())}"
@@ -4336,7 +4345,7 @@ class Monitor:
                     "uptime_24h": self.uptime_24h(svc_key(h, s)),
                     "last_check": s.last_check, "last_change": s.last_change,
                     "agent": s.kind == "agent", **({"acked": True} if s.acked else {}),
-                    **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") for i in h.snmp_items)} if s.kind == "snmp" else {}),
+                    **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") and not i.get("ignored") for i in h.snmp_items)} if s.kind == "snmp" else {}),
                 } for s in h.services + h.agent_checks],
                 "acks": self.acks_summary(h),
                 "agent": self._agent_summary(h),
@@ -5219,7 +5228,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         svc = next((s for s in h.services if s.kind == "snmp"), None)
         return web.json_response({"name": h.name, "ip": h.ip, "host": h.host, "polled": h.snmp_polled,
                                   "data": h.snmp_data, "items": h.snmp_items, "watch": h.snmp_watch,
-                                  "vpn_ignore": h.snmp_vpn_ignore, "ups_limits": monitor.ups_limits(h),
+                                  "vpn_ignore": h.snmp_vpn_ignore, "ignore": h.snmp_ignore, "ups_limits": monitor.ups_limits(h),
                                   "ups_defaults": monitor.ups_defaults(), "ups_custom": h.ups_limits,
                                   "status": svc.status if svc else None, "detail": svc.detail if svc else None})
 
@@ -5290,6 +5299,31 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 h.next_due = 0
         return web.json_response({"vpn_ignore": h.snmp_vpn_ignore})
 
+    async def host_snmp_ignore(req):
+        """Never alert on an SNMP problem on this device (e.g. "Server": powered off, for a server that's
+        often off), or stop ignoring it. {what, ignore}"""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        what = str(body.get("what") or "").strip()[:100]
+        if not what or what == "SNMP":
+            return web.json_response({"error": "That can't be ignored"}, status=400)
+        keep = [x for x in h.snmp_ignore if x.lower() != what.lower()]
+        h.snmp_ignore = keep + [what] if body.get("ignore") else keep
+        if body.get("ignore"):
+            h.snmp_acks = {k: v for k, v in (h.snmp_acks or {}).items() if k.lower() != what.lower()}
+        monitor._save_hosts()
+        user = await access.who(req)
+        log.info("%s: SNMP %s %s by %s", h.name, what, "ignored" if body.get("ignore") else "no longer ignored", user["display"] or "someone")
+        if h.snmp_data:  # re-evaluate straight away
+            worst, items = monitor.snmp_eval(h, h.snmp_data, None)
+            h.snmp_items = items
+            svc = next((s for s in h.services if s.kind == "snmp"), None)
+            if svc and svc.status != UNKNOWN:
+                h.next_due = 0
+        return web.json_response({"ignore": h.snmp_ignore})
+
     async def host_snmp_ack_item(req):
         """Acknowledge an SNMP problem (e.g. a server that's meant to be off): it stops counting while it
         is there and no worse. {what, undo}, or {all: true} for everything it shows now (the Overview)."""
@@ -5305,7 +5339,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             for i in h.snmp_items:
                 if i.get("ack") == "restart":
                     h.snmp_restart_ack = snmplib.boot_time(h.snmp_data, h.snmp_polled) or h.snmp_restart_ack
-                elif i["what"] != "SNMP" and not i.get("acked"):
+                elif i["what"] != "SNMP" and not i.get("acked") and not i.get("ignored"):
                     acks[i["what"]] = i["level"]
             log.info("%s: all SNMP problems acknowledged by %s", h.name, user["display"] or "someone")
         elif body.get("undo"):
@@ -5554,6 +5588,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/snmp/watch", editor_only(host_snmp_watch))
     app.router.add_post("/api/hosts/{key}/merge", editor_only(host_merge))
     app.router.add_post("/api/hosts/{key}/snmp/vpn-ignore", editor_only(host_snmp_vpn_ignore))
+    app.router.add_post("/api/hosts/{key}/snmp/ignore", editor_only(host_snmp_ignore))
     app.router.add_post("/api/hosts/{key}/snmp/ack", editor_only(host_snmp_ack_item))
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
