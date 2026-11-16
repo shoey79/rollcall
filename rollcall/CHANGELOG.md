@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.85.2 - 2026-11-16
+
+### Fixed
+- **"Cannot write to closing transport" tracebacks in the log.** They appeared when an agent gave up and closed the connection before Rollcall answered. They're now one line, at most once a minute: "A client closed the connection before Rollcall answered". The Windows agent (1.0.45) also no longer asks permission before sending a report (`Expect: 100-continue`), which saves a round trip and avoids that half-way point.
+
+### Added
+- **A note in the log when Rollcall is held up.** If something keeps the add-on busy for over 5 seconds, so agents and the dashboard have to wait, the log says where it's stuck, then how long it lasted once it's answering again. That shows what to fix if agents start giving up.
+
 ## 1.85.1 - 2026-11-16
 
 ### Fixed
