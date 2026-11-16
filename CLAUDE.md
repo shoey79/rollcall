@@ -40,3 +40,10 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   already has `hassio_api`, so read its own log from the Supervisor (`GET /addons/self/logs`, which covers before
   the last restart too); fall back to an in-memory buffer of recent lines if that's refused. Admins only; filter
   by level (warnings and errors) and search; refresh/follow; download. Mask anything secret-looking.
+- DFS Replication check (1.85.0) misses errors it doesn't know by ID: it only reads 2104, 2212-2214, 4012, 46xx and
+  500x, so e.g. 6404 (a replicated folder's local path is invalid or can't be reached) doesn't flag. Also read every
+  Error-level event in the DFS Replication log (last 24 h; Warning-level too, shown but not alerting), name the
+  common ones (6404 and other 64xx config/path errors, 4302/4304 sharing violations, 4202/4204 staging space,
+  2010/2012 volume and database problems) and show the rest with their ID and first line. Amber for an error in
+  the last 24 h until the folder is back to normal or the same ID hasn't recurred for a day; keep the existing red
+  cases. Ignorable by event ID per server (`dfsr:event:6404`). Needs a Windows agent version.
