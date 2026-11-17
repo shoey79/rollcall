@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.87.0 - 2026-11-17
+
+### Added
+- **OpenWrt agent** for routers and other small Linux that can't run Python: one shell script (`rollcall-agent.sh`, from **Manage → Agents**) that uses only what OpenWrt has built in, so there's nothing to install. Every 5 minutes it reports uptime, CPU, memory and load, storage, each interface's addresses and traffic, OpenWrt's services, and failed SSH (dropbear) and LuCI sign-ins. It's kept through firmware upgrades ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to [tomvining](https://github.com/tomvining) for the request).
+- **Internet (WAN) check** for routers: red when an internet connection that's set to start is down, with OpenWrt's reason (e.g. `AUTH_FAILED`); amber when only an IPv6 one is down, as many ISPs don't provide IPv6. Details shows each connection's protocol, address, gateway, DNS servers and how long it's been up. A connection can be ignored by name.
+
+### Changed
+- **Agents window: Windows, Linux and OpenWrt are now tabs**, each showing just that agent's download and instructions, with how many computers use it. It remembers the last one you picked.
+
+### Tests
+- **GitHub's tests now run the OpenWrt agent inside a real OpenWrt image**, checking its report, that it can join and report with OpenWrt's own tools, and that OpenWrt's `jsonfilter` reads its data as expected.
+
 ## 1.86.0 - 2026-11-16
 
 ### Added
