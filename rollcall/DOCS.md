@@ -29,7 +29,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
 4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, linked Home Assistant devices
 5. [Windows agent](#windows-agent)
-6. [Linux agent](#linux-agent)
+6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
 8. [Agent addresses and updates](#agent-addresses-and-updates)
 9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
@@ -1044,6 +1044,43 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 - **Immich updates:** when a newer release is out, the Immich check turns amber ("update available: v2.2.3 (running v2.1.0)"), with one notification per release linking to its release notes. The newest release comes from Immich's own version check if the API key can read it (`systemMetadata.read`, and **Version check** on in Immich's Administration → Settings), otherwise from GitHub, at most every 6 hours. To stop flagging them, use **Ignore** next to the version in Details (`update:immich`).
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors, any critical journal entry, users created or deleted, and users added to groups such as `sudo` or `docker`. SSH logins are listed in Details but not alerted.
 - **Administrators** (Security tab, admins only, agent 1.0.11 or later): who can act as root. That's members of the `sudo`, `wheel` and `admin` groups (including users whose main group it is), other accounts with uid 0, and users and `%groups` given rules in sudoers (marked "some commands" if a rule doesn't allow everything). Additions and removals are tracked as on Windows.
+
+## OpenWrt agent
+
+For routers and other small Linux that can't run Python: one shell script (`rollcall-agent.sh`) using only what OpenWrt has built in (BusyBox, `ubus`, `jsonfilter`, `uclient-fetch`), so there's nothing to install. It uses the same enrolment, approval, alerts, Details and Ignore buttons as the other agents ([#12](https://github.com/shoey79/rollcall/issues/12)).
+
+### Setting it up
+
+1. In the dashboard, open **Manage → Agents** and use **Download rollcall-agent.sh** on the OpenWrt card.
+2. Copy it to the router, e.g. `scp -O rollcall-agent.sh root@192.168.1.1:/tmp/` (`-O` for routers without SFTP).
+3. On the router run `sh /tmp/rollcall-agent.sh --install`.
+4. Approve it under **Agents → Waiting for approval**.
+
+It copies itself to `/etc/rollcall/` (with its token), adds that folder to `/etc/sysupgrade.conf` so it's kept through firmware upgrades, and adds a cron job that runs it every 5 minutes. Its log is `/tmp/rollcall-agent.log`, which is in memory and cleared on restart. For an HTTPS address the router needs `ca-bundle` and an SSL library for `uclient-fetch`, which recent OpenWrt includes; if `curl` is installed it's used instead. OpenWrt's `uclient-fetch` can't add request headers, so the router sends its token inside each report rather than in a header; as with the other agents, use an HTTPS address for routers that report over the internet.
+
+It doesn't update itself: to update, download it again and run `--install` again. Approval is kept.
+
+| Command | Does |
+|---|---|
+| `--install` | Installs or updates the agent |
+| `--uninstall` | Removes it, its cron job and its `/etc/sysupgrade.conf` line |
+| `--report` | Prints what it would send |
+
+### What it checks
+
+| Check | Goes amber | Goes red (and alerts) |
+|---|---|---|
+| **Agent** | A run slower than `agent_slow_seconds` | No report for `agent_stale_minutes` |
+| **Disk** | A mount point under its amber level | Under its red level (the overlay, i.e. the router's free flash, and any USB or other storage) |
+| **Services** | | An OpenWrt service that's enabled to start isn't running (two reports in a row) |
+| **Internet (WAN)** | Only an IPv6 connection (e.g. `wan6`) down: many ISPs don't provide IPv6, so ignore it if yours doesn't | An internet connection (e.g. `wan` over DHCP or PPPoE) that's set to start is down (two reports), with OpenWrt's reason, e.g. `AUTH_FAILED` |
+| **Security** | | `agent_failed_logons` or more failed SSH (dropbear) or LuCI sign-ins in one report |
+| **Network** (adapters you tick) | A ticked interface disabled, or its link slower than when it was ticked | A ticked interface disconnected or gone (two reports) |
+
+- **Details** shows the model and OpenWrt version, uptime, CPU, memory and load, each interface's addresses, traffic, errors and drops, and the internet connections (protocol, address, gateway, DNS servers, how long they've been up) on the **Roles** tab.
+- **Internet connections** are the interfaces named `wan…` or with a default route. One can be ignored by its name with **Ignore** in Details (`wan:wan6`).
+- **Failed sign-ins** come from the system log (`logread`): who, from where and how many times, each counted once.
+- Updates, vulnerabilities and the journal aren't checked: OpenWrt is updated by flashing new firmware.
 
 ---
 

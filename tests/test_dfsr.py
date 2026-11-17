@@ -113,3 +113,28 @@ def test_pdc_emulator_needs_a_real_source():
     assert A.time_state(tm(role="pdc", source="time.windows.com,0x9", offset_s=None)) == (A.OK, "PDC emulator, syncing from time.windows.com,0x9")
     r = A.normalize_report({"checks": {"time": {"role": "boss", "offset_s": "1", "source": "x" * 500}}})
     assert r["checks"]["time"]["role"] == "member" and r["checks"]["time"]["offset_s"] is None and len(r["checks"]["time"]["source"]) == 160
+
+
+# -- the OpenWrt agent's internet (WAN) check ------------------------------------------------------
+def wif(name, proto, up, **kw):
+    return {"name": name, "proto": proto, "up": up, "autostart": True, "uptime_s": 273600 if up else None,
+            "device": "eth1", "ipv4": "203.0.113.25" if up and proto != "dhcpv6" else "", "ipv6": "", "gateway": "", "error": "", "dns": [], **kw}
+
+
+def test_wan():
+    assert A.wan_state({"interfaces": [wif("wan", "dhcp", True)]}) == (A.OK, "wan up 3 d, 203.0.113.25")
+    assert A.wan_state({"interfaces": [wif("wan", "pppoe", False, error="AUTH_FAILED")]}) == (A.CRIT, "Down: wan (pppoe), AUTH_FAILED")
+    level, detail = A.wan_state({"interfaces": [wif("wan", "dhcp", True), wif("wan6", "dhcpv6", False, error="NO_ADDRESS")]})
+    assert level == A.WARN and detail.startswith("IPv6 down: wan6 (dhcpv6), NO_ADDRESS")
+    assert A.wan_state({"interfaces": [wif("wan", "dhcp", False), wif("wan6", "dhcpv6", False)]})[0] == A.CRIT
+    assert A.wan_state({"interfaces": [wif("wan", "dhcp", False, autostart=False)]})[0] == A.OK          # switched off on purpose
+    assert A.wan_state({"interfaces": [wif("wan6", "dhcpv6", False)]}, A.Ignore(["wan:wan6"]))[0] == A.OK
+
+
+def test_openwrt_report_is_tidied():
+    r = A.normalize_report({"agent_kind": "sh", "os_family": "linux", "checks": {"wan": {"interfaces": [
+        {"name": "wan", "proto": "dhcp", "up": "yes", "uptime_s": "x", "dns": ["1.1.1.1"] * 9}, "junk"]}}})
+    assert r["agent_kind"] == "sh"
+    assert r["checks"]["wan"]["interfaces"] == [{"name": "wan", "proto": "dhcp", "up": False, "autostart": True, "uptime_s": None,
+        "device": "", "ipv4": "", "ipv6": "", "gateway": "", "error": "", "dns": ["1.1.1.1"] * 4}]
+    assert A.normalize_report({"agent_kind": "python"})["agent_kind"] is None

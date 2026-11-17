@@ -136,11 +136,11 @@ class AgentStore:
         if p.get("replaces") and p["replaces"] in self.agents:
             old = self.agents.pop(p["replaces"])
             self.rejected.add(old["token_hash"])
-            agent = {**old, **{k: p.get(k) for k in ("hostname", "fqdn", "ips", "os", "agent_version", "os_family")},
+            agent = {**old, **{k: p.get(k) for k in ("hostname", "fqdn", "ips", "os", "agent_version", "os_family", "agent_kind")},
                      "token_hash": p["token_hash"]}
         else:
             agent = {"id": secrets.token_hex(6), "host_key": None, "last_report": None,
-                     **{k: p.get(k) for k in ("hostname", "fqdn", "ips", "os", "agent_version", "os_family")},
+                     **{k: p.get(k) for k in ("hostname", "fqdn", "ips", "os", "agent_version", "os_family", "agent_kind")},
                      "token_hash": p["token_hash"]}
         agent["approved_at"] = _now()
         self.agents[agent["id"]] = agent
@@ -185,7 +185,8 @@ def clean_enrol_info(raw: dict) -> dict:
     ips = [str(i) for i in (raw.get("ips") or []) if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", str(i))][:8]
     return {"hostname": hostname.upper(), "fqdn": fqdn, "ips": ips,
             "os": str(raw.get("os") or "")[:120], "agent_version": str(raw.get("agent_version") or "")[:20],
-            "os_family": "linux" if raw.get("os_family") == "linux" else "windows"}
+            "os_family": "linux" if raw.get("os_family") == "linux" else "windows",
+            "agent_kind": "sh" if raw.get("agent_kind") == "sh" else None}  # the OpenWrt/BusyBox shell agent
 
 
 # --------------------------------------------------------------------------
@@ -426,6 +427,14 @@ def normalize_report(r) -> dict:
         im = c["immich"] = _as_dict(c["immich"])
         im["queues"] = [x for x in _as_list(im.get("queues")) if isinstance(x, dict)]
     r["os_family"] = "linux" if r.get("os_family") == "linux" else "windows"
+    r["agent_kind"] = "sh" if r.get("agent_kind") == "sh" else None
+    if "wan" in c:
+        c["wan"] = {"interfaces": [{"name": str(i.get("name") or "")[:40], "proto": str(i.get("proto") or "")[:20],
+                                    "up": i.get("up") is True, "autostart": i.get("autostart") is not False,
+                                    "uptime_s": i.get("uptime_s") if isinstance(i.get("uptime_s"), int) else None,
+                                    **{k: str(i.get(k) or "")[:80] for k in ("device", "ipv4", "ipv6", "gateway", "error")},
+                                    "dns": [str(d)[:60] for d in _as_list(i.get("dns"))][:4]}
+                                   for i in _as_list(_as_dict(c["wan"]).get("interfaces")) if isinstance(i, dict)][:10]}
     t = {}
     for k, v in _as_dict(r.get("timings")).items():
         try:
@@ -737,7 +746,7 @@ def _days_since(iso: str | None, now: float) -> float | None:
 
 
 DAY = 86400
-IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "dfsr", "time", "exchange", "domain", "aduser", "secret")
+IGNORE_KINDS = ("service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "dfsr", "time", "wan", "exchange", "domain", "aduser", "secret")
 
 
 def disk_key(name) -> str:
@@ -1049,6 +1058,34 @@ def sysvol_state(v: dict, now: float) -> tuple[str, str]:
     if st == 4:
         return OK, "SYSVOL replicating normally (DFS-R)"
     return OK, "SYSVOL replication: no problems logged" + (f" (couldn't read its state: {v['wmi_error'][:80]})" if v.get("wmi_error") else "")
+
+
+def _dur(s: int | None) -> str:
+    if not s:
+        return ""
+    return f"{s // 86400} d" if s >= 86400 else f"{s // 3600} h" if s >= 3600 else f"{max(1, s // 60)} min"
+
+
+IPV6_ONLY = ("dhcpv6", "6in4", "6to4", "6rd")
+
+
+def wan_state(w: dict, ign: "Ignore | None" = None) -> tuple[str, str]:
+    """A router's internet connections (OpenWrt agent): red when one that should be up is down."""
+    ifs = [i for i in w.get("interfaces") or [] if not (ign and ign.has("wan", i.get("name")))]
+    down = [i for i in ifs if i.get("autostart") and not i.get("up")]
+    say = lambda xs: "; ".join(f"{i['name']} ({i['proto']})" + (f", {i['error']}" if i.get("error") else "") for i in xs)  # noqa: E731
+    # IPv6-only connections (OpenWrt sets up wan6 by default) are often down because the ISP has no
+    # IPv6: amber, not red. IPv4 (or any other) internet connections being down is red.
+    v6 = [i for i in down if i.get("proto") in IPV6_ONLY]
+    if len(v6) < len(down):
+        return CRIT, "Down: " + say(down)
+    if v6:
+        return WARN, "IPv6 down: " + say(v6) + " (ignore it if your ISP doesn't provide IPv6)"
+    up = [i for i in ifs if i.get("up")]
+    if not up:
+        return OK, "No internet connection set to start"
+    return OK, "; ".join(f"{i['name']} up" + (f" {_dur(i.get('uptime_s'))}" if i.get("uptime_s") else "")
+                         + (f", {i['ipv4'] or i['ipv6']}" if i.get("ipv4") or i.get("ipv6") else "") for i in up[:3])
 
 
 FREE_RUNNING = ("local cmos clock", "free-running system clock")
@@ -1483,7 +1520,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     # normal; only flag them once nothing has been installed for a week.
     if isinstance(sec_upd, int) and sec_upd > 0 and (patch_days is None or patch_days > 7):
         bits.append(f"{sec_upd} security update(s) waiting" + (f" ({pend} in all)" if isinstance(pend, int) else ""))
-    if bits or patch_days is not None or report.get("os_build"):
+    if report.get("agent_kind") != "sh" and (bits or patch_days is not None or report.get("os_build")):  # routers: updated by firmware
         if bits:
             detail = "; ".join(bits)
         elif patch_days is not None:
@@ -1495,6 +1532,10 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         checks.append(_check("updates", "Updates", WARN if bits else OK, detail[0].upper() + detail[1:]))
 
     rc = report.get("checks") or {}
+    wn = rc.get("wan")
+    if wn and wn.get("interfaces") and not ign.has("wan", "wan"):
+        res = wan_state(wn, ign)
+        checks.append(_check("wan", "Internet (WAN)", res[0], res[1], confirm=res[0] == CRIT))
     iis = rc.get("iis")
     if iis:
         pools = [p for p in iis.get("app_pools") or [] if p.get("state") != "Started" and not ign.has("apppool", p.get("name"))]
@@ -1808,5 +1849,6 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
 
     counts = (report.get("events") or {}).get("counts") or {}
     errs = sum((c.get("error") or 0) + (c.get("critical") or 0) for c in counts.values())
-    checks.append(_check("events", "Journal" if linux else "Events", OK, f"{errs} new error(s) since last report"))
+    if report.get("agent_kind") != "sh":  # the OpenWrt agent doesn't read a journal or event log
+        checks.append(_check("events", "Journal" if linux else "Events", OK, f"{errs} new error(s) since last report"))
     return {"checks": checks, "notable": notable}

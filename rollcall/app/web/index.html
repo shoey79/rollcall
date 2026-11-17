@@ -292,7 +292,7 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .checklist .jump:hover,.checklist .jump:focus-visible{border-color:var(--accent);outline:none}
 .sect.flash{animation:flash 1.2s ease-out}
 @keyframes flash{0%{background:color-mix(in srgb,var(--accent) 14%,transparent)}100%{background:transparent}}
-.osgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.ostabs{border-bottom:0;padding-bottom:0;margin-bottom:8px}
 .schedgrace{display:block;margin:8px 0 2px 24px;font-size:13px;line-height:1.6}.schedgrace input{width:64px;margin:0 4px}.schedgrace[hidden]{display:none}
 .hint.ok{color:var(--green)}.hint.bad{color:var(--red)}.hint.warn{color:var(--amber)}
 #detActions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -309,7 +309,6 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .oscard p{margin:2px 0}
 .oscard .osreq{color:var(--muted);margin:2px 0 10px}
 .oscard .steps{margin-top:2px}
-@media (max-width:760px){.osgrid{grid-template-columns:1fr}}
 .schedopt{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:4px 0}
 .schedopt input{margin-top:3px;accent-color:var(--accent)}
 .swin{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin:8px 0}
@@ -2312,12 +2311,12 @@ function renderDetails(d) {
   detSettings = st;
   document.getElementById("detTitle").textContent = d.name;
   document.getElementById("detSub").textContent = d.received
-    ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^Python/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
+    ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^(Python|BusyBox)/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
     : "No report from the agent yet. It reports every 5 minutes once approved.";
   if (!d.received) { document.getElementById("detBody").innerHTML = ""; showSourceTabs(detKey, "agent"); return; }
 
   // Ignore helpers: an item can be ignored on this server, on all servers, or in the add-on's Configuration.
-  const linux = r.os_family === "linux";
+  const linux = r.os_family === "linux", sh = r.agent_kind === "sh";  // sh: the OpenWrt agent
   const diskKey = v => { const t = String(v || "").trim();
     return t.startsWith("/") ? (t.replace(/\/+$/, "") || "/") : t.replace(/[\\\/]+$/, "").replace(/:$/, "").toUpperCase() + ":"; };
   const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
@@ -2377,10 +2376,10 @@ function renderDetails(d) {
     <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
     <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""} ${mBtn("sys", mSys())}</div>
     <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
-    <div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>
+    ${sh ? "" : `<div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>`}
     <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
     ${r.updates_pending != null ? `<div><span>Updates available</span>${r.updates_pending}${r.security_updates ? ` <b class='old'>(${r.security_updates} security)</b>` : ""}</div>` : ""}
-    <div${r.pending_reboot && ((r.reboot_reasons || []).length || (r.reboot_packages || []).length > 1) ? ' style="grid-column:span 2"' : ""}><span>Reboot pending</span>${!r.pending_reboot ? "No" : "<b class='old'>Yes</b>" +
+    <div${sh ? " hidden" : ""}${r.pending_reboot && ((r.reboot_reasons || []).length || (r.reboot_packages || []).length > 1) ? ' style="grid-column:span 2"' : ""}><span>Reboot pending</span>${!r.pending_reboot ? "No" : "<b class='old'>Yes</b>" +
       ((r.reboot_reasons || []).length ? `<br><small class="muted">Asked for by: ${r.reboot_reasons.map(esc).join("; ")}</small>` : "") +
       ((r.reboot_packages || []).length ? (linux ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>`
         : `<br><small class="muted">Installed since the last restart:</small><ul class="rebootpk">${r.reboot_packages.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`)
@@ -2593,6 +2592,17 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       ((c.gpo.failures || []).length ? tbl(["Time", "Problem", "Details"], c.gpo.failures.map(f =>
         `<tr><td>${esc(when(f.time))}</td><td>${esc(GP[f.id] || "Event " + f.id)} <small class="muted">${f.id}</small></td><td><small>${esc(f.message)}</small></td></tr>`)) : "") +
       `<p class="hint">From Group Policy's results in the System log. Amber when it's failing and hasn't applied for 3 hours (it refreshes every 90 minutes or so), so a failure at start-up that the next refresh fixes doesn't alert. ${(d.checks || []).some(x => x.key === "gpo") ? ignBtn("gpo", "gpo", "Group Policy") + " this check on this computer." : ""}</p>`);
+    if (c.wan && (c.wan.interfaces || []).length) {
+      const on = (d.checks || []).some(x => x.key === "wan");
+      const dur = s => !s ? "" : s >= 86400 ? Math.floor(s / 86400) + " d" : s >= 3600 ? Math.floor(s / 3600) + " h" : Math.max(1, Math.floor(s / 60)) + " min";
+      html += sect("Internet (WAN)", head("wan") + tbl(["Connection", "Type", "State", "Address", "Gateway", "DNS", ""], c.wan.interfaces.map(i => {
+        const bad = i.autostart && !i.up;
+        return `<tr class="${rowCls(bad, "wan", i.name)}"><td><b>${esc(i.name)}</b>${i.device ? `<br><small class="muted">${esc(i.device)}</small>` : ""}</td><td>${esc(i.proto)}</td>
+          <td>${i.up ? "Up" + (i.uptime_s ? ` <small class="muted">${dur(i.uptime_s)}</small>` : "") : i.autostart ? `<b>Down</b>${i.error ? `<br><small class="muted">${esc(i.error)}</small>` : ""}` : "Off"}</td>
+          <td>${esc(i.ipv4 || "")}${i.ipv6 ? `<br><small class="muted">${esc(i.ipv6)}</small>` : ""}</td><td>${esc(i.gateway || "")}</td><td>${esc((i.dns || []).join(", "))}</td>
+          <td>${bad && on ? ignBtn("wan", i.name, i.name) : ""}</td></tr>`;
+      })) + `<p class="hint">The router's connections with a default route, from OpenWrt (<code>ubus call network.interface.&lt;name&gt; status</code>). Red when one that's set to start is down (two reports in a row); amber if it's only an IPv6 one, as many ISPs don't provide IPv6. ${on ? ignBtn("wan", "wan", "Internet (WAN)") + " this check on this router." : ""}</p>`);
+    }
     if (c.time) {
       const t = c.time, off = t.offset_s, ago = off == null ? "" : Math.abs(off) < 90 ? Math.abs(off).toFixed(1) + " s" : (Math.abs(off) / 60).toFixed(1) + " min";
       html += sect("Time", head("time") + `<div class="kv">` +
@@ -2894,7 +2904,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   }
   flush("agent");
   // Everything ignored for this server, so nothing disappears silently.
-  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job", laps: "LAPS check", bitlocker: "BitLocker", cert: "Certificate", task: "Scheduled task", sqldb: "SQL database", sqljob: "SQL Agent job", gpo: "Group Policy check", sysvol: "SYSVOL replication check", dfsr: "DFS replicated folder or event", time: "Time check", exchange: "Exchange check", domain: "Domain security check", aduser: "Account (no password required)", secret: "Password in a file"};
+  const KIND = {service: "Service", event: "Event ID", apppool: "IIS app pool", site: "IIS site", disk: "Disk", dhcp: "DHCP scope", printer: "Printer", vm: "VM", storage: "Storage", hardware: "Hardware", update: "Updates for", backup: "Backup job", laps: "LAPS check", bitlocker: "BitLocker", cert: "Certificate", task: "Scheduled task", sqldb: "SQL database", sqljob: "SQL Agent job", gpo: "Group Policy check", sysvol: "SYSVOL replication check", dfsr: "DFS replicated folder or event", time: "Time check", wan: "Internet connection", exchange: "Exchange check", domain: "Domain security check", aduser: "Account (no password required)", secret: "Password in a file"};
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
@@ -2921,7 +2931,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", software: "Software", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
-  const order = Object.keys(names).filter(k => T[k]);
+  const order = Object.keys(names).filter(k => T[k] && !(sh && (k === "software" || k === "events")));  // nothing there from a router
   if (!order.includes(detTab)) detTab = "overview";
   const body = document.getElementById("detBody"), top = body.scrollTop;
   const nav = document.getElementById("detTabs");
@@ -4096,7 +4106,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["roles", "Time"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["roles", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");
@@ -4255,6 +4265,8 @@ function viaTag(x) {
     return ` <span class="viatag warn" title="${esc(`Its address is ${x.expected === "inside" ? "on" : "not on"} an internal network, so it should use the ${x.expected === "inside" ? "internal" : "external"} address. It may have fallen back because that didn't answer, or is on an older agent version.`)}">${word} ⚠</span>`;
   return ` <span class="viatag">${word}</span>`;
 }
+// Which agent's instructions the Agents window shows (remembered in this browser)
+let agOsTab = (() => { try { const t = localStorage.getItem("rollcall.agOsTab"); return ["windows", "linux", "openwrt"].includes(t) ? t : "windows"; } catch (e) { return "windows"; } })();
 function renderAgents() {
   const a = agInfo, now = Date.now() / 1000;
   const staleSec = (a.stale_minutes || 15) * 60;
@@ -4277,7 +4289,7 @@ function renderAgents() {
     Use the IP if servers can't resolve the name. Changes are saved here and sent to agents with their next report, so installed agents follow them without a new download.</p>
     <p class="hint" id="agSaved"></p>
     <p class="hint" id="agExtWarn" hidden></p>`);
-  const card = (o) => `<div class="oscard">
+  const card = (o) => `<div class="oscard" data-ospane="${o.os}"${o.os === agOsTab ? "" : " hidden"}>
       <div class="oshead"><h4>${o.title}</h4><small class="muted">${o.version ? "version " + esc(o.version) : ""}</small></div>
       <p class="osreq">${o.req}</p>
       <div class="dlrow"><button type="button" class="primary" id="${o.btn}">Download ${o.file}</button>${o.msi ? `<button type="button" id="agDownloadMsi" title="A Windows installer with the addresses and key built in">Download installer (.msi)</button>` : ""}</div>
@@ -4285,15 +4297,21 @@ function renderAgents() {
       <h5>Install</h5><ol class="steps">${o.install.map(x => `<li>${x}</li>`).join("")}</ol>
       ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
       <h5>Update</h5><p>${o.update}</p>
-      <label class="row-inline" style="margin-top:6px"><input type="checkbox" data-autoupdate="${o.os}" ${a.auto_update && a.auto_update[o.os] ? "checked" : ""}> Update ${o.title} agents automatically</label>
+      ${o.noAuto ? "" : `<label class="row-inline" style="margin-top:6px"><input type="checkbox" data-autoupdate="${o.os}" ${a.auto_update && a.auto_update[o.os] ? "checked" : ""}> Update ${o.title} agents automatically</label>
       <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades. A new version goes to one computer first; the rest only get it once that one has reported on the new version.</p>
-      ${a.auto_update && a.auto_update[o.os] ? rolloutHtml(o.os, (a.rollout || {})[o.os]) : ""}
+      ${a.auto_update && a.auto_update[o.os] ? rolloutHtml(o.os, (a.rollout || {})[o.os]) : ""}`}
       <h5>Remove</h5><p>${o.remove}</p>
       <h5>Troubleshoot</h5><p>${o.trouble}</p>
     </div>`;
   const updWarn = !a.ssl && (a.auto_update?.windows || a.auto_update?.linux)
     ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>Agent port uses HTTPS</b> under Manage &rsaquo; Settings &rsaquo; Agent port is still recommended.</p>` : "";
-  html += sect("2. Download and install", updWarn + `<div class="osgrid">${card({
+  const kindOf = x => x.agent_kind === "sh" ? "openwrt" : x.os_family === "linux" ? "linux" : "windows";
+  const osTab = (os, label) => {
+    const n = a.agents.filter(x => kindOf(x) === os).length;
+    return `<button type="button" class="tab${os === agOsTab ? " on" : ""}" role="tab" aria-selected="${os === agOsTab}" data-agtab="${os}">${label}${n ? ` <span class="n">${n}</span>` : ""}</button>`;
+  };
+  html += sect("2. Download and install", updWarn + `<div class="tabs ostabs" role="tablist" aria-label="Agent type">${osTab("windows", "Windows")}${osTab("linux", "Linux")}${osTab("openwrt", "OpenWrt")}</div>
+    <div>${card({
       title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
       msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the computer appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
       req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
@@ -4316,6 +4334,16 @@ function renderAgents() {
       update: "Turn on automatic updates below, use <b>Update</b> next to a server, or download it again and run <code>--install</code> again; settings and approval are kept.",
       remove: "<code>sudo python3 /usr/local/lib/pingmonitor/pingmonitor-agent.py --uninstall</code>, then <b>Revoke</b> below.",
       trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/pingmonitor/agent.log</code>; <code>systemctl status pingmonitor-agent</code>."
+    })}${card({
+      title: "OpenWrt", os: "openwrt", version: a.latest_sh_version, btn: "agDownloadSh", file: "rollcall-agent.sh", noAuto: true,
+      req: "OpenWrt routers, or other small Linux with BusyBox: a shell script using only what's built in (no Python, nothing to install). Sends uptime, CPU, memory, storage, interfaces and traffic, internet (WAN) connections, OpenWrt's services and failed SSH and LuCI sign-ins.",
+      install: [
+        "Copy the file to the router, e.g. <code>scp -O rollcall-agent.sh root@192.168.1.1:/tmp/</code> (<code>-O</code> for routers without SFTP)",
+        "On the router run <code>sh /tmp/rollcall-agent.sh --install</code>.",
+        "It copies itself to <code>/etc/rollcall</code>, which is kept through firmware upgrades, adds a cron job that runs every 5 minutes, and the router appears below for approval."],
+      update: "Download it again and run <code>--install</code> again; approval is kept. It doesn't update itself.",
+      remove: "<code>sh /etc/rollcall/agent.sh --uninstall</code>, then <b>Revoke</b> below.",
+      trouble: "<code>sh /etc/rollcall/agent.sh --report</code> prints what it would send. Log: <code>/tmp/rollcall-agent.log</code> (in memory: cleared on restart). For HTTPS to Home Assistant the router needs <code>ca-bundle</code> and an SSL library for <code>uclient-fetch</code>, which recent OpenWrt includes."
     })}</div>`);
   html += sect(`Waiting for approval (${a.pending.length})`, a.pending.length ? tbl(["Server", "Address", "Operating system", "Asked", ""], a.pending.map(p =>
     `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
@@ -4328,22 +4356,29 @@ function renderAgents() {
   html += sect(`Approved (${a.agents.length})`, a.agents.length ? tbl(["Server", "On dashboard as", "Last report", "Agent", "Roles", ""], a.agents.map(x => {
     const age = x.last_report ? now - x.last_report : null;
     const stale = age == null || age > staleSec;
-    const latest = x.os_family === "linux" ? a.latest_linux_version : a.latest_version;
+    const kind = kindOf(x), sh = kind === "openwrt";
+    const latest = sh ? a.latest_sh_version : kind === "linux" ? a.latest_linux_version : a.latest_version;
     const old = latest && x.version && cmpVer(latest, x.version) > 0;
-    const auto = a.auto_update && a.auto_update[x.os_family === "linux" ? "linux" : "windows"];
+    const auto = !sh && a.auto_update && a.auto_update[kind];
     const from = x.forwarded_for ? `${x.forwarded_for} (through ${x.source_ip || "a proxy"})` : x.source_ip;
     return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
       <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
       <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}${x.sent_to ? `<br><small class="muted" title="${esc("Sent to " + x.sent_to + (from ? ", from " + from : ""))}">to ${esc(x.sent_to.replace(/^https?:\/\//, ""))}${viaTag(x)}${from ? `<br>from ${esc(from)}` : ""}</small>` : ""}</td>
-      <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (x.os_family === "linux" ? "download it and run --install again" : "update the script on the share") : ""}">${esc(x.version || "?")} <small class="muted">${x.os_family === "linux" ? "Linux" : "Windows"}</small></td>
+      <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (kind === "windows" ? "update the script on the share" : "download it and run --install again") : ""}">${esc(x.version || "?")} <small class="muted">${{windows: "Windows", linux: "Linux", openwrt: "OpenWrt"}[kind]}</small></td>
       <td><small>${esc((x.roles || []).join(", "))}</small></td>
-      <td><div class="actions">${old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`
+      <td><div class="actions">${old && sh ? `<small class="muted">Download it again to update</small>` : old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`
         : `<button type="button" data-updatenow="${esc(x.id)}">Update</button>`) : ""}<button type="button" class="danger" data-revoke="${esc(x.id)}" data-name="${esc(x.hostname)}">Revoke</button></div></td></tr>`;
   })) : `<p class="empty-note">No servers yet.</p>`);
   html += sect("Enrolment key", `<div class="row-inline"><span class="mono">${esc(a.key_hint)}</span>
     <button type="button" class="danger" id="agRotate">Rotate key</button></div>
     <p class="hint">Built into downloaded scripts, and only lets a server <i>ask</i> to join. Approved servers keep working after a rotation; download the script again for new ones.</p>`);
   document.getElementById("agBody").innerHTML = html;
+  document.querySelectorAll("#agBody [data-agtab]").forEach(b => b.addEventListener("click", () => {
+    agOsTab = b.dataset.agtab;
+    try { localStorage.setItem("rollcall.agOsTab", agOsTab); } catch (e) { /* not kept: fine */ }
+    document.querySelectorAll("#agBody [data-agtab]").forEach(t => { const on = t === b; t.classList.toggle("on", on); t.setAttribute("aria-selected", on); });
+    document.querySelectorAll("#agBody [data-ospane]").forEach(p => { p.hidden = p.dataset.ospane !== agOsTab; });
+  }));
   agExtNote();
 }
 
@@ -4385,8 +4420,8 @@ document.getElementById("agBody").addEventListener("click", async e => {
     if (!r.ok) alert("That didn't work (" + r.status + ")");
     await loadAgents(); load();
   };
-  if (t.id === "agDownload" || t.id === "agDownloadLinux" || t.id === "agDownloadMsi") {
-    const linuxDl = t.id === "agDownloadLinux", msiDl = t.id === "agDownloadMsi";
+  if (t.id === "agDownload" || t.id === "agDownloadLinux" || t.id === "agDownloadMsi" || t.id === "agDownloadSh") {
+    const linuxDl = t.id === "agDownloadLinux", msiDl = t.id === "agDownloadMsi", shDl = t.id === "agDownloadSh";
     const inside = document.getElementById("agServer").value.trim().replace(/\/+$/, "");
     const outside = document.getElementById("agServerExt").value.trim().replace(/\/+$/, "");
     for (const v of [inside, outside].filter(Boolean)) if (!/^https?:\/\/[^\s'",;]+$/.test(v)) return alert(`Enter each address as http://host:port ("${v}" isn't)`);
@@ -4395,7 +4430,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
     try { localStorage.setItem("pm_agent_server", inside); localStorage.setItem("pm_agent_server_ext", outside); } catch (err) {}
     await saveServers();
     const ign = document.getElementById("agIgnoreCert");
-    const url = (msiDl ? "api/agents/msi?server=" : "api/agents/script?server=") + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : "");
+    const url = (msiDl ? "api/agents/msi?server=" : "api/agents/script?server=") + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : shDl ? "&os=openwrt" : "");
     t.disabled = true;
     try {
       const r = await fetch(url);
@@ -4403,7 +4438,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
       const blob = await r.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = linuxDl ? "pingmonitor-agent.py" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
+      link.download = linuxDl ? "pingmonitor-agent.py" : shDl ? "rollcall-agent.sh" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } finally { t.disabled = false; }

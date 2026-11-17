@@ -104,6 +104,7 @@ SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the contai
 SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
+SH_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.sh"  # OpenWrt / BusyBox: no Python needed
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
 VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vulnerability data, refreshed daily
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
@@ -3054,7 +3055,7 @@ class Monitor:
         agent.update(last_report=now, source_ip=source_ip, sent_to=sent_to or agent.get("sent_to"),
                      forwarded_for=(forwarded_for or "")[:60] or None,
                      agent_version=str(report.get("agent_version") or "")[:20],
-                     os=str(report.get("os") or "")[:120], os_family=report.get("os_family"),
+                     os=str(report.get("os") or "")[:120], os_family=report.get("os_family"), agent_kind=report.get("agent_kind"),
                      ips=[str(i) for i in (report.get("ips") or [])][:8] or agent.get("ips"),
                      roles=[str(r) for r in (report.get("roles") or [])][:30])
         apps, ahash = report.pop("apps", None), str(report.pop("apps_hash", "") or "")[:64]
@@ -3159,7 +3160,8 @@ class Monitor:
             on = dflt == "all" or (dflt == "servers" and not ws) or (dflt == "workstations" and ws)
         else:
             on = mode == "on"
-        return {"on": bool(on and h), "paths": list(hs.get("paths") or []), "hours": int(hs.get("hours") or 24)}
+        sh = agent.get("agent_kind") == "sh"  # the OpenWrt agent doesn't scan files
+        return {"on": bool(on and h and not sh), "paths": list(hs.get("paths") or []), "hours": int(hs.get("hours") or 24)}
 
     async def set_secret_scan(self, h: Host, mode: str, paths: list, hours: int, who: str | None) -> None:
         hs = self.agent_settings["hosts"].setdefault(h.key, {})
@@ -3373,6 +3375,8 @@ class Monitor:
         r = h.agent_report or {}
         if r.get("os_family") == "linux" and str(self.opts.get("vuln_linux_source") or "local") == "off":
             return None
+        if r.get("agent_kind") == "sh":
+            return None  # OpenWrt: no installed-package list or vulnerability data for it
         found = self.vuln_findings(h)
         if found is None:
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": self._vuln_why_not(h), "ids": []}
@@ -3520,6 +3524,8 @@ class Monitor:
     def agent_update_offer(self, agent: dict, report: dict) -> dict | None:
         """Offer the agent the version in this add-on if updates are on for its OS (or an
         admin asked for this one) and it's older. Agents never update otherwise."""
+        if (report.get("agent_kind") or agent.get("agent_kind")) == "sh":
+            return None  # the OpenWrt shell agent is updated by downloading it again, never with the Python one
         os_name = "linux" if report.get("os_family") == "linux" else "windows"
         latest = _linux_script_version() if os_name == "linux" else _script_version()
         running = report.get("agent_version") or agent.get("agent_version")
@@ -4505,8 +4511,8 @@ class Monitor:
             r["checks"] = {**r["checks"], "certs": {**cs, "certs": [{**c, "_state": (states.get(c["thumbprint"]) or ["", ""])[0]}
                                                                     for c in cs["certs"]]}}
         secrets_out = None
-        if include_security:
-            ag = self.agents.agents.get(h.agent_id) or {}
+        ag = self.agents.agents.get(h.agent_id) or {}
+        if include_security and ag.get("agent_kind") != "sh":  # the OpenWrt agent doesn't scan files
             hsc = (self.agent_settings["hosts"].get(h.key) or {}).get("secret_scan") or {}
             secrets_out = {"status": r.get("secrets"), "findings": self.secret_findings(h.agent_id).get("findings") or [],
                            "rules": agentlib.SECRET_RULES, "config": {"mode": hsc.get("mode") or "default", "paths": hsc.get("paths") or [],
@@ -5238,7 +5244,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         h = monitor.hosts.get(a.get("host_key") or "")
         return {"id": a["id"], "hostname": a["hostname"], "fqdn": a.get("fqdn"), "ips": a.get("ips") or [],
                 "os": a.get("os"), "version": a.get("agent_version"), "roles": a.get("roles") or [],
-                "os_family": a.get("os_family") or "windows",
+                "os_family": a.get("os_family") or "windows", "agent_kind": a.get("agent_kind"),
                 "approved_at": a.get("approved_at"), "last_report": a.get("last_report"),
                 "sent_to": a.get("sent_to"), "source_ip": a.get("source_ip"), "forwarded_for": a.get("forwarded_for"),
                 "host_key": h.key if h else None, "host_name": h.name if h else None,
@@ -5257,7 +5263,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                                | {"replaces": bool(p.get("replaces"))} for p in st.pending.values()),
                               key=lambda r: r["requested_at"]),
             "latest_version": _script_version(),
-            "latest_linux_version": _linux_script_version(),
+            "latest_linux_version": _linux_script_version(), "latest_sh_version": _sh_script_version(),
             "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
             "rollout": {k: v for k, v in (monitor.agent_settings.get("rollout") or {}).items()
                         if v.get("version") == (_linux_script_version() if k == "linux" else _script_version())},
@@ -5348,11 +5354,11 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not server:
             raise web.HTTPBadRequest(text=json.dumps({"error": "Enter each address as http://host:port (up to 4)"}),
                                      content_type="application/json")
-        linux = req.query.get("os") == "linux"
-        body = build_agent_script("linux" if linux else "windows", server, monitor.agents.enrol_key,
-                                  req.query.get("ignore_cert") == "1")
+        os_name = req.query.get("os") if req.query.get("os") in ("linux", "openwrt") else "windows"
+        body = build_agent_script(os_name, server, monitor.agents.enrol_key, req.query.get("ignore_cert") == "1")
+        name = {"linux": "pingmonitor-agent.py", "openwrt": "rollcall-agent.sh"}.get(os_name, "PingMonitorAgent.ps1")
         return web.Response(body=body, content_type="application/octet-stream", headers={
-            "Content-Disposition": f'attachment; filename="{"pingmonitor-agent.py" if linux else "PingMonitorAgent.ps1"}"'})
+            "Content-Disposition": f'attachment; filename="{name}"'})
 
     async def agents_msi(req):
         """A Windows installer with the addresses and enrolment key built in: for people who just double-click."""
@@ -6317,6 +6323,13 @@ SERVER_RE = _ServerRE()
 
 def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: bool) -> bytes:
     """The agent script with this add-on's address and enrolment key built in."""
+    if os_name == "openwrt":
+        text = SH_AGENT_SCRIPT.read_text(encoding="utf-8")
+        text = text.replace('SERVER="__PM_SERVER__"', f'SERVER="{server}"', 1)
+        text = text.replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{enrol_key}"', 1)
+        if ignore_cert:
+            text = text.replace("IGNORE_CERT=0", "IGNORE_CERT=1", 1)
+        return text.replace("\r\n", "\n").encode("utf-8")
     if os_name == "linux":
         text = LINUX_AGENT_SCRIPT.read_text(encoding="utf-8")
         text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
@@ -6340,6 +6353,14 @@ def _vt(v) -> tuple:
 def _linux_script_version() -> str | None:
     try:
         m = re.search(r'^AGENT_VERSION = "([^"]+)"', LINUX_AGENT_SCRIPT.read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def _sh_script_version() -> str | None:
+    try:
+        m = re.search(r'^AGENT_VERSION="([^"]+)"', SH_AGENT_SCRIPT.read_text(encoding="utf-8"), re.M)
         return m.group(1) if m else None
     except OSError:
         return None
@@ -6393,12 +6414,18 @@ def build_agent_app(monitor: Monitor) -> web.Application:
     async def report(req):
         auth = req.headers.get("Authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        body = None
+        if not token:  # the OpenWrt agent sends its token in the report: uclient-fetch can't add headers
+            body = await read_json(req)
+            token = str(body.get("agent_token") or "")
         state, agent = store.lookup(token)
         if state == "pending":
             return web.json_response({"status": "pending"}, status=202)
         if state != "approved":
             return web.json_response({"error": "unknown agent"}, status=401)
-        body = await read_json(req)
+        if body is None:
+            body = await read_json(req)
+        body.pop("agent_token", None)  # never stored
         # Through a reverse proxy (e.g. the firewall's WAF) the sender is the proxy; it usually passes on the
         # original address. Shown for information only: it's whatever the proxy (or client) says.
         fwd = (req.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or None
