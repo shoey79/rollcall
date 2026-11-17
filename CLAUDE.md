@@ -44,3 +44,7 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   [tomvining](https://github.com/tomvining)): let a device have an upstream/parent (e.g. a router).
   When the parent is down, show the devices behind it as unreachable rather than down and send one
   notification for the parent listing what may also be affected, instead of one per device.
+- Jellyfin check: a service check run by the add-on (not the agent) using a Jellyfin API key, stored as
+  a secret setting that's never shown again and only sent to that Jellyfin server. Up/down (/health),
+  version, restart pending and update available (/System/Info), failed scheduled tasks (e.g. library
+  scan), active streams. Confirm endpoints against the Jellyfin API docs when building.
