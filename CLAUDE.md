@@ -23,7 +23,13 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- Settings: in two-column rows, line the input boxes up level even when one side's help text wraps
+  to more lines (e.g. Checking: "Re-check after a miss" box sits lower than "Check interval").
+  Check every settings tab.
+- Windows services: Automatic (Delayed Start) services are already watched (WMI reports them as
+  "Auto"). Have the agent report the delayed flag, show "(delayed start)" in Details, and don't count
+  a delayed-start service as stopped until the computer has been up ~5 minutes (avoids a brief amber
+  just after a restart).
 
 ## Requested features (not started)
 
