@@ -30,9 +30,17 @@ Remove each line once it's released.
   "Auto"). Have the agent report the delayed flag, show "(delayed start)" in Details, and don't count
   a delayed-start service as stopped until the computer has been up ~5 minutes (avoids a brief amber
   just after a restart).
+- Sizes in MB when small ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to
+  [tomvining](https://github.com/tomvining)): Details shows memory rounded to whole GB ("45% of 0 GB" on
+  a router) and disks only in GB ("0.001 GB free of 0.002 GB" for a small OpenWrt overlay). Show MB
+  under 1 GB for memory and disks (index.html System and Disks sections). Also check the Home Assistant
+  disk sensor, which skips disks under 0.5 GB, so a router's overlay gets no sensor.
 
 ## Requested features (not started)
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-(none)
+- Dependent devices ([#13](https://github.com/shoey79/rollcall/issues/13), thanks to
+  [tomvining](https://github.com/tomvining)): let a device have an upstream/parent (e.g. a router).
+  When the parent is down, show the devices behind it as unreachable rather than down and send one
+  notification for the parent listing what may also be affected, instead of one per device.
