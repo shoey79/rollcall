@@ -47,4 +47,5 @@ Features the owner has asked for, to build when they say. Remove each once it's 
 - Jellyfin check: a service check run by the add-on (not the agent) using a Jellyfin API key, stored as
   a secret setting that's never shown again and only sent to that Jellyfin server. Up/down (/health),
   version, restart pending and update available (/System/Info), failed scheduled tasks (e.g. library
-  scan), active streams. Confirm endpoints against the Jellyfin API docs when building.
+  scan) shown amber only (no alert), and a count of active streams (no transcoding alert). Confirm
+  endpoints against the Jellyfin API docs when building.
