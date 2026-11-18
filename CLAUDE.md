@@ -35,6 +35,12 @@ Remove each line once it's released.
   a router) and disks only in GB ("0.001 GB free of 0.002 GB" for a small OpenWrt overlay). Show MB
   under 1 GB for memory and disks (index.html System and Disks sections). Also check the Home Assistant
   disk sensor, which skips disks under 0.5 GB, so a router's overlay gets no sensor.
+- Say "device" instead of "computer" everywhere users see it: the dashboard, settings and their
+  translations (en.yaml), alerts and emails, Home Assistant entity names, agent messages and logs,
+  DOCS.md, README.md and the GitHub repo description/issue templates. Keep "computer" where it's a
+  Windows term (Group Policy's "Computer Configuration", computer accounts, `$env:COMPUTERNAME`,
+  "This computer" on the installer), and don't rename setting keys, API fields or entity IDs, so
+  existing setups keep working. Leave past CHANGELOG entries as they are; note the rename in the new one.
 
 ## Requested features (not started)
 
