@@ -1641,6 +1641,7 @@ class Host:
     px_url: str = ""                   # Plex's address ("" = http://<host>:32400)
     px_key: str = ""                   # Plex token: only ever sent to px_url, never shown again
     px_data: dict | None = None        # its latest reading
+    px_base: str = ""                  # the address that last answered (https when Plex drops plain HTTP)
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
@@ -2859,11 +2860,14 @@ class Monitor:
             h.px_data = None
             return False, None, "enter a Plex token under Edit", "warn"
         base = h.px_url or pxlib.default_url(h.host)
+        if h.px_base and pxlib.same_server(h.px_base.replace("https://", "http://", 1), base.replace("https://", "http://", 1)):
+            base = h.px_base  # HTTPS answered last time, where plain HTTP was dropped
         try:
             d = await pxlib.poll(base, h.px_key, health_tls_context(), timeout=max(self.svc_timeout, 10))
         except pxlib.PlexError as err:
-            h.px_data = None
+            h.px_data, h.px_base = None, ""
             return (False, None, str(err), "warn") if err.login else (False, None, str(err))
+        h.px_base = d.pop("base", "") or ""
         h.px_data = d
         return pxlib.evaluate(d)
 
@@ -5830,6 +5834,38 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 raise web.HTTPBadRequest(text=json.dumps({"error": f"Enter the SNMP v3 {what} password"}),
                                          content_type="application/json")
 
+    async def same_machine(a: str, b: str) -> bool:
+        """Two addresses on the same machine: the same name or IP, or names that look up to the same address."""
+        if jflib.same_server(a, b):
+            return True
+        loop = asyncio.get_running_loop()
+        ips = []
+        for url in (a, b):
+            try:
+                host = urlparse(url).hostname or ""
+                infos = await asyncio.wait_for(loop.getaddrinfo(host, None), 5)
+                ips.append({i[4][0] for i in infos})
+            except (OSError, ValueError, asyncio.TimeoutError):
+                return False
+        return bool(ips[0] & ips[1])
+
+    async def check_media_keys(entry: dict, h: Host) -> None:
+        """A Jellyfin key or Plex token only goes to the machine it was entered for. Left blank, it's kept while
+        the address stays on that machine (http/https, the port, or its name for its IP can change); moved to
+        another machine, the form asks for it again rather than quietly dropping it."""
+        for url_k, key_k, saved, old, default, what in (
+                ("jellyfin_url", "jellyfin_key", h.jf_key, h.jf_url, jflib.default_url, "Jellyfin API key"),
+                ("plex_url", "plex_token", h.px_key, h.px_url, pxlib.default_url, "Plex token")):
+            if url_k not in entry or entry.get(key_k) or not saved:
+                continue
+            new_base, old_base = entry[url_k] or default(entry["host"]), old or default(h.host)
+            if await same_machine(old_base, new_base):
+                entry[key_k] = saved  # the same machine: keep it
+            else:
+                raise web.HTTPBadRequest(text=json.dumps({"error": f"That address is on a different machine, so enter the {what} "
+                                                          "again (it's only ever sent to the server it was entered for)."}),
+                                         content_type="application/json")
+
     def check_parent(entry: dict, h: Host | None) -> None:
         try:
             monitor.check_parent(h.key if h else None, entry.get("parent") or "")
@@ -5850,6 +5886,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         entry = await read_entry(req)
         check_v3(entry, h)
         check_parent(entry, h)
+        await check_media_keys(entry, h)
         await monitor.update_host(h, entry)
         return web.json_response({"updated": h.key})
 

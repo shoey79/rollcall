@@ -65,12 +65,11 @@ def default_url(host: str) -> str:
 
 
 def same_server(a: str, b: str) -> bool:
-    """Whether two addresses are the same Jellyfin server (scheme, host and port), for keeping its key."""
+    """Whether two addresses are on the same machine (the same name or IP address), for keeping its key: a
+    key goes only to the machine it was given for, but http or https, and the port, can change."""
     try:
-        ua, ub = urlparse(a), urlparse(b)
-        pa = ua.port or (443 if ua.scheme == "https" else 80)
-        pb = ub.port or (443 if ub.scheme == "https" else 80)
-        return (ua.scheme, (ua.hostname or "").lower(), pa) == (ub.scheme, (ub.hostname or "").lower(), pb)
+        ha, hb = (urlparse(a).hostname or "").lower(), (urlparse(b).hostname or "").lower()
+        return bool(ha) and ha == hb
     except ValueError:
         return False
 

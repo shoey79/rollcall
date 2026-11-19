@@ -36,11 +36,12 @@ MAX_BYTES = 4 * 1024 * 1024
 
 
 class PlexError(Exception):
-    """Plex couldn't be read. login is True when it turned the token down."""
+    """Plex couldn't be read. login is True when it turned the token down; dropped is True when it closed the
+    connection, as Plex does to plain HTTP when its secure connections are set to Required."""
 
-    def __init__(self, msg: str, login: bool = False):
+    def __init__(self, msg: str, login: bool = False, dropped: bool = False):
         super().__init__(msg)
-        self.login = login
+        self.login, self.dropped = login, dropped
 
 
 def default_url(host: str) -> str:
@@ -85,6 +86,8 @@ async def _get(session: aiohttp.ClientSession, url: str, headers: dict, tls, tim
         raise PlexError("no answer (timed out)") from None
     except aiohttp.ClientConnectorError as err:
         raise PlexError((getattr(err, "strerror", None) or "can't connect").lower()) from None
+    except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError, aiohttp.ClientPayloadError) as err:
+        raise PlexError(f"connection closed by Plex ({type(err).__name__})", dropped=True) from None
     except aiohttp.ClientError as err:
         raise PlexError(f"connection failed ({type(err).__name__})") from None
     if b"<!DOCTYPE" in bytes(body[:2000]).upper() or b"<!ENTITY" in bytes(body[:4000]).upper():
@@ -96,7 +99,22 @@ async def _get(session: aiohttp.ClientSession, url: str, headers: dict, tls, tim
 
 
 async def poll(base: str, token: str, tls: ssl.SSLContext | None, timeout: float = 15.0) -> dict:
-    """Read the server. Raises PlexError if it can't be reached or turns the token down."""
+    """Read the server. Raises PlexError if it can't be reached or turns the token down.
+
+    Plex with its secure connections set to Required drops plain HTTP, so then HTTPS is tried on the same
+    port; the result's "base" says which answered, for the next check."""
+    try:
+        return await _poll(base, token, tls, timeout)
+    except PlexError as err:
+        if not (err.dropped and base.startswith("http://")):
+            raise
+        try:
+            return await _poll("https://" + base[len("http://"):], token, tls, timeout)
+        except PlexError:
+            raise err from None
+
+
+async def _poll(base: str, token: str, tls: ssl.SSLContext | None, timeout: float) -> dict:
     t0 = time.monotonic()
     async with aiohttp.ClientSession() as session:
         ident = await _get(session, base + "/identity", _headers(None), tls, timeout)
@@ -123,7 +141,7 @@ async def poll(base: str, token: str, tls: ssl.SSLContext | None, timeout: float
             except PlexError:
                 pass
             counts.append({"name": (d.get("title") or "Library")[:60], "type": (typ or "")[:20], "count": _int(n), "episodes": _int(sub)})
-    return parse(ident, root, sessions, opt["updater"], opt["activities"], counts, ms)
+    return {**parse(ident, root, sessions, opt["updater"], opt["activities"], counts, ms), "base": base}
 
 
 def _int(v) -> int | None:

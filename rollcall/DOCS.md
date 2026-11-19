@@ -580,8 +580,13 @@ The `jellyfin` preset only checks that Jellyfin's `/health` page answers. For mo
 
 ### Plex
 
-The `plex` preset only checks that Plex's `/identity` page answers. For more, tick **Plex (token)** (`plex-api`) and enter a Plex token. To find it, open any item in Plex Web, choose **Get Info → View XML**, and copy the `X-Plex-Token` from the end of the address of the page that opens. Leave the address blank for port 32400 on the device itself, or enter e.g. `https://plex.example.local:32400`.
+The `plex` preset only checks that Plex's `/identity` page answers. For more, tick **Plex (token)** (`plex-api`) and enter a Plex token. To find it:
+- **In Plex Web:** open any film or episode, choose **Get Info → View XML**, and look at the very end of the **address** of the tab that opens: `…&X-Plex-Token=xxxxxxxxxxxxxxxxxxxx`. It isn't in the XML itself.
+- **On the Plex server:** it's `PlexOnlineToken` in Plex's `Preferences.xml` (Linux: `/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/`; Docker: the same path under its config folder), or on Windows in the registry under `HKEY_CURRENT_USER\Software\Plex, Inc.\Plex Media Server` (for the account Plex runs as).
 
+ Leave the address blank for port 32400 on the device itself, or enter e.g. `https://plex.example.local:32400`.
+
+- **Secure connections:** if Plex's *Secure connections* setting is *Required*, it drops plain HTTP, so the check tries HTTPS on the same port and keeps using it.
 - **Red, with an alert:** Plex doesn't answer. Like a port check, it's amber at the first miss and red if it's still failing at the next check. A refused token is amber.
 - **Amber, never an alert:** an **update available** (Plex's own updater says so).
 - It always shows the **version** and how many **streams** are playing (and how many are being transcoded), e.g. *Plex 1.41.2.9200; 3 streams (1 transcoding)*. Transcoding never alerts.
@@ -590,7 +595,7 @@ The `plex` preset only checks that Plex's `/identity` page answers. For more, ti
   - **Server:** version, how many people are watching, an update waiting;
   - **Busy with:** what Plex is doing in the background, such as a library scan, and how far it's got;
   - **Libraries:** each one's size (films, series and their episodes, artists...).
-- **The token** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Plex's `X-Plex-Token` header (not the address, so it doesn't end up in logs). Redirects aren't followed. Changing the address to another server clears it, so enter it again.
+- **The token** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Plex's `X-Plex-Token` header (not the address, so it doesn't end up in logs). Redirects aren't followed. Moving the address to another machine needs it entering again; switching to https, changing the port, or using the server's name instead of its IP keeps it.
 
 ### Upstream devices
 

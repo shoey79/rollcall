@@ -127,3 +127,53 @@ def test_address_and_token_rules():
     with pytest.raises(ValueError):
         px.clean_url("http://user@plex.example.local:32400")
     assert px.TOKEN_RE.match(TOKEN) and not px.TOKEN_RE.match("has spaces in it")
+
+
+def _self_signed(tmp_path):
+    import datetime
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "plex.example.local")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1))
+            .sign(key, hashes.SHA256()))
+    (tmp_path / "c.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "k.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(tmp_path / "c.pem", tmp_path / "k.pem")
+    return ctx
+
+
+def test_secure_connections_required_falls_back_to_https(tmp_path):
+    """Plex with secure connections Required drops plain HTTP: the check tries HTTPS on the same port."""
+    import ssl
+    server_ctx = _self_signed(tmp_path)
+    client_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client_ctx.check_hostname, client_ctx.verify_mode = False, ssl.CERT_NONE   # as the add-on's health checks
+
+    async def go():
+        runner = web.AppRunner(fake_plex({}))
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ctx)   # HTTPS only
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        try:
+            return await px.poll(f"http://127.0.0.1:{port}", TOKEN, client_ctx, timeout=5), port
+        finally:
+            await runner.cleanup()
+    d, port = asyncio.run(go())
+    assert d["base"] == f"https://127.0.0.1:{port}" and d["streams"] == 3 and d["name"] == "Media"
+
+
+def test_a_key_stays_with_the_same_machine():
+    """http/https and the port can change; another machine can't (the form then asks for the key again)."""
+    same = px.same_server
+    assert same("http://192.168.1.20:32400", "https://192.168.1.20:32400")
+    assert same("http://plex.example.local:32400", "https://PLEX.example.local")
+    assert not same("http://192.168.1.20:32400", "http://192.168.1.21:32400")
+    assert not same("http://plex.example.local", "http://plex.example.local.attacker.example")

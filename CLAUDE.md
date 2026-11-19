@@ -23,11 +23,7 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Plex token hint (Edit form and DOCS.md "Plex"): say the token is at the END OF THE ADDRESS of the View XML
-  tab, not inside the XML (the owner searched the XML and found nothing). Add the other way: PlexOnlineToken
-  in the server's Preferences.xml (Linux /var/lib/plexmediaserver/Library/Application Support/Plex Media
-  Server/, Docker: under the config folder) or, on Windows, the registry HKCU\Software\Plex, Inc.\Plex
-  Media Server, value PlexOnlineToken.
+(none)
 
 ## Requested features (not started)
 
