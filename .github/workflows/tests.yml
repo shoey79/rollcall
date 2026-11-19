@@ -38,7 +38,7 @@ jobs:
             echo "agent=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "$changed"
-          if echo "$changed" | grep -qE '^(rollcall/app/agent/|rollcall/app/msi\.py$|tests/(test_agent_|test_openwrt_agent|test_secret_scan|secret_corpus|build_test_msi|msi_check)|\.github/)'; then
+          if echo "$changed" | grep -qE '^(rollcall/app/agent/|rollcall/app/msi\.py$|rollcall/app/updatesign\.py$|tests/(test_update_signing|fixtures/released_agents/|test_agent_|test_openwrt_agent|test_secret_scan|secret_corpus|build_test_msi|msi_check)|\.github/)'; then
             echo "agent=true" >> "$GITHUB_OUTPUT"
           elif python3 .github/agent_source_changed.py "$BEFORE" "$AFTER"; then
             echo "agent=true" >> "$GITHUB_OUTPUT"   # main.py's code that builds the agent script changed
@@ -84,6 +84,41 @@ jobs:
           docker run --rm --entrypoint /bin/sh "$OPENWRT_IMAGE" -c 'cat /etc/openwrt_release; for c in jsonfilter uclient-fetch wget curl ubus logread; do echo "$c = $(command -v $c || echo missing)"; done'
       - run: python -m pytest -v tests/test_openwrt_agent.py
 
+  container:
+    name: Add-on container (Home Assistant base image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Which Home Assistant base images exist
+        run: |
+          for t in 3.25 3.24 3.23 3.22; do
+            if docker manifest inspect "ghcr.io/home-assistant/amd64-base:$t" >/dev/null 2>&1; then echo "amd64-base:$t exists"; else echo "amd64-base:$t not found"; fi
+          done
+      - name: Build it from build.yaml's base image
+        run: |
+          base=$(python3 -c "import yaml; print(yaml.safe_load(open('rollcall/build.yaml'))['build_from']['amd64'])")
+          echo "Building from $base"
+          docker build -q -t rollcall-test --build-arg BUILD_FROM="$base" --build-arg BUILD_VERSION=ci rollcall
+          docker run --rm --entrypoint sh rollcall-test -c 'cat /etc/alpine-release; python3 --version; python3 -c "import aiohttp, cryptography; print(aiohttp.__version__, cryptography.__version__)"'
+      - name: The add-on's tests, inside the image (its own Python and packages)
+        run: |
+          docker run --rm --entrypoint sh -v "$PWD:/src" -w /src rollcall-test -c \
+            'apk add -q --no-cache py3-pip && pip install -q --break-system-packages pytest pyyaml aiosmtpd tzdata 2>&1 | tail -2; python3 -m pytest -q -p no:cacheprovider tests'
+      - name: Start it, and have a Linux agent report into it
+        run: |
+          mkdir -p /tmp/rc && echo '{}' > /tmp/rc/options.json
+          docker run -d --name rc -p 18099:8099 -p 18100:8100 -v /tmp/rc:/data \
+            -e PM_HA_API=http://127.0.0.1:9/api -e PM_SUPERVISOR_API=http://127.0.0.1:9 -e PM_HA_WS=ws://127.0.0.1:9/ws rollcall-test
+          python .github/container_check.py
+          docker logs rc 2>&1 | grep -E "key that signs agent updates" || { echo "no signing key log line"; exit 1; }
+      - if: always()
+        run: docker logs rc 2>&1 | tail -60 || true
+
   windows:
     name: Windows agent (Windows PowerShell 5.1)
     needs: changes
@@ -95,7 +130,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install pytest
+      - run: pip install pytest aiohttp cryptography regex tzdata
+      - run: python -m pytest -q tests/test_update_signing.py tests/test_update_signing_e2e.py::test_windows_agent_updates_only_with_rollcalls_signature
       - run: python -m pytest -q tests/test_agent_strict.py tests/test_secret_scan.py tests/test_agent_route.py tests/test_agent_startup_network.py tests/test_agent_run_lock.py tests/test_veeam_issue.py tests/test_agent_task_limit.py tests/test_resources_and_tidy.py::test_agent_reads_defender_scan_times
 
   msi-build:

@@ -2249,6 +2249,9 @@ function applyStatus(fresh) {
     const mb = document.getElementById("menuBadge");
     mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
+    const vo = document.querySelector(".viewonly");
+    if (vo) { vo.textContent = data.edit_blocked ? "View only for now" : "View only";
+      vo.title = data.edit_blocked ? "Rollcall can't read Home Assistant's user list just now, so it can't tell who's an admin, and changes are off until it can. To make changes meanwhile, add your Home Assistant username to 'editors' in the add-on's Configuration tab." : "Only Home Assistant admins can add, edit, pause or reset"; }
     document.body.classList.add("loaded");
     if (viewOnly) ["dlg", "agDlg", "bkDlg", "tabDlg", "stDlg"].forEach(id => { const d = document.getElementById(id); if (d && d.open) d.close(); });
     document.getElementById("err").hidden = true;

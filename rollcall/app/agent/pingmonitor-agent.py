@@ -29,6 +29,7 @@ Other options: --uninstall, --report (print the report, send nothing).
 """
 import stat
 import argparse
+import base64
 import hashlib
 import hmac
 import concurrent.futures
@@ -48,9 +49,12 @@ import time
 import urllib.error
 import urllib.request
 
-AGENT_VERSION = "1.0.20"
+AGENT_VERSION = "1.0.21"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
+# The public half of Rollcall's own signing key, built in when the script is downloaded: agent updates and the
+# addresses Rollcall tells this agent to use must be signed with it.
+UPDATE_KEY = "__PM_UPDATE_KEY__"
 IGNORE_CERT = False
 
 PREFIX = os.environ.get("PM_PREFIX", "")          # for testing only
@@ -1516,25 +1520,64 @@ def newer(a, b):
     return _version_tuple(a) > _version_tuple(b)
 
 
+SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+def rollcall_signed(data, signature):
+    """True if signature (base64) is Rollcall's signature of data: RSASSA-PKCS1-v1_5 with SHA-256, checked with the
+    public key built into this script. The whole expected padded block is built and compared byte for byte (RFC 8017),
+    so nothing in the signature is parsed."""
+    if not UPDATE_KEY or UPDATE_KEY.startswith("__PM_") or not signature:
+        return False
+    try:
+        nb, sb = base64.b64decode(UPDATE_KEY), base64.b64decode(str(signature))
+    except (ValueError, TypeError):
+        return False
+    n = int.from_bytes(nb, "big")
+    k = (n.bit_length() + 7) // 8
+    if k < 256 or len(sb) != k:
+        return False
+    s = int.from_bytes(sb, "big")
+    if s >= n:
+        return False
+    t = SHA256_PREFIX + hashlib.sha256(data).digest()
+    return hmac.compare_digest(pow(s, 65537, n).to_bytes(k, "big"), b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t)
+
+
+def config_text(body):
+    """The addresses in Rollcall's reply as the exact text it signed (see updatesign.py in the add-on)."""
+    servers = ",".join(str(x) for x in body.get("servers") or [])
+    rt = body.get("route")
+    route = "|".join([str(rt.get("inside") or ""), str(rt.get("outside") or ""), ",".join(str(x) for x in rt.get("networks") or [])]) if isinstance(rt, dict) and rt else ""
+    return ("rollcall-agent-config/1\nservers=%s\nroute=%s\n" % (servers, route)).encode("utf-8")
+
+
 def self_update(offer, token, server, ignore):
     """Install a newer agent the add-on offers (only when an admin has turned updates on).
 
-    The download must be signed with this server's own token (HMAC-SHA256), be the
-    version offered and newer than this one, and compile. The old copy is kept as .old;
-    the new one runs from the next report."""
+    The download must be signed with Rollcall's own key (the public half is built into this script, so a reply
+    changed on the way can't sign one), be the newer version offered, and compile. Before 1.0.21 it was signed with
+    this agent's token, which crosses the network with every report. The old copy is kept as .old; the new one runs
+    from the next report."""
     version = str((offer or {}).get("version") or "")
     if not version or not newer(version, AGENT_VERSION) or not os.path.exists(INSTALL_PATH):
         return
+    if not UPDATE_KEY or UPDATE_KEY.startswith("__PM_"):
+        raise RuntimeError("this copy has no update key built in (download it again from Rollcall), so it can't check updates")
     full = ",".join(x.strip().rstrip("/") for x in re.split(r"[,;\s]+", server) if x.strip())
-    url = (ACTIVE["server"] or server_list(server)[0]) + "/agent/update?os=linux&server=" + urllib.request.quote(full, safe="")
+    url = (ACTIVE["server"] or server_list(server)[0]) + "/agent/update?os=linux&sig=rsa&server=" + urllib.request.quote(full, safe="")
     if ignore:
         url += "&ignore_cert=1"
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     ctx = ssl._create_unverified_context() if (url.startswith("https") and ignore) else None
     with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-        body, sig = resp.read(), resp.headers.get("X-Rollcall-Signature", "")
-    mac = hmac.new(hashlib.sha256(token.encode()).digest(), body, hashlib.sha256).hexdigest()
-    if not sig or not hmac.compare_digest(sig.lower(), mac):
+        raw = resp.read()
+    try:
+        got = json.loads(raw.decode("utf-8"))
+        body, sig = base64.b64decode(got["script"]), got["signature"]
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError("the update came without a signature, so it was not installed")
+    if not rollcall_signed(body, sig):
         raise RuntimeError("the update failed its signature check, so it was not installed")
     text = body.decode("utf-8")
     m = re.search(r'^AGENT_VERSION = "([^"]+)"', text, re.M)
@@ -1610,12 +1653,17 @@ def agent_run(conf, report_only=False):
     state["last_run"] = utc(time.time())
     if ACTIVE["server"]:
         state["last_server"] = ACTIVE["server"]
-    pushed = [str(x) for x in (body or {}).get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))][:4]
+    # New addresses only with Rollcall's signature: a reply changed on the way can't send this agent elsewhere.
+    # Without one, it carries on with the addresses it has.
+    signed = bool(body) and rollcall_signed(config_text(body), body.get("config_sig"))
+    if body and not signed and (body.get("servers") or body.get("route")):
+        log("WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has")
+    pushed = [str(x) for x in (body or {}).get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))][:4] if signed else []
     if pushed:
         if pushed != state.get("servers"):
             log("Rollcall's addresses are now: " + ", ".join(pushed))
         state["servers"] = pushed
-    if body is not None:
+    if signed:
         state["route"] = clean_route((body or {}).get("route"))  # None: not set under Agents (any more)
         if not state["route"]:
             state.pop("route_side", None)

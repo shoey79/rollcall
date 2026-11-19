@@ -506,7 +506,7 @@ Messages are matched to the device by the address they come from, including its 
 - **Alerts last 24 hours.** **Acknowledge**, in Logs or on the Overview, clears them now; a new message that alerts sets it off again.
 - **Unknown devices.** Messages from devices that aren't in Rollcall, or don't have Syslog ticked, are listed on the Overview under **Syslog from unknown devices**, with a button to add the device or tick Syslog for it. Once you do, the entry goes and its recent messages (up to 200 from the last hour) are filed in the device's log. Older ones aren't kept.
 - **Rate limit.** Each device can send up to 100 messages a second, with bursts up to 200. Anything above that is dropped, so a chatty device can't fill the database.
-- **Trust.** Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof.
+- **Trust.** Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof. Messages from addresses that aren't devices in Rollcall are only listed, never alerted. If you don't use syslog, turn the port off under the add-on's **Configuration → Network**; if you do, allow UDP 514 at your firewall only from the devices that send it.
 
 #### Readings from its logs
 
@@ -1059,7 +1059,8 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 
 - **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\PingMonitor`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then says who changed it and when it was put back, e.g. *Its folder's permissions were changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov* (Windows doesn't record who changes permissions, so the "who" is whoever took ownership to change them; otherwise it names the accounts given access). The full list is under **What the agent found** in Details. It's amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
 - **The password scan never sends passwords**, only where each one is (see [Passwords left in files](#passwords-left-in-files)).
-- **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, which is signed (see [Updating agents automatically](#updating-agents-automatically)).
+- **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, signed with a key only Rollcall has (see [Updating agents automatically](#updating-agents-automatically)).
+- **Limit who can reach the agent port.** Allow TCP 8100 at your firewall only from the networks your agents report from.
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
 - **Revoke** stops a server's reports. Deleting a device from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
@@ -1211,9 +1212,12 @@ If the first device is switched off before it fetches the update, another one is
 
 An agent only installs an update if all of these pass; otherwise it keeps its current version and logs why:
 
-- It's signed (HMAC-SHA256) with that server's own token, which only the server and the add-on know. A copy changed on the way, or sent by anything other than your add-on, is refused.
+- It's signed with Rollcall's own key (RSA, 3072-bit). The add-on makes the key the first time it starts, keeps it in its data folder, and never sends it anywhere; each agent script carries only the public half, built in when you download it. So nothing on the network can sign an update, even someone able to read and change plain-HTTP reports (Windows agent 1.0.53, Linux agent 1.0.21 or later).
+- Before those versions, updates were signed with the agent's own token, which goes with every report. Over plain HTTP, someone able to read and change that traffic could have captured it and signed an update of their own. Agents older than those versions move to the new ones the old way once, so update them while they report over your own network or a VPN, not over the internet on plain HTTP.
 - It's the version offered, and newer than the one running. Agents never downgrade.
 - It parses (PowerShell) or compiles (Python).
+
+The addresses Rollcall tells agents to report to (under **Agents → Where the agents report to**) are signed the same way, so a changed reply can't send an agent somewhere else. An agent that gets addresses without a good signature keeps the ones it has, and says so in its log. A failed check never stops an agent reporting.
 
 The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-agent.py.old`). Only installed agents update themselves; a copy run by hand from a share doesn't. A Group Policy startup script pointing at an older copy won't undo an update, because `-Install` never replaces a newer installed copy with an older one.
 
@@ -1343,7 +1347,7 @@ The **Rollcall** sidebar panel is visible to every Home Assistant user.
 - **`editors`**: Home Assistant usernames (or display names) of non-admins who may also make changes, e.g. `editors: [sam]`.
 - **`admin_only_changes: false`** lets anyone who can open the panel make changes.
 
-The add-on reads Home Assistant's user list to find out who's an admin. If it can't (the log will say so), only names in `editors` can make changes. If `editors` is empty too, everyone can, so you're never locked out of your own add-on.
+The add-on reads Home Assistant's user list to find out who's an admin. If it can't (the log will say so), only names in `editors` can make changes until it can, and the dashboard shows **View only for now**. Before 1.92.1 everyone could make changes then if `editors` was empty; the panel is open to every Home Assistant user, so that's no longer allowed. To make changes while the list can't be read, add your Home Assistant username to `editors` in the add-on's **Configuration** tab (outside Rollcall, so you can't be locked out).
 
 To hide the panel from some non-admins, remove it from their sidebar under their **Profile → Change the order and hide items from the sidebar**. That only hides it; anyone who can sign in could still open the view-only page by URL.
 
@@ -1351,7 +1355,7 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 
 **Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
 
-- **Export** downloads one zip: devices and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP and iLO passwords. The email password and Microsoft 365 client secret are left out.
+- **Export** downloads one zip: devices and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key, any SNMP and iLO passwords, and the key that signs agent updates (so agents go on accepting updates from the install you import it into). Anyone with the export could sign an agent update, so keep it as safe as a password. The email password and Microsoft 365 client secret are left out.
 - **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
 
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.

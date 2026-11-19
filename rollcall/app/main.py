@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import secrets
+import base64
 import hashlib
 import hmac
 import io
@@ -42,6 +43,7 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 
 import agents as agentlib
+import updatesign
 import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
@@ -114,6 +116,9 @@ SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software
 SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
+# Rollcall's own key for signing agent updates and the addresses agents report to (private: never leaves it)
+UPDATE_KEY_PATH = Path(os.environ.get("PM_UPDATE_KEY", str(DB_PATH.parent / "update_key.pem")))
+SIGNER = updatesign.SigningKey(UPDATE_KEY_PATH)
 SSL_DIR = Path(os.environ.get("PM_SSL_DIR", "/ssl"))
 DAY = 86400
 SECURITY_HIDDEN = "Security details are visible to Home Assistant admins"
@@ -5053,8 +5058,11 @@ class Access:
     Home Assistant's ingress proxy tells us who is viewing (X-Remote-User-*
     headers) but not whether they're an admin, so the admin list is read from
     HA's user list and cached. Names in the `editors` option can always make
-    changes. If the user list can't be read and no editors are set, everyone
-    can make changes (the behaviour before this was added), with a warning.
+    changes. If the user list can't be read, nobody else can until it can be
+    (before 1.92.1 everyone could when no editors were set: the panel is open to
+    every Home Assistant user, so that let anyone approve agents and change
+    settings). `editors` is set in the add-on's Configuration tab, outside
+    Rollcall, so this can't lock an admin out for good.
     """
     REFRESH = 300
 
@@ -5077,9 +5085,10 @@ class Access:
                 if self.admins is None and not self.warned:
                     self.warned = True
                     log.warning("Couldn't read the Home Assistant user list, so admins can't be "
-                                "identified. %s", "Only names in 'editors' can make changes."
-                                if self.editors else "Everyone can make changes until it can be "
-                                "read; add usernames to the 'editors' option to restrict it.")
+                                "identified. %s", "Only names in 'editors' can make changes until it can be read."
+                                if self.editors else "Nobody can make changes until it can be read; to make "
+                                "changes meanwhile, add your Home Assistant username to the 'editors' option "
+                                "in the add-on's Configuration tab.")
                 return
             self.admins = {u["id"] for u in users if u.get("id") and (
                 u.get("is_admin") or u.get("is_owner") or "system-admin" in (u.get("group_ids") or []))}
@@ -5123,8 +5132,12 @@ class Access:
         if self.admins is not None and uid not in self.admins and time.time() - self.loaded_at > 30:
             await self._refresh(force=True)
         if self.admins is None:
-            return not self.editors
+            return False  # fails closed: names in editors were let in above
         return uid in self.admins
+
+    def blocked(self) -> bool:
+        """Changes are off for admins because HA's user list can't be read (the dashboard says so)."""
+        return self.enabled and bool(SUPERVISOR_TOKEN) and self.admins is None and self.loaded_at > 0
 
 
 # --------------------------------------------------------------------------
@@ -5162,6 +5175,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         user = await access.who(req)
         snap["user"] = user["display"] or None
         snap["can_edit"] = user["can_edit"]
+        snap["edit_blocked"] = not user["can_edit"] and access.blocked()  # the user list can't be read: say why
         snap["networks"] = await monitor.network_view()
         if user["can_edit"] and monitor.agents:
             snap["agents_pending"] = len(monitor.agents.pending)
@@ -6583,7 +6597,9 @@ REPORT_NAME = re.compile(r"^agent_reports/[0-9a-f]{6,32}\.json$")
 
 def backup_files() -> dict[str, Path]:
     return {"hosts.json": HOSTS_PATH, "maintenance.json": MAINT_PATH, "agents.json": AGENTS_PATH,
-            "agent_settings.json": AGENT_SETTINGS, "views.json": VIEWS_PATH, "imported_options.json": IMPORT_MARK}
+            "agent_settings.json": AGENT_SETTINGS, "views.json": VIEWS_PATH, "imported_options.json": IMPORT_MARK,
+            # the key that signs agent updates: restored with everything else, agents keep trusting updates
+            "update_key.pem": UPDATE_KEY_PATH}
 
 
 def make_backup(version: str | None) -> bytes:
@@ -6729,6 +6745,15 @@ class _ServerRE:  # keeps the old SERVER_RE.match(...) call sites working
 SERVER_RE = _ServerRE()
 
 
+def update_public_key() -> str:
+    """The public half of the update signing key, or "" if it can't be read (scripts then can't self-update)."""
+    try:
+        return SIGNER.public()
+    except Exception as err:  # noqa: BLE001
+        log.warning("Couldn't read the key that signs agent updates: %s", err)
+        return ""
+
+
 def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: bool) -> bytes:
     """The agent script with this add-on's address and enrolment key built in."""
     if os_name == "openwrt":
@@ -6742,12 +6767,14 @@ def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: b
         text = LINUX_AGENT_SCRIPT.read_text(encoding="utf-8")
         text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
         text = text.replace('ENROL_KEY = "__PM_ENROL_KEY__"', f'ENROL_KEY = "{enrol_key}"', 1)
+        text = text.replace('UPDATE_KEY = "__PM_UPDATE_KEY__"', f'UPDATE_KEY = "{update_public_key()}"', 1)
         if ignore_cert:
             text = text.replace("IGNORE_CERT = False", "IGNORE_CERT = True", 1)
         return text.encode("utf-8")
     text = AGENT_SCRIPT.read_text(encoding="utf-8")
     text = text.replace("[string]$Server = '__PM_SERVER__'", f"[string]$Server = '{server}'", 1)
     text = text.replace("[string]$EnrolKey = '__PM_ENROL_KEY__'", f"[string]$EnrolKey = '{enrol_key}'", 1)
+    text = text.replace("$UpdateKey = '__PM_UPDATE_KEY__'", f"$UpdateKey = '{update_public_key()}'", 1)
     if ignore_cert:
         text = text.replace("[switch]$IgnoreCertificate,", "[switch]$IgnoreCertificate = $true,", 1)
     # Windows PowerShell 5.1 reads BOM-less scripts as ANSI; add a BOM so it's read as UTF-8.
@@ -6854,6 +6881,12 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         route = monitor.agent_route()
         if route:
             resp["route"] = route  # agents (Windows 1.0.42, Linux 1.0.19 on) pick inside or outside by their own address
+        # Signed with Rollcall's own key, so a reply changed on the way can't send agents elsewhere (Windows 1.0.53,
+        # Linux 1.0.21 on only use addresses that come with a good signature)
+        try:
+            resp["config_sig"] = SIGNER.sign(updatesign.config_text(servers or [], route))
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't sign the agent addresses: %s", err)
         if agent["id"] in monitor.want_apps:
             resp["send_apps"] = True
         resp["secret_scan"] = monitor.secret_scan_config(agent)
@@ -6866,8 +6899,11 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         return web.json_response(resp)
 
     async def update(req):
-        """A newer agent for an approved agent that has been offered one, signed with an
-        HMAC of the agent's own token so it can check nothing changed it on the way."""
+        """A newer agent for an approved agent that has been offered one.
+
+        sig=rsa (Windows 1.0.53, Linux 1.0.21 on): JSON with the script and its signature by Rollcall's own key,
+        which agents check with the public key built into them. Otherwise (older agents, to move them onto that):
+        the script, with an HMAC keyed by the agent's token in a header, as before."""
         auth = req.headers.get("Authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         state, agent = store.lookup(token)
@@ -6881,10 +6917,17 @@ def build_agent_app(monitor: Monitor) -> web.Application:
             raise web.HTTPBadRequest(text="invalid server address")
         server = ",".join(monitor.agent_servers()) or server  # the addresses set under Agents, if any
         body = build_agent_script(os_name, server, store.enrol_key, req.query.get("ignore_cert") == "1")
-        key = bytes.fromhex(agentlib.token_hash(token))
-        sig = hmac.new(key, body, hashlib.sha256).hexdigest()
         log.info("Sending the %s agent update to %s", os_name.capitalize(), agent.get("hostname"))
         monitor.rollout_sent(agent, os_name)
+        if req.query.get("sig") == "rsa":
+            try:
+                signature = await asyncio.to_thread(SIGNER.sign, body)
+            except Exception as err:  # noqa: BLE001
+                log.warning("Couldn't sign the agent update: %s", err)
+                return web.json_response({"error": "no signing key"}, status=503)
+            return web.json_response({"script": base64.b64encode(body).decode(), "signature": signature})
+        key = bytes.fromhex(agentlib.token_hash(token))
+        sig = hmac.new(key, body, hashlib.sha256).hexdigest()
         return web.Response(body=body, content_type="application/octet-stream", headers={"X-Rollcall-Signature": sig})
 
     async def ping_view(_req):
@@ -7093,6 +7136,12 @@ async def main() -> None:
     watchdog = watchdoglib.Watchdog(log)
     watchdog_task = watchdog.start()  # says where the add-on is stuck if something holds it up  # noqa: F841
     apply_pending_restore()
+    try:  # made once (the first start of 1.92.1), then kept; a few seconds to make, so not on the first download
+        fresh = not UPDATE_KEY_PATH.exists()
+        await asyncio.to_thread(SIGNER.public)
+        log.info("%s the key that signs agent updates (id %s)", "Made" if fresh else "Using", SIGNER.fingerprint())
+    except Exception as err:  # noqa: BLE001
+        log.error("Couldn't make or read the key that signs agent updates (%s): agents won't be offered updates", err)
     store = Store(DB_PATH)
     async with ClientSession(timeout=ClientTimeout(total=15)) as session:
         ha = HomeAssistant(session)

@@ -68,7 +68,10 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.52'
+$AgentVersion = '1.0.53'
+# The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
+# addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
+$UpdateKey = '__PM_UPDATE_KEY__'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -2965,16 +2968,61 @@ function Test-NewerVersion([string]$A, [string]$B) {
     try { return ([version]($A -replace '[^\d.]', '')) -gt ([version]($B -replace '[^\d.]', '')) } catch { return $false }
 }
 
+function Test-RollcallSignature([byte[]]$Data, [string]$Signature) {
+    # True if $Signature (base64) is Rollcall's signature of $Data: RSASSA-PKCS1-v1_5 with SHA-256, checked with
+    # the public key built into this script. The whole expected padded block is built and compared byte for byte
+    # (RFC 8017), so nothing in the signature is parsed. BigInteger keeps it working on .NET 4.5 and PowerShell 7.
+    if (-not $UpdateKey -or $UpdateKey -like '__PM_*' -or -not $Signature) { return $false }
+    try {
+        Add-Type -AssemblyName System.Numerics -ErrorAction SilentlyContinue
+        $nb = [Convert]::FromBase64String($UpdateKey); $sb = [Convert]::FromBase64String($Signature)
+        $k = $nb.Length
+        if ($k -lt 256 -or $sb.Length -ne $k) { return $false }
+        $big = {  # big-endian unsigned bytes -> BigInteger (which wants little-endian, with a sign byte)
+            param([byte[]]$B)
+            $le = New-Object byte[] ($B.Length + 1)
+            for ($i = 0; $i -lt $B.Length; $i++) { $le[$i] = $B[$B.Length - 1 - $i] }
+            New-Object Numerics.BigInteger (, $le)
+        }
+        $n = & $big $nb; $s = & $big $sb
+        if ($s -ge $n) { return $false }
+        $le = [Numerics.BigInteger]::ModPow($s, 65537, $n).ToByteArray()
+        $m = New-Object byte[] $k
+        for ($i = 0; $i -lt $le.Length; $i++) {
+            if ($i -lt $k) { $m[$k - 1 - $i] = $le[$i] } elseif ($le[$i] -ne 0) { return $false }
+        }
+        $hash = (New-Object Security.Cryptography.SHA256Managed).ComputeHash($Data)
+        $t = [byte[]](0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20) + $hash
+        $want = New-Object byte[] $k
+        $want[1] = 1
+        for ($i = 2; $i -lt $k - $t.Length - 1; $i++) { $want[$i] = 0xff }
+        [Array]::Copy([byte[]]$t, 0, $want, $k - $t.Length, $t.Length)
+        $diff = 0
+        for ($i = 0; $i -lt $k; $i++) { $diff = $diff -bor ($m[$i] -bxor $want[$i]) }
+        return $diff -eq 0
+    } catch { return $false }
+}
+
+function Get-ConfigText($Body) {
+    # The addresses in Rollcall's reply as the exact text it signed (see updatesign.py in the add-on).
+    $servers = @(@($Body.servers) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ }) -join ','
+    $rt = $Body.route
+    $route = if ($rt) { ([string]$rt.inside) + '|' + ([string]$rt.outside) + '|' + ((@(@($rt.networks) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })) -join ',') } else { '' }
+    return [Text.Encoding]::UTF8.GetBytes("rollcall-agent-config/1`nservers=$servers`nroute=$route`n")
+}
+
 function Invoke-AgentUpdate($State, $Offer) {
-    # The add-on offers a newer agent only when an admin has turned updates on. The
-    # download is checked before anything changes: it must be signed with this server's
-    # own token (HMAC-SHA256), be a newer version than this one, and parse as PowerShell.
+    # The add-on offers a newer agent only when an admin has turned updates on. The download is checked before
+    # anything changes: it must be signed with Rollcall's own key (the public half is built into this script, so
+    # a reply changed on the way can't sign one), be the newer version offered, and parse as PowerShell. Before
+    # 1.0.53 it was signed with this agent's token, which crosses the network with every report.
     # The old copy is kept as PingMonitorAgent.ps1.old. The new one runs from the next report.
     if (-not $Offer -or -not $Offer.version -or -not (Test-NewerVersion ([string]$Offer.version) $AgentVersion)) { return }
+    if (-not $UpdateKey -or $UpdateKey -like '__PM_*') { throw "This copy has no update key built in (download it again from Rollcall), so it can't check updates" }
     $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
     if (-not (Test-Path $dest)) { return }  # only an installed agent updates itself
     $active = if ($script:ActiveServer) { $script:ActiveServer } else { @(Get-ServerList)[0] }
-    $uri = $active + '/agent/update?os=windows&server=' + [uri]::EscapeDataString((@($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') }) -join ','))
+    $uri = $active + '/agent/update?os=windows&sig=rsa&server=' + [uri]::EscapeDataString((@($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') }) -join ','))
     if ($IgnoreCertificate) { $uri += '&ignore_cert=1' }
     $params = @{ Uri = $uri; Method = 'Get'; TimeoutSec = 60; UseBasicParsing = $true; Headers = @{ Authorization = "Bearer $($State.token)" } }
     if ($uri -like 'https:*' -and $IgnoreCertificate) {
@@ -2982,11 +3030,11 @@ function Invoke-AgentUpdate($State, $Offer) {
         else { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
     }
     $r = Invoke-WebRequest @params
-    $bytes = $r.RawContentStream.ToArray()
-    $sig = [string]($r.Headers['X-Rollcall-Signature'] | Select-Object -First 1)
-    $key = (New-Object Security.Cryptography.SHA256Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$State.token))
-    $mac = -join ((New-Object Security.Cryptography.HMACSHA256 (, $key)).ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
-    if (-not $sig -or $sig.ToLower() -ne $mac) { throw 'The update failed its signature check, so it was not installed' }
+    $got = $null
+    try { $got = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) | ConvertFrom-Json } catch { }
+    if (-not $got -or -not $got.script -or -not $got.signature) { throw 'The update came without a signature, so it was not installed' }
+    $bytes = [Convert]::FromBase64String([string]$got.script)
+    if (-not (Test-RollcallSignature $bytes ([string]$got.signature))) { throw 'The update failed its signature check, so it was not installed' }
     $text = [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)
     if ($text -notmatch "\`$AgentVersion = '([^']+)'" -or $Matches[1] -ne [string]$Offer.version) { throw 'The update is not the version offered, so it was not installed' }
     $errs = $null
@@ -3117,18 +3165,22 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     } else { $state.secret_scan = @{ on = $false } }
     $state.last_run = ConvertTo-UtcString (Get-Date)
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
-    if ($res.body -and $res.body.servers) {
+    # New addresses only with Rollcall's signature: a reply changed on the way can't send this agent elsewhere.
+    # Without one, it carries on with the addresses it has.
+    $signed = $res.body -and $res.body.config_sig -and (Test-RollcallSignature (Get-ConfigText $res.body) ([string]$res.body.config_sig))
+    if ($res.body -and -not $signed -and ($res.body.servers -or $res.body.route)) { Write-AgentLog "WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has" }
+    if ($signed -and $res.body.servers) {
         $pushed = @($res.body.servers | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^https?://[^\s,;]+$' } | Select-Object -First 4)
         if ($pushed.Count -and (($pushed -join ',') -ne (@($state.servers) -join ','))) {
             Write-AgentLog ("Rollcall's addresses are now: " + ($pushed -join ', '))
         }
         if ($pushed.Count) { $state.servers = $pushed }
     }
-    $rt = if ($res.body) { $res.body.route } else { $null }
+    $rt = if ($signed) { $res.body.route } else { $null }
     if ($rt -and [string]$rt.inside -match '^https?://[^\s,;]+$' -and [string]$rt.outside -match '^https?://[^\s,;]+$') {
         $state.route = @{ inside = ([string]$rt.inside).TrimEnd('/'); outside = ([string]$rt.outside).TrimEnd('/')
             networks = @(@($rt.networks) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -First 50) }
-    } elseif ($res.body) {
+    } elseif ($signed) {
         $state.route = $null; $state.route_side = $null  # not set under Agents (any more): the last address that worked goes first
     }
     Save-State $state
