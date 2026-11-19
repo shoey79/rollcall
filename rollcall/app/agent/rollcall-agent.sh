@@ -14,7 +14,7 @@
 # The first report asks to join; approve it in the Rollcall dashboard (Manage > Agents).
 # Downloaded from the dashboard, the add-on's address and enrolment key are already filled in.
 
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.0.1"
 SERVER="__PM_SERVER__"
 ENROL_KEY="__PM_ENROL_KEY__"
 IGNORE_CERT=0
@@ -23,12 +23,20 @@ R="${RC_ROOT:-}"   # tests only: a folder standing in for / (OpenWrt's files und
 DIR="${RC_DIR:-/etc/rollcall}"
 STATE="$DIR/token"
 LOG="${RC_LOG:-/tmp/rollcall-agent.log}"
+RUN="${RC_RUN:-/tmp}"            # RAM: the run lock, and where the system log was read up to
+SINCE="$RUN/rollcall-since"      # in RAM, not flash: written every run, and the log it marks is in RAM too
+LOCK="$RUN/rollcall.lock"
 CRON="${RC_CRONTAB:-/etc/crontabs/root}"
 TMP="${TMPDIR:-/tmp}/rollcall.$$"
 ERRORS=""
 LOGREAD=logread; [ -x "$R/sbin/logread" ] && LOGREAD="$R/sbin/logread"   # OpenWrt's own (ubox), which has -t; not BusyBox's
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; [ -t 1 ] && echo "$*"; }
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; [ -t 1 ] && echo "$*"
+    # /tmp is RAM: once the log passes 32 KB, keep its last 16 KB (whole lines)
+    [ "$(wc -c < "$LOG" 2>/dev/null || echo 0)" -gt 32768 ] && tail -c 16384 "$LOG" | sed 1d > "$LOG.new" && mv "$LOG.new" "$LOG"
+    return 0
+}
 err() { ERRORS="$ERRORS${ERRORS:+,}$(js "$1")"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -124,9 +132,9 @@ nics() {
 # --- internet (WAN) connections: OpenWrt's logical interfaces with a default route ----------------------
 wan() {
     have ubus && have jsonfilter || return 0
-    for i in $(ubus list 'network.interface.*' 2>/dev/null | sed 's/^network\.interface\.//'); do
+    for i in $(ubus -t 10 list 'network.interface.*' 2>/dev/null | sed 's/^network\.interface\.//'); do
         case "$i" in loopback|lan) continue ;; esac
-        s=$(ubus call "network.interface.$i" status 2>/dev/null) || continue
+        s=$(ubus -t 10 call "network.interface.$i" status 2>/dev/null) || continue
         g() { echo "$s" | jsonfilter -e "$1" 2>/dev/null | head -1; }
         proto=$(g '@.proto'); [ "$proto" = none ] && continue
         auto=$(g '@.autostart'); up=$(g '@.up')
@@ -147,7 +155,7 @@ services() {
     for f in "$R"/etc/rc.d/S*; do
         [ -e "$f" ] || continue
         n=${f##*/S[0-9][0-9]}
-        r=$(ubus call service list "{\"name\":\"$n\"}" 2>/dev/null | jsonfilter -e '@.*.instances.*.running' 2>/dev/null)
+        r=$(ubus -t 10 call service list "{\"name\":\"$n\"}" 2>/dev/null | jsonfilter -e '@.*.instances.*.running' 2>/dev/null)
         [ -z "$r" ] && continue   # one-off start-up scripts (e.g. boot, sysctl) have nothing running
         state=Running; echo "$r" | grep -q false && state=Stopped
         printf '{"name":%s,"display":%s,"state":"%s","start_mode":"Auto","role":"OpenWrt"}\n' "$(js "$n" 60)" "$(js "$n" 60)" "$state"
@@ -157,7 +165,7 @@ services() {
 # --- failed sign-ins (dropbear SSH, LuCI) since the last report -----------------------------------------
 security() {
     have "$LOGREAD" || { printf '{"failed_logons":{"count":0,"top":[]},"items":[]}'; return; }
-    since=$(cat "$DIR/since" 2>/dev/null || echo 0)
+    since=$(cat "$SINCE" 2>/dev/null || echo 0)
     "$LOGREAD" -t 2>/dev/null | awk -v since="$since" '
         { t = 0; for (i = 1; i <= NF; i++) if ($i ~ /^\[[0-9]+(\.[0-9]+)?\]$/) { t = $i; gsub(/[^0-9.]/, "", t); t = int(t); break } }
         t == 0 || t <= since { next }
@@ -232,7 +240,7 @@ send() {
     done
     case "$code" in
         200) log "Report sent to $SRV"
-             last=$("$LOGREAD" -t 2>/dev/null | tail -1 | stamp); [ "${last:-0}" -gt 0 ] && echo "$last" > "$DIR/since" ;;
+             last=$("$LOGREAD" -t 2>/dev/null | tail -1 | stamp); [ "${last:-0}" -gt 0 ] && [ "$last" != "$(cat "$SINCE" 2>/dev/null)" ] && echo "$last" > "$SINCE" ;;
         202) log "Waiting for approval in the Rollcall dashboard" ;;
         401) log "Not enrolled yet: asking to join"
              printf '{"enrol_key":%s,"hostname":%s,"fqdn":%s,"os":%s,"agent_version":"%s","agent_kind":"sh","os_family":"linux","token":"%s","ips":%s}' \
@@ -267,11 +275,26 @@ uninstall() {
     rm -rf "$DIR"; echo "Removed. Remove the router in the Rollcall dashboard too if it's gone for good."
 }
 
-trap 'rm -f "$TMP".*' EXIT
+# One run at a time: cron starts one every 5 minutes, and a run stuck on something (a ubus call that never
+# answers) mustn't let others pile up until the router runs out of memory. A run older than 10 minutes
+# is stuck: it's stopped and this one carries on.
+take_lock() {
+    if mkdir "$LOCK" 2>/dev/null; then echo $$ > "$LOCK/pid"; return 0; fi
+    pid=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q rollcall "/proc/$pid/cmdline" 2>/dev/null; then
+        age=$(( $(date +%s) - $(date -r "$LOCK/pid" +%s 2>/dev/null || date +%s) ))
+        [ "$age" -lt 600 ] && { log "Another run is still going; skipped this one"; return 1; }
+        log "WARN stopped a run stuck for $((age / 60)) min"; kill -9 "$pid" 2>/dev/null
+    fi
+    echo $$ > "$LOCK/pid"; return 0
+}
+
+trap 'rm -f "$TMP".*; [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"' EXIT
+[ -f "$DIR/since" ] && rm -f "$DIR/since"   # 1.0.0 kept this on flash and wrote it every run
 case "$1" in
     --install) install ;;
     --uninstall) uninstall ;;
     --report) build_report; echo ;;
-    "") send ;;
+    "") take_lock && send ;;
     *) sed -n '2,15p' "$0"; exit 1 ;;
 esac

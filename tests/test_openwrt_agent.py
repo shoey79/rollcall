@@ -108,6 +108,7 @@ def openwrt(tmp_path):
     (shims / "jsonfilter").write_text(JSONFILTER.replace("/usr/bin/env python3", sys.executable + " -I"))
     (shims / "uci").write_text("#!/bin/sh\necho Lab-Router\n")
     (shims / "ubus").write_text(f'''#!/bin/sh
+[ "$1" = -t ] && shift 2
 [ "$1" = list ] && {{ for i in lan loopback wan wan6; do echo network.interface.$i; done; exit 0; }}
 if [ "$1" = call ] && [ "$2" = service ]; then n=$(echo "$4" | sed 's/.*"name":"\\([^"]*\\)".*/\\1/'); cat "{ub}/svc_$n.json" 2>/dev/null || echo '{{}}'; exit 0; fi
 [ "$1" = call ] && {{ f="{ub}/${{2#network.interface.}}.json"; [ -f "$f" ] && cat "$f" && exit 0; exit 4; }}
@@ -116,7 +117,7 @@ if [ "$1" = call ] && [ "$2" = service ]; then n=$(echo "$4" | sed 's/.*"name":"
         f.chmod(0o755)
     (root / "sbin" / "logread").chmod(0o755)
     env = {"PATH": f"{shims}:{bb}", "RC_ROOT": str(root), "RC_DIR": str(tmp_path / "rollcall"),
-           "RC_LOG": str(tmp_path / "agent.log"), "TMPDIR": str(tmp_path), "HOME": str(tmp_path)}
+           "RC_LOG": str(tmp_path / "agent.log"), "RC_RUN": str(tmp_path), "TMPDIR": str(tmp_path), "HOME": str(tmp_path)}
     return env, tmp_path
 
 
@@ -130,7 +131,7 @@ def test_report(openwrt):
     assert p.returncode == 0, p.stderr
     r = json.loads(p.stdout)
     assert "agent_token" not in r                                     # --report never shows the token
-    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.0"
+    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.1"
     assert r["hostname"] == "Lab-Router" and r["os"].startswith("OpenWrt 23.05.5 r24106") and r["os_id"] == "openwrt"
     assert r["hw_model"] == "Test Router Model X" and r["roles"] == ["Router (OpenWrt)"] and r["errors"] == []
     assert isinstance(r["cpu_pct"], float) and r["mem_total_mb"] > 0 and len(r["load"]) == 3 and r["uptime_s"] > 0
@@ -274,5 +275,47 @@ def test_real_openwrt_reports(tmp_path):
         assert r["checks"]["nics"]["adapters"] and isinstance(r["cpu_pct"], float)
         assert "asking to join" in rest and [s[0] for s in Rollcall.seen] == ["/agent/report", "/agent/enrol"], (rest, p.stderr, Rollcall.headers_seen)
         assert Rollcall.seen[1][2]["hostname"] and Rollcall.seen[1][2]["agent_kind"] == "sh"
+    finally:
+        srv.shutdown()
+
+
+def test_nothing_written_to_flash_after_joining_and_runs_dont_pile_up(openwrt):
+    """1.0.1: the log-read marker lives in RAM (/tmp), not the router's flash, where writing it every 5 minutes
+    could wear a small router down; the log is kept short; and a second run while one is going is skipped."""
+    env, tmp = openwrt
+    Rollcall.approved, Rollcall.seen = set(), []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Rollcall)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    script = tmp / "rollcall-agent.sh"
+    script.write_text(AGENT.read_text().replace('SERVER="__PM_SERVER__"', f'SERVER="http://127.0.0.1:{srv.server_port}"', 1)
+                      .replace('ENROL_KEY="__PM_ENROL_KEY__"', 'ENROL_KEY="key-123"', 1))
+    flash = tmp / "rollcall"
+    try:
+        run(env, script=script)                                       # joins: the token is saved (once)
+        Rollcall.approved.add((flash / "token").read_text())
+        (flash / "since").write_text("123")                          # left by 1.0.0
+        before = {p.name: p.stat().st_mtime_ns for p in flash.iterdir() if p.name != "since"}
+        for _ in range(3):
+            run(env, script=script)
+        assert sorted(p.name for p in flash.iterdir()) == ["token"]   # 1.0.0's marker removed, nothing new
+        assert {p.name: p.stat().st_mtime_ns for p in flash.iterdir()} == before
+        assert (tmp / "rollcall-since").exists()                      # in RAM instead
+        # a run already going: the next is skipped
+        (tmp / "rollcall.lock").mkdir()
+        (tmp / "rollcall-hold.sh").write_text("sleep 30\n")                 # looks like a run: "sh .../rollcall..."
+        holder = subprocess.Popen([BUSYBOX, "sh", str(tmp / "rollcall-hold.sh")])
+        (tmp / "rollcall.lock" / "pid").write_text(str(holder.pid))
+        try:
+            n = len(Rollcall.seen)
+            run(env, script=script)
+            assert len(Rollcall.seen) == n and "Another run is still going" in (tmp / "agent.log").read_text()
+        finally:
+            holder.kill()
+        run(env, script=script)                                       # it's gone: this one runs
+        assert len(Rollcall.seen) == n + 1 and not (tmp / "rollcall.lock").exists()
+        # the log in /tmp is trimmed
+        (tmp / "agent.log").write_text("x" * 40000 + "\n")
+        run(env, script=script)
+        assert (tmp / "agent.log").stat().st_size < 32768
     finally:
         srv.shutdown()
