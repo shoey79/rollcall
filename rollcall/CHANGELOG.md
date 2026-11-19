@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.88.0 - 2026-11-19
 
 ### Added
 - **Upstream devices** ([#13](https://github.com/shoey79/rollcall/issues/13), thanks to [tomvining](https://github.com/tomvining) for the request). Give a device the router, switch or VPN it's reached through (Edit, **Upstream device**). While that's down, the devices behind it show as **Unreachable** instead of Down and don't alert on their own: one alert for the upstream device lists what may also be affected. A device that goes red before its upstream device has been checked waits (up to 3 minutes) while that's checked straight away, so the order checks happen in doesn't matter. Works through several levels, and loops are refused.
@@ -8,7 +8,14 @@
 - **Named IP ranges** (Settings, Display, `ip_ranges`), e.g. `Servers=10.0.1.0/24` or `IoT=192.168.20.10-200`: the range's name shows under each device's address, in Details and as the sensor's `ip_range` attribute.
 
 ### Changed
-- **Windows agent 1.0.47: the start-up run waits for the network.** Run a minute after Windows starts, it now waits up to 3 minutes for Rollcall to be reachable, so a restart is still reported straight away on computers whose network takes longer to come up.
+- **"Device" instead of "computer"** throughout the dashboard, settings, alerts, emails, docs and README, as Rollcall watches far more than computers. Windows' own terms keep the word (computer accounts, Group Policy's *Computer Configuration*), and setting names, entity IDs and saved tabs are unchanged, so nothing needs redoing. The Overview group "Computers and servers" is now "Servers and PCs"; tabs that filter on the old name still work.
+- **Automatic (Delayed Start) services** (Windows agent 1.0.48): Windows starts these a couple of minutes after it starts, so they no longer show as stopped in a report sent straight after a restart. They count once the device has been up 5 minutes, the Services check says which are still starting, and Details marks them *delayed start*.
+- **Sizes under 1 GB in MB** ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to [tomvining](https://github.com/tomvining)): a router's memory showed as "of 0 GB" and its flash as "0.001 GB free of 0.002 GB"; they now read e.g. "121 MB" and "9 MB free of 12 MB". Routers' small disks also get a Home Assistant disk sensor now.
+- **Windows agent 1.0.47: the start-up run waits for the network.** Run a minute after Windows starts, it now waits up to 3 minutes for Rollcall to be reachable, so a restart is still reported straight away on devices whose network takes longer to come up.
+
+### Fixed
+- **Settings: the boxes in each row line up** even when one side's help text runs to more lines.
+- **Device list: rows stay compact and the buttons stay visible.** A device with many checks showed every check as a chip, making its row very tall; now any check that isn't OK is always shown, and green ones up to six chips in all, with the rest in a "+N more ✓" chip that lists them. If the table is ever wider than the page (long names, browser zoom), the Check now / Details / Pause / Edit buttons move onto two rows instead of running off the edge.
 
 ## 1.87.0 - 2026-11-17
 
