@@ -63,6 +63,21 @@ together). Remove each once it's released.
   stale message later; logged (who, what, which devices, when) and Details shows which devices have shown it. Docs:
   say it's off by default and why (a compromised Home Assistant could otherwise message users), and that a sign-in
   message of the day is better done with Group Policy's "Interactive logon: Message text".
+- Agent HTTPS made simple, with pinning (owner asked 19 Nov): today agent_ssl needs the owner's own certificate in
+  /ssl, and "Accept a self-signed certificate" makes agents accept ANY certificate (encrypted, but not protected from
+  impersonation). Instead: Rollcall generates its own key and self-signed certificate (in /data) the first time HTTPS
+  is turned on, with SANs for the inside/outside addresses (IPs and names); no CA, nothing in Windows' trust store.
+  Downloaded agent scripts get the public-key (SPKI SHA-256) fingerprint built in, like the enrolment key; agents
+  check the key before sending the token or anything else and refuse any other key. Installed agents are moved over
+  in the report reply (HTTPS address + fingerprint, as "servers" and secret_scan settings are sent now): that one
+  hand-over is over HTTP (trust on first use), pinned from then on. Keep HTTP working for old agents until the owner
+  turns it off (a setting). Pin the key, not the certificate, so certificate renewal doesn't matter; if the key ever
+  changes, send the next key's pin ahead so agents accept both during the switch. A reverse proxy with a real
+  certificate (outside address) keeps normal validation; pinning is for Rollcall's own certificate. Windows PS 5.1:
+  in the existing certificate-callback path; Linux: Python ssl, check the peer's key before sending; router:
+  uclient-fetch can't pin, so give it Rollcall's certificate as --ca-certificate (SANs must cover the address it
+  uses), or pin with curl --pinnedpubkey when curl is installed. Docs: why pinning is stronger than "accept
+  self-signed".
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
   route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default
