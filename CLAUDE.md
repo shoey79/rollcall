@@ -29,6 +29,16 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
+- Messages to users' screens (owner asked 19 Nov): a simple message box on agent devices, sent in Rollcall's reply to
+  each agent's next report (so it arrives within ~5 minutes). Keep it simple, minimal parts: Windows via WTSSendMessage
+  from the agent (works as SYSTEM, shows in every signed-in session incl. Remote Desktop; no helper, no toast);
+  Linux via wall (and a desktop notification only if trivial); routers left out. Fixed heading the sender can't change:
+  "Message from the Rollcall Administrator". Plain text only, no links or buttons, length limit. The whole message
+  system is OFF by default (add-on setting); admins choose which machines are included (only those can receive); only
+  admins can send; send to one device, a tab or all included devices; an expiry so a device that was off doesn't show a
+  stale message later; logged (who, what, which devices, when) and Details shows which devices have shown it. Docs:
+  say it's off by default and why (a compromised Home Assistant could otherwise message users), and that a sign-in
+  message of the day is better done with Group Policy's "Interactive logon: Message text".
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
   route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default
