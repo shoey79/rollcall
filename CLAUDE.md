@@ -41,8 +41,11 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   power_ct_generation (CT3), binary_sensor locked, binary_sensor update_available, number_of_phases, firmware.
   Tiles: status, plug, mode, charging power, added this session, used today (green part), grid and solar when
   clamped, locked. Hub device ("myenergi Hub"; the owner named it, keep his name out of the repo): generated_today,
-  green_energy_today, grid_export_today, grid_import_today, hub_firmware, hub_serial_number, plus 8 diagnostic
-  entities not yet seen (owner says voltage etc.: ask him to expand them before building). Harvi device (wireless CT
+  green_energy_today, grid_export_today, grid_import_today, hub_firmware, hub_serial_number; diagnostic:
+  voltage_grid (V), frequency_grid (Hz), home_consumption (W), power_import, power_export, power_grid,
+  power_charging, power_generation (W). Hub tiles: grid voltage and frequency, home using now, importing/exporting
+  now. Suggested (confirm with the owner before building): amber, no notification, when the voltage is outside the
+  UK supply range 216-253 V (230 V +10%/-6%) or the frequency outside 49.5-50.5 Hz. Harvi device (wireless CT
   sender; its entity ids include its serial, keep that out of the repo): power_ct_generation, generation_ct1,
   none_ct2/none_ct3 (CTs not set up, ignore "None" CTs), firmware. Generation CTs: DON'T call them "Solar" or
   derive anything from them: the owner's Harvi generation CT also sees his home batteries discharging, so it isn't
