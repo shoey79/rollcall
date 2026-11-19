@@ -35,6 +35,12 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   otherwise the Veeam Backup event log's per-task events). Only for the latest warned/failed session, kept
   short. In Details > Backups, a button on that job's row opens the details. No names from a real
   environment in tests or docs.
+- Jellyfin in Details: its section (server, version, health, streams count, failed tasks) is only drawn on
+  the Overview page of a device WITHOUT an agent (openOverview/renderOverview), so on a server with an agent
+  nothing shows. Give Jellyfin its own Details tab (like SNMP/Logs/iLO) for any device with the check.
+  Show current streams: user, client/device, what's playing, direct play or transcoding (and why), progress,
+  paused; plus other useful server info (e.g. library item counts, active users). Read with the same API key,
+  only sent to that Jellyfin server; no real names in tests or docs.
 
 ## Built, waiting for release
 
