@@ -29,6 +29,20 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
+- Several Home Assistant devices on one Rollcall device (owner asked 19 Nov): today a Rollcall device links one HA
+  device (h.ha_device). Allow a list, e.g. the myenergi integration's Zappi, house (hub) and Harvi on one entry; each
+  device's entities listed under its own heading; edit form lets you link more than one; keep old single links working.
+- myenergi profile in hadevice.py, like Pi-hole's (owner asked 19 Nov; needs the multi-device link above). Match
+  entities by translation key / unique id ending, never the entity id (renamed devices; ids can include the serial,
+  which must never go in the repo: use a made-up serial in tests). From the owner's Zappi (HACS myenergi): status
+  (Paused/Charging/Boosting/Completed), plug_status (EV Disconnected/EV Connected/Waiting for EV/Charging/Fault/Restart),
+  select charge_mode (Fast/Eco/Eco+/Stopped), charge_added_session (kWh), energy_used_today, green_energy_today,
+  power_ct_internal_load (CT1, the charger's own load = charging power), power_ct_grid (CT2, negative = exporting),
+  power_ct_generation (CT3), binary_sensor locked, binary_sensor update_available, number_of_phases, firmware.
+  Tiles: status, plug, mode, charging power, added this session, used today (green part), grid and solar when
+  clamped, locked. House (hub) device has voltage/frequency etc., Harvi has CT readings: get screenshots of their
+  entity lists from the owner before building. Alerts: plug status Fault/Restart RED with a phone notification;
+  update available amber, no alert; HA lost touch (already generic) should say it may be myenergi's cloud.
 - Messages to users' screens (owner asked 19 Nov): a simple message box on agent devices, sent in Rollcall's reply to
   each agent's next report (so it arrives within ~5 minutes). Keep it simple, minimal parts: Windows via WTSSendMessage
   from the agent (works as SYSTEM, shows in every signed-in session incl. Remote Desktop; no helper, no toast);
