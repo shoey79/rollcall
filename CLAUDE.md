@@ -28,6 +28,11 @@ Remove each line once it's released.
   08:43)". When the device is down (ping) or its agent report is stale, show "Down since <when it went down>"
   / "Off since <last report>" instead; while it's up, count the uptime on from the report's time so it
   doesn't freeze between reports.
+- Windows agent scheduled tasks: set "Stop the task if it runs longer than" 30 minutes (ExecutionTimeLimit PT30M)
+  on the main and start-up tasks; schtasks leaves Windows' 72 h default, and with the default "Do not start a new
+  instance" a stuck run stops the 5-minute task from running at all (so the agent's own stuck-run clearing never
+  gets a turn from it). Set on install and checked on each run (fixes existing installs), via the ScheduledTasks
+  module. Owner may want this released on its own, soon.
 
 ## Requested features (not started)
 
