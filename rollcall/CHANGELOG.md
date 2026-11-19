@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.90.1 - 2026-11-19
+
+### Fixed
+- **Plex (token) check: "connection failed (ClientOSError)"** when Plex's *Secure connections* setting is *Required*, as Plex then drops plain HTTP. The check now tries HTTPS on the same port and keeps using it, as Rollcall's web checks already do.
+- **Jellyfin and Plex: changing the address asked for the key again** even when it was the same server, e.g. switching to `https://`, changing the port, or using its name instead of its IP address, and the key was cleared without saying so. A key is kept while the address is on the same machine (names are looked up to check); only an address on a different machine needs the key entering again, and the form now says so when you save, instead of the check complaining afterwards.
+- **Plex token hint:** the token is at the end of the **address** of the *View XML* tab, not in the XML itself; the hint (and DOCS) now say so, and also where to find it on the Plex server (`PlexOnlineToken` in Plex's `Preferences.xml`, or the Windows registry).
+
 ## 1.90.0 - 2026-11-19
 
 ### Added
