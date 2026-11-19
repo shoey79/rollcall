@@ -23,7 +23,16 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+Being built now (owner asked 19 Nov), together with the Resources check below:
+- Edit/Add device form: explanations next to boxes (Group, Upstream device...) become an "i" with the full text on
+  hover; Other addresses above Icon/Make/Line, Upstream device just below Other addresses; clearer lines between
+  sections; Home Assistant device and sensors behind a tick box that opens the search; Custom checks help as an "i",
+  worded more clearly.
+- Details: Group Policy and Time aren't roles, move them out of Roles; lines between sections bolder than lines
+  within a section (e.g. between certificates); Agent tab: Agent run above Ignored on this server; Defender: last scan
+  time; Signed-in users cleared/hidden while the device is off or not reporting; Agent files: just say the folder's
+  permissions were changed by WHO and the agent reset them at TIME.
+- Overview: searching shows results in a temporary tab. Manage menu: an icon next to each option.
 
 ## Requested features (not started)
 
