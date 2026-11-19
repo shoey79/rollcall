@@ -23,7 +23,11 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- Details "Up for" (index.html, agent System section: `Up for ${dur(r.uptime_s)} (since boot_time)`) comes from
+  the last agent report, so a device that's been off since yesterday still shows "Up for 2 h (since 18 Nov,
+  08:43)". When the device is down (ping) or its agent report is stale, show "Down since <when it went down>"
+  / "Off since <last report>" instead; while it's up, count the uptime on from the report's time so it
+  doesn't freeze between reports.
 
 ## Requested features (not started)
 
@@ -40,7 +44,9 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   clashes with it (renumber it, or a /32 host route out of the Starlink WAN with NAT if .1 isn't the gateway). Up/connected, outage reason, obstruction, ping/latency and drop rate,
   throughput, alerts (thermal throttle, motors stuck, heating, slow ethernet, mast not vertical), update
   available, last restart, in a Starlink tab. Check how to talk to it from the add-on (grpcio vs gRPC-web, or
-  reading HA's Starlink entities through a linked HA device). The owner mentioned a token-from-browser HA plugin
+  reading HA's Starlink entities through a linked HA device). A dish at a REMOTE site isn't reachable from
+  Home Assistant: let a Rollcall agent at that site (Windows/Linux, or the OpenWrt router agent) read the dish
+  and report it, or reach it over a site-to-site VPN with a route. The owner mentioned a token-from-browser HA plugin
   (Starlink account/cloud): not for now (unofficial, tokens expire); the local API needs none.
 
 ## Built, waiting for release
