@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.91.1 - 2026-11-19
+
+### Fixed
+- **OpenWrt router agent 1.0.1: a small router could stop responding after a while and need a power cycle** ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to [tomvining](https://github.com/tomvining) for the report). Three things could build up on routers with little memory and flash (e.g. 128 MB RAM and 16 MB flash):
+  - it saved a marker to flash every 5 minutes, which wears the flash and can stall a small router while it writes; it's now kept in memory (`/tmp`), so nothing is written to flash after joining, and the old file is removed;
+  - its log in `/tmp` (which is memory) grew without limit; it's now trimmed to the latest 16 KB once it passes 32 KB;
+  - if a run hung (e.g. `ubus` not answering), cron started another every 5 minutes on top of it; now only one runs at a time, a stuck run is stopped after 10 minutes, and each `ubus` call gives up after 10 seconds.
+
+  The router agent doesn't update itself: download `rollcall-agent.sh` again from **Manage → Agents** and run `sh /tmp/rollcall-agent.sh --install` on the router (it keeps its token).
+
 ## 1.91.0 - 2026-11-19
 
 ### Added
