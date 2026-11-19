@@ -38,8 +38,16 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   available, last restart, in a Starlink tab. Check how to talk to it from the add-on (grpcio vs gRPC-web, or
   reading HA's Starlink entities through a linked HA device). A dish at a REMOTE site isn't reachable from
   Home Assistant: let a Rollcall agent at that site (Windows/Linux, or the OpenWrt router agent) read the dish
-  and report it, or reach it over a site-to-site VPN with a route. The owner mentioned a token-from-browser HA plugin
-  (Starlink account/cloud): not for now (unofficial, tokens expire); the local API needs none.
+  and report it, or reach it over a site-to-site VPN with a route.
+  Second way in, for remote sites (owner wants it): the Starlink account (cloud), as the HA integration
+  clever-tour/ha-starlink-remote does: the starlink.com session cookie pasted under Edit (copied from the
+  browser's developer tools after signing in), then pick the dish from those on the account; gives throughput,
+  obstruction, latency, uptime, Wi-Fi clients. Treat the cookie like the Plex token (stored with the device, never
+  shown again, only sent to starlink.com); read only (no reboot/stow). It expires if the owner signs in again in the
+  same browser: amber "Starlink sign-in expired: paste a new one", no alert; hint to use a private window. Unofficial
+  API, may change: say so in the docs; Starlink Business has an official API (service account) if ever needed.
+  One Starlink check, two sources (local default, or account), same Starlink tab. Build once the owner's dish
+  arrives, to test the local side against it.
 
 ## Built, waiting for release
 
