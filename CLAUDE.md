@@ -29,6 +29,11 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
+- Resources check for all agents (Windows, Linux, OpenWrt router): alert on memory and CPU, with limits editable per
+  device and a way to switch it off per device. Defaults: memory amber at 90%, red at 95%; CPU amber when over 90% for
+  3 reports in a row (CPU is a one-second sample per report, so one spike mustn't alert); on routers, amber when the
+  15-minute load is above the number of CPU cores. Alerts like any other check. Today it's only possible via a custom
+  line such as `Memory=ha:sensor.ping_monitor_<name>_memory>=90` (Rollcall's own sensors are hidden from the sensor search).
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
   route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default
