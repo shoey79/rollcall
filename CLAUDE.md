@@ -33,8 +33,10 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   the Overview page of a device WITHOUT an agent (openOverview/renderOverview), so on a server with an agent
   nothing shows. Give Jellyfin its own Details tab (like SNMP/Logs/iLO) for any device with the check.
   Show current streams: user, client/device, what's playing, direct play or transcoding (and why), progress,
-  paused; plus other useful server info (e.g. library item counts, active users). Read with the same API key,
-  only sent to that Jellyfin server; no real names in tests or docs.
+  paused; plus other useful server info (e.g. library item counts, active users). Also say WHY a restart is
+  pending: Jellyfin's HasPendingRestart stayed true for the owner after rebooting the server, so list plugins
+  whose status isn't Active (GET /Plugins: Restart, Malfunctioned, NotSupported...). Read with the same API
+  key, only sent to that Jellyfin server; no real names in tests or docs.
 
 ## Built, waiting for release
 
