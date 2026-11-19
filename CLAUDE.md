@@ -29,14 +29,7 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- Jellyfin in Details: its section (server, version, health, streams count, failed tasks) is only drawn on
-  the Overview page of a device WITHOUT an agent (openOverview/renderOverview), so on a server with an agent
-  nothing shows. Give Jellyfin its own Details tab (like SNMP/Logs/iLO) for any device with the check.
-  Show current streams: user, client/device, what's playing, direct play or transcoding (and why), progress,
-  paused; plus other useful server info (e.g. library item counts, active users). Also say WHY a restart is
-  pending: Jellyfin's HasPendingRestart stayed true for the owner after rebooting the server, so list plugins
-  whose status isn't Active (GET /Plugins: Restart, Malfunctioned, NotSupported...). Read with the same API
-  key, only sent to that Jellyfin server; no real names in tests or docs.
+(none)
 
 ## Built, waiting for release
 

@@ -7,6 +7,12 @@ Endpoints (Jellyfin's REST API, as documented at api.jellyfin.org; 10.9 to 10.11
                                Completed, Failed, Cancelled or Aborted; EndTimeUtc; ErrorMessage)
   GET /Sessions                each client session; one with a NowPlayingItem is a stream, and
                                PlayState.PlayMethod "Transcode" means the server is transcoding it
+                               (TranscodingInfo.TranscodeReasons says why). UserName, Client,
+                               DeviceName, PlayState.PositionTicks / IsPaused, NowPlayingItem.RunTimeTicks
+  GET /Plugins                 each plugin's Name, Version and Status (Active, Restart, Malfunctioned,
+                               NotSupported, Superceded, Deleted, Disabled): one that isn't Active is
+                               usually why a restart is pending
+  GET /Items/Counts            how many movies, series, episodes, albums, songs, books... the server has
 
 The key goes in the `Authorization: MediaBrowser Token="..."` header, the form Jellyfin prefers (the
 X-Emby-Token header and api_key query are deprecated and go in Jellyfin 12). It's only ever sent to the
@@ -127,10 +133,62 @@ async def poll(base: str, key: str, tls: ssl.SSLContext | None, timeout: float =
             sessions = await _get(session, base + "/Sessions?activeWithinSeconds=960", h, tls, timeout)
         except JellyfinError:
             sessions = None
-    return parse(health, info, tasks, sessions, ms)
+        extra = {}
+        for k, path in (("plugins", "/Plugins"), ("counts", "/Items/Counts")):
+            try:
+                extra[k] = await _get(session, base + path, h, tls, timeout)
+            except JellyfinError:
+                extra[k] = None
+    return parse(health, info, tasks, sessions, ms, **extra)
 
 
-def parse(health: str, info: dict, tasks, sessions, ms: float | None = None) -> dict:
+TICKS = 10_000_000  # Jellyfin's ticks per second
+COUNTS = (("MovieCount", "Movies"), ("SeriesCount", "Series"), ("EpisodeCount", "Episodes"), ("AlbumCount", "Albums"),
+          ("SongCount", "Songs"), ("MusicVideoCount", "Music videos"), ("BookCount", "Books"), ("BoxSetCount", "Collections"))
+PLUGIN_STATUS = {"Restart": "restart needed", "Malfunctioned": "failed to load", "NotSupported": "not supported by this version",
+                 "Superceded": "replaced by a newer version", "Deleted": "removed, until a restart"}
+
+
+def _words(reason: str) -> str:
+    """'VideoCodecNotSupported' -> 'video codec not supported'"""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(reason or "")).lower().strip()[:60]
+
+
+def _title(item: dict) -> str:
+    """What's playing, as people would say it: a series' episode, a film and its year, a song and artist."""
+    name = str(item.get("Name") or "")
+    if item.get("Type") == "Episode" and item.get("SeriesName"):
+        se = (f" S{int(item['ParentIndexNumber']):02d}E{int(item['IndexNumber']):02d}"
+              if isinstance(item.get("ParentIndexNumber"), int) and isinstance(item.get("IndexNumber"), int) else "")
+        return f"{item['SeriesName']}{se} · {name}"[:160]
+    if item.get("Type") == "Audio" and item.get("Artists"):
+        return f"{', '.join(str(a) for a in item['Artists'][:2])} – {name}"[:160]
+    if item.get("ProductionYear") and item.get("Type") == "Movie":
+        return f"{name} ({item['ProductionYear']})"[:160]
+    return name[:160]
+
+
+def _stream(s: dict) -> dict:
+    item, ps, tr = s.get("NowPlayingItem") or {}, s.get("PlayState") or {}, s.get("TranscodingInfo") or {}
+    run, pos = item.get("RunTimeTicks"), ps.get("PositionTicks")
+    method = str(ps.get("PlayMethod") or "")
+    out = {"user": str(s.get("UserName") or "")[:60], "client": str(s.get("Client") or "")[:60],
+           "device": str(s.get("DeviceName") or "")[:60], "title": _title(item), "type": str(item.get("Type") or "")[:20],
+           "method": {"DirectPlay": "Direct play", "DirectStream": "Direct stream", "Transcode": "Transcoding"}.get(method, method[:20]),
+           "paused": ps.get("IsPaused") is True,
+           "position_s": int(pos / TICKS) if isinstance(pos, (int, float)) and pos >= 0 else None,
+           "runtime_s": int(run / TICKS) if isinstance(run, (int, float)) and run > 0 else None, "reasons": [], "transcode": ""}
+    if method == "Transcode":
+        out["reasons"] = [_words(r) for r in (tr.get("TranscodeReasons") or []) if r][:6]
+        parts = [("video " + ("copied" if tr.get("IsVideoDirect") else f"to {tr.get('VideoCodec') or '?'}")) if item.get("Type") != "Audio" else "",
+                 "audio " + ("copied" if tr.get("IsAudioDirect") else f"to {tr.get('AudioCodec') or '?'}"),
+                 f"{tr['Height']}p" if isinstance(tr.get("Height"), int) and tr["Height"] else "",
+                 f"{tr['Bitrate'] / 1e6:.1f} Mbit/s" if isinstance(tr.get("Bitrate"), (int, float)) and tr["Bitrate"] else ""]
+        out["transcode"] = ", ".join(p for p in parts if p)[:120]
+    return out
+
+
+def parse(health: str, info: dict, tasks, sessions, ms: float | None = None, plugins=None, counts=None) -> dict:
     """The parts Rollcall uses, from Jellyfin's answers."""
     failed = []
     for t in tasks if isinstance(tasks, list) else []:
@@ -141,16 +199,31 @@ def parse(health: str, info: dict, tasks, sessions, ms: float | None = None) -> 
             failed.append({"name": str(t.get("Name") or "Task")[:80], "status": res.get("Status"),
                            "ended": str(res.get("EndTimeUtc") or "")[:40], "error": str(res.get("ErrorMessage") or "")[:200]})
     streams = transcodes = 0
+    playing, users = [], set()
     for s in sessions if isinstance(sessions, list) else []:
-        if isinstance(s, dict) and s.get("NowPlayingItem"):
+        if not isinstance(s, dict):
+            continue
+        if s.get("UserName"):
+            users.add(str(s["UserName"]))
+        if s.get("NowPlayingItem"):
             streams += 1
             if ((s.get("PlayState") or {}).get("PlayMethod") or "") == "Transcode":
                 transcodes += 1
+            if len(playing) < 20:
+                playing.append(_stream(s))
+    attention = [{"name": str(p.get("Name") or "Plugin")[:80], "version": str(p.get("Version") or "")[:30],
+                  "status": str(p.get("Status") or "")[:20], "why": PLUGIN_STATUS.get(str(p.get("Status") or ""), "")}
+                 for p in (plugins if isinstance(plugins, list) else []) if isinstance(p, dict)
+                 and p.get("Status") not in (None, "", "Active", "Disabled")][:20]
+    lib = [{"name": label, "count": int(counts[k])} for k, label in COUNTS
+           if isinstance(counts, dict) and isinstance(counts.get(k), int) and counts[k] > 0]
     return {"health": str(health or "")[:40], "version": str(info.get("Version") or "")[:40],
             "name": str(info.get("ServerName") or "")[:100], "restart": bool(info.get("HasPendingRestart")),
             "update": bool(info.get("HasUpdateAvailable")), "shutting_down": bool(info.get("IsShuttingDown")),
             "failed_tasks": failed, "tasks_read": isinstance(tasks, list),
-            "streams": streams if isinstance(sessions, list) else None, "transcodes": transcodes, "ms": ms}
+            "streams": streams if isinstance(sessions, list) else None, "transcodes": transcodes, "ms": ms,
+            "playing": playing, "users": len(users) if isinstance(sessions, list) else None,
+            "plugins": attention, "plugins_read": isinstance(plugins, list), "library": lib}
 
 
 def _ver(v: str) -> tuple:
@@ -177,7 +250,8 @@ def evaluate(d: dict, latest: str | None = None) -> tuple[bool, float | None, st
     if health == "degraded":
         warns.append("health: Degraded")
     if d.get("restart"):
-        warns.append("restart pending")
+        why = [f"{p['name']}: {p['why'] or p['status']}" for p in d.get("plugins") or []][:2]
+        warns.append("restart pending" + (f" ({'; '.join(why)})" if why else ""))
     if d.get("update") or newer(latest, d.get("version") or ""):
         warns.append(f"update available{f' ({latest})' if latest and newer(latest, d.get('version') or '') else ''}")
     failed = d.get("failed_tasks") or []

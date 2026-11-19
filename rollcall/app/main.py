@@ -58,6 +58,7 @@ import hadevice
 import ilo as ilolib
 import iprange
 import jellyfin as jflib
+import plex as pxlib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
@@ -321,6 +322,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("plex", "Plex", _MEDIA, [("Plex", "http:32400/identity")]),
     ("jellyfin", "Jellyfin", _MEDIA, [("Jellyfin", "http:8096/health")]),
     ("jellyfin-api", "Jellyfin health (API key)", _MEDIA, [("Jellyfin", "jellyfin:device")]),
+    ("plex-api", "Plex (token)", _MEDIA, [("Plex", "plex:device")]),
     ("emby", "Emby", _MEDIA, [("Emby", "http:8096/emby/System/Info/Public")]),
     ("immich", "Immich", _MEDIA, [("Immich", "http:2283/api/server/ping")]),
     ("audiobookshelf", "Audiobookshelf", _MEDIA, [("Audiobookshelf", "http:13378/")]),
@@ -360,6 +362,7 @@ PRESET_NOTES = {
     "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
     "jellyfin-api": "Version, pending restart, updates, failed scheduled tasks and active streams (needs a Jellyfin API key)",
+    "plex-api": "Version, updates and what's playing, by whom (needs a Plex token)",
     "printer": "Network printer (raw printing on 9100)",
     "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
     "cert": "Warns before the HTTPS certificate on 443 expires",
@@ -379,7 +382,7 @@ ALIASES = {
     "tapo": "onvif", "heatmiser": "neohub", "neostat": "neohub", "zigbee": "zigbee2mqtt", "zwave": "zwavejs",
     "xmpp": "openfire", "jabber": "openfire", "winbox": "mikrotik", "rdgw": "rdgateway",
     "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
-    "jellyfin-health": "jellyfin-api", "jellyfinapi": "jellyfin-api",
+    "jellyfin-health": "jellyfin-api", "jellyfinapi": "jellyfin-api", "plexapi": "plex-api", "plex-token": "plex-api",
     "ilo3": "hpilo", "ilo4": "hpilo", "hp-ilo": "hpilo", "hpe-ilo": "hpilo", "ilo-health": "hpilo",
     "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
     "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
@@ -406,6 +409,8 @@ def preset_summary(name: str) -> str:
             return "health, with an iLO login"
         if spec == "jellyfin:device":
             return "health and tasks, with an API key"
+        if spec == "plex:device":
+            return "what's playing, with a Plex token"
         if kind == "tcp":
             return f"TCP {rest}"
         if kind == "cert":
@@ -545,6 +550,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "iLO", "kind": "ilo", "port": 443, "url": None, "desc": "ilo"}]
     if low == "jellyfin:device":
         return [{"label": label or "Jellyfin", "kind": "jellyfin", "port": None, "url": None, "desc": "jellyfin api"}]
+    if low == "plex:device":
+        return [{"label": label or "Plex", "kind": "plex", "port": None, "url": None, "desc": "plex api"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -843,6 +850,14 @@ def validate_entry(raw: dict) -> dict:
             if not jflib.KEY_RE.match(key):
                 raise ValueError("That doesn't look like a Jellyfin API key (letters and numbers, usually 32)")
             entry["jellyfin_key"] = key
+    if "plex_url" in raw:
+        url = str(raw.get("plex_url") or "").strip()
+        entry["plex_url"] = pxlib.clean_url(url) if url else ""
+        key = str(raw.get("plex_token") or "").strip()
+        if key:
+            if not pxlib.TOKEN_RE.match(key):
+                raise ValueError("That doesn't look like a Plex token (letters, numbers, - and _, usually 20)")
+            entry["plex_token"] = key
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1623,6 +1638,9 @@ class Host:
     jf_url: str = ""                   # Jellyfin's address ("" = http://<host>:8096)
     jf_key: str = ""                   # Jellyfin API key: only ever sent to jf_url, never shown again
     jf_data: dict | None = None        # its latest reading
+    px_url: str = ""                   # Plex's address ("" = http://<host>:32400)
+    px_key: str = ""                   # Plex token: only ever sent to px_url, never shown again
+    px_data: dict | None = None        # its latest reading
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
@@ -1824,6 +1842,8 @@ class Monitor:
                 **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
                 **({"jellyfin_url": h.jf_url} if h.jf_url else {}),
                 **({"jellyfin_key": h.jf_key} if h.jf_key else {}),
+                **({"plex_url": h.px_url} if h.px_url else {}),
+                **({"plex_token": h.px_key} if h.px_key else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1858,6 +1878,8 @@ class Monitor:
         h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
         h.jf_url = str(entry.get("jellyfin_url") or "")[:300]
         h.jf_key = str(entry.get("jellyfin_key") or "")[:128]
+        h.px_url = str(entry.get("plex_url") or "")[:300]
+        h.px_key = str(entry.get("plex_token") or "")[:128]
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
             h.snmp_acks = ({str(k)[:200]: v for k, v in entry["snmp_acks"].items() if v in ("warn", "crit")}
@@ -1886,6 +1908,7 @@ class Monitor:
 
     async def update_host(self, h: Host, entry: dict) -> None:
         old_jf_base = h.jf_url or jflib.default_url(h.host)
+        old_px_base = h.px_url or pxlib.default_url(h.host)
         if entry["host"] != h.host:
             h.host, h.ip, h.failures = entry["host"], None, 0
         h.name = entry["name"]
@@ -1911,6 +1934,15 @@ class Monitor:
                 h.jf_key = ""  # a key only goes to the server it was given for: enter it again for a new one
                 log.info("%s: Jellyfin address changed, so its API key was cleared", h.name)
             h.jf_url, h.jf_data = new_url, None
+        if h.px_key or "plex_url" in entry:
+            new_url = entry.get("plex_url", h.px_url)
+            new_base = new_url or pxlib.default_url(entry["host"])
+            if entry.get("plex_token"):
+                h.px_key = entry["plex_token"]
+            elif h.px_key and not pxlib.same_server(old_px_base, new_base):
+                h.px_key = ""  # a token only goes to the server it was given for: enter it again for a new one
+                log.info("%s: Plex address changed, so its token was cleared", h.name)
+            h.px_url, h.px_data = new_url, None
         if "check_by" in entry:
             h.check_by = entry["check_by"]
             h.next_due = 0
@@ -2533,6 +2565,8 @@ class Monitor:
                 return await self.ilo_check(h, now)
             if s.kind == "jellyfin":
                 return await self.jellyfin_check(h)
+            if s.kind == "plex":
+                return await self.plex_check(h)
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -2818,6 +2852,20 @@ class Monitor:
             return (False, None, str(err), "warn") if err.login else (False, None, str(err))
         h.jf_data = d
         return jflib.evaluate(d, await jflib.latest_release())
+
+    async def plex_check(self, h: Host) -> tuple:
+        """Plex: what's playing and the server's state (plex.py), read with its token at each check."""
+        if not h.px_key:
+            h.px_data = None
+            return False, None, "enter a Plex token under Edit", "warn"
+        base = h.px_url or pxlib.default_url(h.host)
+        try:
+            d = await pxlib.poll(base, h.px_key, health_tls_context(), timeout=max(self.svc_timeout, 10))
+        except pxlib.PlexError as err:
+            h.px_data = None
+            return (False, None, str(err), "warn") if err.login else (False, None, str(err))
+        h.px_data = d
+        return pxlib.evaluate(d)
 
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
@@ -4894,6 +4942,7 @@ class Monitor:
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
+                "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
                 "ip_range": ranges.name_of(h.ip), "parent": h.parent if h.parent in self.hosts else "", "unreachable": h.unreachable,
                 "upstream_down": self.hosts[h.upstream_down].name if h.upstream_down in self.hosts else None,

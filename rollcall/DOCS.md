@@ -27,7 +27,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding devices, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, linked Home Assistant devices, upstream devices
+4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, linked Home Assistant devices, upstream devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
@@ -335,6 +335,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `plex` | Plex | http:32400/identity |
 | `jellyfin` | Jellyfin | http:8096/health |
 | `jellyfin-api` | Jellyfin health (API key) | version, restart, updates, failed tasks and streams; see [Jellyfin](#jellyfin) |
+| `plex-api` | Plex (token) | version, updates and what's playing, by whom; see [Plex](#plex) |
 | `emby` | Emby | http:8096/emby/System/Info/Public |
 | `immich` | Immich | http:2283/api/server/ping |
 | `audiobookshelf` | Audiobookshelf | http:13378/ |
@@ -564,12 +565,32 @@ For HPE servers with **iLO 3** or **iLO 4**, Rollcall can log in to the iLO and 
 The `jellyfin` preset only checks that Jellyfin's `/health` page answers. For more, tick **Jellyfin health (API key)** (`jellyfin-api`) and enter an API key, made in Jellyfin under **Dashboard → API Keys**. Rollcall itself reads Jellyfin at each check (no agent needed):
 
 - **Red, with an alert:** Jellyfin doesn't answer, says it's *Unhealthy*, or is shutting down. Like a port check, it's amber at the first miss and red if it's still failing at the next check.
-- **Amber, never an alert:** a **restart pending**, an **update available**, a **failed scheduled task** (e.g. *Scan Media Library*: its last run *Failed* or was *Aborted*), or health *Degraded*. Run the task again in Jellyfin to clear it.
-- It always shows the **version** and how many **streams** are playing (and how many are being transcoded), e.g. *Jellyfin 10.10.7; 2 streams (1 transcoding)*. Transcoding never alerts. The **Jellyfin** section of Details lists failed tasks with when they ended and their error.
+- **Amber, never an alert:** a **restart pending**, an **update available**, a **failed scheduled task** (e.g. *Scan Media Library*: its last run *Failed* or was *Aborted*), or health *Degraded*. Run the task again in Jellyfin to clear it. A pending restart names the plugin behind it when there is one, e.g. *restart pending (LDAP Authentication: failed to load)*.
+- It always shows the **version** and how many **streams** are playing (and how many are being transcoded), e.g. *Jellyfin 10.10.7; 2 streams (1 transcoding)*. Transcoding never alerts.
+- **The Jellyfin tab** in Details (for any device with this check, with or without an agent) shows, updating as it's checked:
+  - **Now playing:** who, on which app and device, what (a series' episode, a film and its year, a song and artist), how far through and whether it's paused, and whether it's played directly or **transcoded**: if so, to what and Jellyfin's reasons (e.g. *video codec not supported*);
+  - **Server:** version, health, how many users were active in the last 15 minutes, a pending restart or update;
+  - **Plugins** that aren't active (needing a restart, failed to load, not supported by this version), which are usually why Jellyfin asks for a restart;
+  - **Library:** how many movies, series, episodes, albums, songs and books it has;
+  - **Scheduled tasks** whose last run failed, with when they ended and their error.
 - **Updates:** Jellyfin 10.9 and later no longer check for updates themselves, so Rollcall also looks up Jellyfin's latest release on GitHub every 12 hours. That request carries nothing about your server.
 - **The address** is `http://<the device's address>:8096` unless you set another, e.g. `https://media.example.local` behind a reverse proxy.
 - **The key** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Jellyfin's `Authorization: MediaBrowser Token="…"` header. Redirects aren't followed, so it can't be passed on. Change the address to a different server and the key is cleared, so it has to be entered again. If Jellyfin turns the key down, the check goes amber and says so.
 - Endpoints used: `/health`, `/System/Info`, `/ScheduledTasks` and `/Sessions` (all read-only).
+
+### Plex
+
+The `plex` preset only checks that Plex's `/identity` page answers. For more, tick **Plex (token)** (`plex-api`) and enter a Plex token. To find it, open any item in Plex Web, choose **Get Info → View XML**, and copy the `X-Plex-Token` from the end of the address of the page that opens. Leave the address blank for port 32400 on the device itself, or enter e.g. `https://plex.example.local:32400`.
+
+- **Red, with an alert:** Plex doesn't answer. Like a port check, it's amber at the first miss and red if it's still failing at the next check. A refused token is amber.
+- **Amber, never an alert:** an **update available** (Plex's own updater says so).
+- It always shows the **version** and how many **streams** are playing (and how many are being transcoded), e.g. *Plex 1.41.2.9200; 3 streams (1 transcoding)*. Transcoding never alerts.
+- **The Plex tab** in Details (for any device with this check, with or without an agent) shows, updating as it's checked:
+  - **Now playing:** who, on which app and device (and *remote* when they're outside your network), what, how far through and whether it's paused, and whether it's played directly, direct streamed or **transcoded**: if so, what's converted (e.g. *video hevc to h264, audio copied, 1080p, hardware*);
+  - **Server:** version, how many people are watching, an update waiting;
+  - **Busy with:** what Plex is doing in the background, such as a library scan, and how far it's got;
+  - **Libraries:** each one's size (films, series and their episodes, artists...).
+- **The token** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Plex's `X-Plex-Token` header (not the address, so it doesn't end up in logs). Redirects aren't followed. Changing the address to another server clears it, so enter it again.
 
 ### Upstream devices
 
