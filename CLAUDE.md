@@ -29,7 +29,17 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-(none)
+- Upstream devices, in bulk: setting each device's upstream one at a time is clunky. From a router, switch or
+  gateway (its Edit, or Details), list the devices that could sit behind it with tick boxes: ticked ones get
+  it as their upstream device, unticking clears it; show which already have another upstream. Keep the
+  per-device Upstream pulldown too. Same loop/level rules as now.
+- Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
+  192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
+  route to it in bypass mode). Up/connected, outage reason, obstruction, ping/latency and drop rate,
+  throughput, alerts (thermal throttle, motors stuck, heating, slow ethernet, mast not vertical), update
+  available, last restart, in a Starlink tab. Check how to talk to it from the add-on (grpcio vs gRPC-web, or
+  reading HA's Starlink entities through a linked HA device). The owner mentioned a token-from-browser HA plugin
+  (Starlink account/cloud): not for now (unofficial, tokens expire); the local API needs none.
 
 ## Built, waiting for release
 
