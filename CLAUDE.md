@@ -27,7 +27,8 @@ Remove each line once it's released.
 
 ## Requested features (not started)
 
-Features the owner has asked for, to build when they say. Remove each once it's released.
+Features the owner has asked for, to build when they say (he'll say once there's a reasonable number to build
+together). Remove each once it's released.
 
 - Several Home Assistant devices on one Rollcall device (owner asked 19 Nov): today a Rollcall device links one HA
   device (h.ha_device). Allow a list, e.g. the myenergi integration's Zappi, house (hub) and Harvi on one entry; each
@@ -44,8 +45,8 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   green_energy_today, grid_export_today, grid_import_today, hub_firmware, hub_serial_number; diagnostic:
   voltage_grid (V), frequency_grid (Hz), home_consumption (W), power_import, power_export, power_grid,
   power_charging, power_generation (W). Hub tiles: grid voltage and frequency, home using now, importing/exporting
-  now. Suggested (confirm with the owner before building): amber, no notification, when the voltage is outside the
-  UK supply range 216-253 V (230 V +10%/-6%) or the frequency outside 49.5-50.5 Hz. Harvi device (wireless CT
+  now. Owner confirmed: amber, no notification, when the voltage is outside the UK supply range 216-253 V
+  (230 V +10%/-6%) or the frequency outside 49.5-50.5 Hz. Harvi device (wireless CT
   sender; its entity ids include its serial, keep that out of the repo): power_ct_generation, generation_ct1,
   none_ct2/none_ct3 (CTs not set up, ignore "None" CTs), firmware. Generation CTs: DON'T call them "Solar" or
   derive anything from them: the owner's Harvi generation CT also sees his home batteries discharging, so it isn't
