@@ -23,25 +23,12 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Details "Up for" (index.html, agent System section: `Up for ${dur(r.uptime_s)} (since boot_time)`) comes from
-  the last agent report, so a device that's been off since yesterday still shows "Up for 2 h (since 18 Nov,
-  08:43)". When the device is down (ping) or its agent report is stale, show "Down since <when it went down>"
-  / "Off since <last report>" instead; while it's up, count the uptime on from the report's time so it
-  doesn't freeze between reports.
-- Windows agent scheduled tasks: set "Stop the task if it runs longer than" 30 minutes (ExecutionTimeLimit PT30M)
-  on the main and start-up tasks; schtasks leaves Windows' 72 h default, and with the default "Do not start a new
-  instance" a stuck run stops the 5-minute task from running at all (so the agent's own stuck-run clearing never
-  gets a turn from it). Set on install and checked on each run (fixes existing installs), via the ScheduledTasks
-  module. Owner may want this released on its own, soon.
+(none)
 
 ## Requested features (not started)
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- Upstream devices, in bulk: setting each device's upstream one at a time is clunky. From a router, switch or
-  gateway (its Edit, or Details), list the devices that could sit behind it with tick boxes: ticked ones get
-  it as their upstream device, unticking clears it; show which already have another upstream. Keep the
-  per-device Upstream pulldown too. Same loop/level rules as now.
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
   route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default

@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.50'
+$AgentVersion = '1.0.51'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -3135,6 +3135,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }
     }
     Register-StartupTask
+    Set-TaskTimeLimit
     $wasChecked = [bool]$state.perm_checked
     Test-AgentFolderSecurity $state
     if ($state.integrity -or $state.perm_checked -ne $wasChecked) { try { Save-State $state } catch { } }
@@ -3176,6 +3177,7 @@ function Install-Agent {
     if ($IgnoreCertificate) { $cmd += ' -IgnoreCertificate' }
     & schtasks.exe /Create /TN $TaskName /TR $cmd /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Couldn't create the scheduled task (schtasks exit code $LASTEXITCODE)" }
+    Set-TaskTimeLimit
     & schtasks.exe /Run /TN $TaskName | Out-Null
     Write-AgentLog "Installed version $AgentVersion; reporting to $Server every $IntervalMinutes min"
     Write-Output "Rollcall agent $AgentVersion installed. It will appear in the dashboard's Agents list for approval within a minute."
@@ -3185,6 +3187,25 @@ function Install-Agent {
 # (a paused computer's pause ends when it's back) instead of up to 5 minutes later.
 # Called after the report is sent, and can never fail a run: in Windows PowerShell 5.1 with
 # $ErrorActionPreference = 'Stop', anything a program writes to stderr would otherwise end the run.
+$TaskTimeLimit = 'PT30M'
+# Stop each of the agent's scheduled tasks after 30 minutes. schtasks leaves Windows' default of 72 hours,
+# and Windows doesn't start a task again while it's still running, so one stuck run (a check that never
+# answers) kept a device from reporting for days. Runs take seconds, a few minutes at most. Checked after
+# every report, so agents installed before this fix themselves; it can never fail a run.
+function Set-TaskTimeLimit([string[]]$Names = @($TaskName, "$TaskName (start-up)")) {
+    $ErrorActionPreference = 'Continue'
+    try {
+        if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { return }  # before Windows 8 / Server 2012
+        foreach ($n in $Names) {
+            $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+            if (-not $t -or [string]$t.Settings.ExecutionTimeLimit -eq $TaskTimeLimit) { continue }
+            $t.Settings.ExecutionTimeLimit = $TaskTimeLimit
+            $null = Set-ScheduledTask -InputObject $t -ErrorAction Stop
+            Write-AgentLog "The scheduled task '$n' now stops a run after 30 minutes"
+        }
+    } catch { Write-AgentLog "WARN Couldn't set the scheduled task's time limit: $($_.Exception.Message)" }
+}
+
 function Register-StartupTask {
     $ErrorActionPreference = 'Continue'
     try {

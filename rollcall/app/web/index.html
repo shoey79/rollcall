@@ -441,6 +441,10 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   #rows td[data-label=""]{white-space:normal}
   #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:178px}
 }
+/* Edit: devices behind this one */
+.downlist{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px 8px}
+.downrow{display:block;padding:3px 0;cursor:pointer}
+.downrow input{margin-right:6px}
 /* Veeam: what went wrong in a job's run */
 tr.bkwhyrow>td{background:var(--card2,rgba(127,127,127,.06));padding:8px 12px}
 table.bkwhy{width:100%;margin:0 0 6px;font-size:.92em}
@@ -683,6 +687,12 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <label class="field">Upstream device<select id="fParent"><option value="">None</option></select></label>
         <p class="hint" style="margin:0;align-self:end">The device it's reached through, such as its router, switch or VPN. While that's down, this shows as <i>Unreachable</i> and doesn't alert on its own: you get one alert for the upstream device, listing what's behind it.</p>
       </div>
+      <details class="addrs" id="downBox" hidden>
+        <summary>Devices behind it <span id="downCount" class="muted"></span></summary>
+        <p class="hint" style="margin:6px 0">Tick the devices reached through this one (e.g. everything on a switch, or at the far end of a VPN): it becomes their upstream device. Unticking one clears it. A device already behind another says so, and ticking it moves it here.</p>
+        <input id="downFilter" type="search" placeholder="Filter by name, address or group" autocomplete="off" style="width:100%;margin:0 0 6px">
+        <div id="downList" class="downlist"></div>
+      </details>
       <datalist id="groupList"></datalist>
       <details class="addrs" id="addrBox">
         <summary>Other addresses <span id="addrCount" class="muted"></span></summary>
@@ -2377,6 +2387,21 @@ async function openDetails(key, jump) {
 }
 document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
+// "Up for" from the last report would freeze, and a device that's been off since yesterday kept saying "Up
+// for 2 h". Down (or unreachable): since when. Up but its agent silent: since its last report. Up and
+// reporting: the uptime counted on from the report.
+function upRow(d, r) {
+  const h = data && data.hosts.find(x => x.key === detKey), now = Date.now() / 1000;
+  const stale = Math.max(12, (data && data.agent_stale_minutes) || 15) * 60, age = d.received ? Math.max(0, now - d.received) : 0;
+  const at = ts => `${when(new Date(ts * 1000).toISOString())} <small class="muted">(${ago(ts, now)})</small>`;
+  if (h && ["red", "offsched", "unreach"].includes(h.status)) {
+    const lc = typeof h.last_change === "number" ? h.last_change : h.last_change ? Date.parse(h.last_change) / 1000 : null;
+    const since = lc || d.received;
+    return `<div><span>${h.status === "unreach" ? "Unreachable since" : h.status === "offsched" ? "Off since" : "Down since"}</span>${since ? at(since) : "—"}${d.received ? `<br><small class="muted">last report ${ago(d.received, now)}</small>` : ""}</div>`;
+  }
+  if (age > stale) return `<div><span>No report since</span>${at(d.received)}${h && h.latency_ms != null ? `<br><small class="muted">it answers ping, but its agent isn't reporting</small>` : ""}</div>`;
+  return `<div><span>Up for</span>${dur(r.uptime_s == null ? null : r.uptime_s + age)} (since ${when(r.boot_time)})</div>`;
+}
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
   const st = d.settings || {ignore: [], global_ignore: [], config_ignore: [], disks: {}, defaults: {warn: 15, crit: 5}, sec_filters: [], global_sec_filters: []};
@@ -2445,7 +2470,7 @@ function renderDetails(d) {
       return r.sessions.length === 1 ? esc(names[0]) + (r.sessions[0].session === "rdp" ? ` <small class="muted">(Remote Desktop)</small>` : r.sessions[0].session === "ssh" ? ` <small class="muted">(SSH)</small>` : "")
         : `${names.length} ${names.length === 1 ? "person" : "people"}, ${r.sessions.length} sessions${act.length < r.sessions.length ? ` <small class="muted">(${r.sessions.length - act.length} disconnected)</small>` : ""}`;
     })()}</div>` : !d.security_visible && r.agent_version ? `<div><span>Signed in</span><span class="muted">Visible to Home Assistant admins</span></div>` : ""}
-    <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
+    ${upRow(d, r)}
     <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""} ${mBtn("sys", mSys())}</div>
     <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${mbText(r.mem_total_mb)}`}</div>
     ${sh ? "" : `<div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>`}
@@ -5029,6 +5054,31 @@ function addCustomRow(value = "") {
   return row.querySelector("input");
 }
 
+// Devices behind it: tick boxes for every other device it could be upstream of (not the ones it's behind)
+let downDirty = false;
+function fillDownstream(h) {
+  const box = document.getElementById("downBox"), list = document.getElementById("downList"), hosts = (data && data.hosts) || [];
+  box.hidden = !h; downDirty = false; document.getElementById("downFilter").value = "";
+  if (!h) return;
+  const byKey = Object.fromEntries(hosts.map(x => [x.key, x])), above = new Set();
+  for (let k = h.parent; k && byKey[k] && !above.has(k);) { above.add(k); k = byKey[k].parent; }
+  const cands = hosts.filter(x => x.key !== h.key && !above.has(x.key))
+    .sort((a, b) => (b.parent === h.key) - (a.parent === h.key) || collator.compare(a.name, b.name));
+  list.innerHTML = cands.map(x => {
+    const other = x.parent && x.parent !== h.key && byKey[x.parent] ? byKey[x.parent].name : "";
+    return `<label class="downrow" data-find="${esc([x.name, x.ip, x.host, x.group, x.ip_range].filter(Boolean).join(" ").toLowerCase())}">
+      <input type="checkbox" value="${esc(x.key)}"${x.parent === h.key ? " checked" : ""}> <b>${esc(x.name)}</b>
+      <small class="muted">${esc([x.ip && x.ip !== x.name ? x.ip : "", x.group || ""].filter(Boolean).join(" · "))}${other ? ` · behind ${esc(other)}` : ""}</small></label>`;
+  }).join("") || `<p class="empty-note">No other devices.</p>`;
+  const count = () => { const n = list.querySelectorAll("input:checked").length; document.getElementById("downCount").textContent = n ? `(${n})` : ""; };
+  count();
+  list.onchange = () => { downDirty = true; count(); };
+}
+document.getElementById("downFilter").addEventListener("input", e => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll("#downList .downrow").forEach(r => { r.hidden = q && !r.dataset.find.includes(q); });
+});
+
 // Upstream device choices: any other device, except ones behind this one (that would be a loop).
 function fillParents(h) {
   const sel = document.getElementById("fParent"), hosts = (data && data.hosts) || [];
@@ -5049,7 +5099,7 @@ async function openDialog(h) {
   document.getElementById("fSubtitle").value = h ? (h.subtitle || "") : "";
   document.getElementById("fGroup").value = h ? (h.group || "") : "";
   fillGroupList();
-  fillParents(h);
+  fillParents(h); fillDownstream(h);
   pickIcon = h ? (h.icon || "") : ""; iconQuery = "";
   document.getElementById("iconGrid").hidden = true;
   document.getElementById("fIconBtn").setAttribute("aria-expanded", "false");
@@ -5124,6 +5174,7 @@ form.addEventListener("submit", async e => {
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
     icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value, group: document.getElementById("fGroup").value.trim(),
     parent: document.getElementById("fParent").value,
+    ...(editing && downDirty ? {downstream: [...document.querySelectorAll("#downList input:checked")].map(x => x.value)} : {}),
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     grace: +document.getElementById("schedGrace").value || 0,

@@ -2151,6 +2151,38 @@ class Monitor:
         if key and (parent == key or any(a.key == key for a in self.ancestors(p))):
             raise ValueError(f"{p.name} is behind this device, so it can't be its upstream device too")
 
+    def check_downstream(self, h: Host, keys: list, parent: str | None = None) -> list:
+        """The devices to put behind h (its downstream list, from its Edit): known devices, not h itself, and
+        none that h is behind (a loop), counting the upstream device it's being given (`parent`) in the same
+        edit. Raises ValueError naming the first that can't be."""
+        p = self.hosts.get(h.parent if parent is None else parent)
+        anc = {a.key for a in self.ancestors(p)} | {p.key} if p else set()
+        wanted = []
+        for k in dict.fromkeys(str(k) for k in keys if k):
+            c = self.hosts.get(k)
+            if not c or c is h:
+                continue
+            if c.key in anc:
+                raise ValueError(f"{h.name} is behind {c.name}, so {c.name} can't be behind it too")
+            wanted.append(c)
+        return wanted
+
+    def set_downstream(self, h: Host, wanted: list) -> int:
+        """Make h the upstream device of exactly the devices in `wanted` (from check_downstream): ticked ones
+        get it, ones that had it and aren't ticked any more are cleared. Returns how many changed."""
+        keep, changed = {c.key for c in wanted}, 0
+        for c in self.hosts.values():
+            new = h.key if c.key in keep else ("" if c.parent == h.key else c.parent)
+            if new != c.parent:
+                c.parent, changed = new, changed + 1
+                if not new:
+                    c.unreachable, c.upstream_down = False, ""
+                c.next_due = 0
+        if changed:
+            self._save_hosts()
+            log.info("%s: %d device(s) now behind it", h.name, len(keep))
+        return changed
+
     def upstream(self, h: Host) -> tuple[Host | None, bool]:
         """The device upstream of it that's down, furthest up (the cause), with True; else the nearest
         one that has just missed a check, with False."""
@@ -5887,7 +5919,16 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         check_v3(entry, h)
         check_parent(entry, h)
         await check_media_keys(entry, h)
+        raw = await req.json()
+        behind = None
+        if isinstance(raw.get("downstream"), list):  # the devices behind it, ticked in its Edit
+            try:
+                behind = monitor.check_downstream(h, raw["downstream"][:2000], entry.get("parent", h.parent) or "")
+            except ValueError as err:
+                raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}), content_type="application/json")
         await monitor.update_host(h, entry)
+        if behind is not None:
+            monitor.set_downstream(h, behind)
         return web.json_response({"updated": h.key})
 
     async def host_snmp(req):

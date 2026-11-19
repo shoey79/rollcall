@@ -161,3 +161,21 @@ def test_snapshot_never_includes_the_jellyfin_key_and_names_ranges(mon):
     snap = {h["key"]: h for h in mon.snapshot()["hosts"]}
     assert snap["srv01"]["jellyfin_key_set"] and "0123456789abcdef" not in json.dumps(snap)
     assert snap["srv01"]["ip_range"] == "Servers" and snap["router"]["ip_range"] == "Network"
+
+
+def test_ticking_the_devices_behind_a_switch_sets_them_all_at_once(mon):
+    sw = mon.hosts["switch"]
+    # tick PC01 (already behind it), PC02 (behind the router: moves) and SRV01 (behind nothing); unknown keys skipped
+    behind = mon.check_downstream(sw, ["pc01", "pc02", "srv01", "nope", "switch"])
+    assert mon.set_downstream(sw, behind) == 2
+    assert [mon.hosts[k].parent for k in ("pc01", "pc02", "srv01")] == ["switch"] * 3
+    # untick SRV01: cleared; PC01 and PC02 stay
+    assert mon.set_downstream(sw, mon.check_downstream(sw, ["pc01", "pc02"])) == 1
+    assert mon.hosts["srv01"].parent == "" and mon.hosts["pc02"].parent == "switch"
+    saved = {e["id"]: e for e in json.loads(main.HOSTS_PATH.read_text())}
+    assert saved["pc02"]["parent"] == "switch" and "parent" not in saved["srv01"]
+    # the router is upstream of the switch, so it can't be behind it (a loop), nor can one being made upstream
+    with pytest.raises(ValueError):
+        mon.check_downstream(sw, ["router"])
+    with pytest.raises(ValueError):
+        mon.check_downstream(sw, ["srv01"], parent="srv01")

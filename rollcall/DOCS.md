@@ -601,6 +601,8 @@ The `plex` preset only checks that Plex's `/identity` page answers. For more, ti
 
 A device can have an **Upstream device** (Edit, under Group): what it's reached through, such as the router at a branch office, a switch, or a VPN firewall. While the upstream device is down, the devices behind it show as **Unreachable** (a striped dot) rather than Down, and don't alert on their own: you get **one** alert, for the upstream device, that lists what's behind it, e.g. *Branch router is DOWN … Devices behind it may also be affected (3): PC01, PC02, Switch.*
 
+**Many devices at once:** open the router, switch or VPN firewall's **Edit** and expand **Devices behind it**: tick every device reached through it, and untick any that aren't. A device already behind something else says so, and ticking it moves it here; devices this one is behind aren't offered (that would be a loop). Filter the list by name, address or group.
+
 - It works through several levels, e.g. PC → switch → router: everything behind the router that's down counts as unreachable, and says which device is the cause.
 - The devices behind it don't have to be checked after the upstream device. If one goes red first, its alert waits (*Checking Branch router before alerting*) while Rollcall checks the upstream device straight away. If that's fine, the alert goes out, saying the upstream device is answering; if it's down too, the device becomes Unreachable. It never waits more than 3 minutes.
 - When the upstream device comes back, the devices behind it are checked again at once. Those that never alerted don't send a "back up" either. One that's still down then gets its own down alert.
