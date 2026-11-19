@@ -85,9 +85,14 @@ async def _get(session: aiohttp.ClientSession, url: str, headers: dict, tls, tim
                 raise JellyfinError(f"redirected (HTTP {r.status}); set the address it redirects to")
             if r.status >= 400:
                 raise JellyfinError(f"HTTP {r.status} from {urlparse(url).path}")
-            body = await r.content.read(MAX_BYTES + 1)
-            if len(body) > MAX_BYTES:
-                raise JellyfinError("answer too large")
+            # The whole answer: one read only gives what has arrived so far, and an answer that came in
+            # more than one piece was read half, so it "wasn't JSON"
+            body = bytearray()
+            async for part in r.content.iter_chunked(65536):
+                body += part
+                if len(body) > MAX_BYTES:
+                    raise JellyfinError("answer too large")
+            body = bytes(body)
             if not as_json:
                 return body.decode("utf-8", "replace").strip()
             try:

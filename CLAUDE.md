@@ -29,12 +29,6 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- Veeam job details: when a Veeam job warns or fails (Backup & Replication jobs and Veeam Agent jobs), the
-  agent fetches why: for each VM/object in that session its status and Veeam's reason, plus the session's
-  warning/error log lines (Veeam PowerShell, e.g. Get-VBRBackupSession / task sessions, when installed;
-  otherwise the Veeam Backup event log's per-task events). Only for the latest warned/failed session, kept
-  short. In Details > Backups, a button on that job's row opens the details. No names from a real
-  environment in tests or docs.
 - Jellyfin in Details: its section (server, version, health, streams count, failed tasks) is only drawn on
   the Overview page of a device WITHOUT an agent (openOverview/renderOverview), so on a server with an agent
   nothing shows. Give Jellyfin its own Details tab (like SNMP/Logs/iLO) for any device with the check.

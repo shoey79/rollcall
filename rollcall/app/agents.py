@@ -225,6 +225,19 @@ def clean_hw(v) -> str:
     return "" if not t or HW_PLACEHOLDER.match(t) else t
 
 
+def _veeam_issue(raw) -> dict | None:
+    """Why a Veeam job's latest run warned or failed (agent 1.0.50+): each VM or item and its reason, and the
+    run's warning/error lines. Kept short."""
+    if not isinstance(raw, dict):
+        return None
+    t = lambda v, n: re.sub(r"\s+", " ", str(v or "")).strip()[:n]
+    objs = [{"name": t(o.get("name"), 120), "status": t(o.get("status"), 20), "reason": t(o.get("reason"), 400)}
+            for o in _as_list(raw.get("objects")) if isinstance(o, dict) and o.get("name")][:30]
+    log = [{"status": "Failed" if o.get("status") == "Failed" else "Warning", "text": t(o.get("text"), 400)}
+           for o in _as_list(raw.get("log")) if isinstance(o, dict) and o.get("text")][:20]
+    return {"session": t(raw.get("session"), 60), "source": t(raw.get("source"), 30), "objects": objs, "log": log}
+
+
 def normalize_report(r) -> dict:
     """Make an agent report safe to evaluate whatever PowerShell did to its lists."""
     r = _as_dict(r)
@@ -418,6 +431,7 @@ def normalize_report(r) -> dict:
         b["jobs"] = [j for j in _as_list(b.get("jobs")) if isinstance(j, dict) and j.get("name")]
         for j in b["jobs"]:
             j["runs"] = [str(x) for x in _as_list(j.get("runs")) if x][-12:]
+            j["issue"] = _veeam_issue(j.get("issue")) if j.get("result") in ("Warning", "Failed") else None
     if "storage" in c:
         st = c["storage"] = _as_dict(c["storage"])
         for k in ("physical", "virtual", "volumes", "dyn_disks", "drives"):

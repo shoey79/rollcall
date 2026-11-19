@@ -441,6 +441,12 @@ tr.flashrow td{animation:flash 1.6s ease-out}
   #rows td[data-label=""]{white-space:normal}
   #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:178px}
 }
+/* Veeam: what went wrong in a job's run */
+tr.bkwhyrow>td{background:var(--card2,rgba(127,127,127,.06));padding:8px 12px}
+table.bkwhy{width:100%;margin:0 0 6px;font-size:.92em}
+table.bkwhy th{text-align:left;font-weight:600;color:var(--muted);padding:2px 8px 2px 0}
+table.bkwhy td{padding:3px 8px 3px 0;vertical-align:top}
+ul.bklog{margin:4px 0 6px;padding-left:18px;font-size:.92em}
 /* Buttons on two rows whenever the table doesn't fit its box (fitTable), so none is cut off */
 @media (min-width:761px){
   .wrap.tight #rows td[data-label=""]{white-space:normal}
@@ -2908,13 +2914,21 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const res = x => { const r = (x.result || "").toLowerCase();
       return r === "success" ? `<span class="okc">Success</span>` : r === "failed" ? `<b class="failtxt">Failed</b>` : r === "warning" ? `<b class="old">Warning</b>` : esc(x.result || "—"); };
     const ago2 = iso => iso ? `${when(iso)}<br><small class="muted">${ago(Date.parse(iso) / 1000, now)}</small>` : "—";
-    html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map(x => {
+    // What went wrong in a job's latest run (agent 1.0.50+), opened with its "Why?" button
+    const why = x => { const is = x.issue;
+      const st = v => /fail|error/i.test(v) ? `<b class="failtxt">${esc(v)}</b>` : /warn/i.test(v) ? `<b class="old">${esc(v)}</b>` : `<span class="okc">${esc(v || "—")}</span>`;
+      return (is.objects.length ? `<table class="bkwhy"><tr><th>VM or item</th><th>Result</th><th>Reason</th></tr>${is.objects.map(o =>
+          `<tr><td>${esc(o.name)}</td><td>${st(o.status)}</td><td class="msg">${esc(o.reason || "")}</td></tr>`).join("")}</table>` : "")
+        + (is.log.length ? `<ul class="bklog">${is.log.map(l => `<li>${st(l.status)} ${esc(l.text)}</li>`).join("")}</ul>` : "")
+        + `<small class="muted">From ${is.source === "Veeam PowerShell" ? "Veeam's own record of the run" : "the Veeam event log during the run"}.</small>`; };
+    html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map((x, i) => {
       const bad = x._level ? x._level !== "ok" : /failed|warning|stopped|disconnected/i.test(x.result || "");
       return `<tr class="${rowCls(bad, "backup", x.name)}"><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.source === "Microsoft 365" ? "Microsoft 365 · " : "")}${esc(x.type || "")}${x.source === "Microsoft 365" && x.enabled === false ? " · disabled" : ""}</small></td>
-        <td>${res(x)}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
+        <td>${res(x)}${x.issue && (x.issue.objects.length || x.issue.log.length) ? ` <button type="button" class="mini" data-bkwhy="${i}" aria-expanded="false" title="What went wrong in this run">Why?</button>` : ""}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
         <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
         <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
-        <td>${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`;
+        <td>${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`
+        + (x.issue && (x.issue.objects.length || x.issue.log.length) ? `<tr class="bkwhyrow" data-bkwhyrow="${i}" hidden><td colspan="5">${why(x)}</td></tr>` : "");
     })) : `<p class="empty-note">Veeam is installed but no job has finished in the last 30 days.</p>`);
     const fg = Object.entries(st.backup_forgot || {});
     if (fg.length) html += `<p class="hint">Forgotten (hidden until they run again): ${fg.map(([k, f]) => `${esc(f.name || k)}${data && data.can_edit ? ` <button type="button" class="mini" data-bkback="${esc(k)}">Bring back</button>` : ""}`).join(" · ")}</p>`;
@@ -3953,6 +3967,12 @@ function renderSnmp(x) {
   body.scrollTop = top;
 }
 document.getElementById("detBody").addEventListener("click", async e => {
+  const w = e.target.closest("[data-bkwhy]");
+  if (w) {
+    const row = w.closest("table").querySelector(`[data-bkwhyrow="${w.dataset.bkwhy}"]`);
+    if (row) { row.hidden = !row.hidden; w.setAttribute("aria-expanded", String(!row.hidden)); w.textContent = row.hidden ? "Why?" : "Hide"; }
+    return;
+  }
   const f = e.target.closest("[data-bkforget], [data-bkback]"); if (!f || detMode === "snmp") return;
   const forget = !!f.dataset.bkforget;
   if (forget && !confirm(`Forget "${f.dataset.bkname}"?\n\nIt disappears from the list and stops alerting. If a job with this ID runs again later, it comes back on its own.`)) return;

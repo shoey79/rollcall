@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.49'
+$AgentVersion = '1.0.50'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1969,6 +1969,53 @@ function ConvertTo-IsoText($Value) {
     return [string]$Value
 }
 
+function Get-PreviousRun($Runs, [string]$Finished) {
+    # When the run before this one finished (so this run's events come after it), else a day earlier
+    $before = @(@($Runs) | Where-Object { $_ -and [string]$_ -lt $Finished } | Sort-Object)
+    if ($before.Count) { return [string]$before[-1] }
+    try { return ConvertTo-UtcString ([DateTime]::Parse($Finished).ToUniversalTime().AddDays(-1)) } catch { return '' }
+}
+
+function Get-VeeamRunIssue([string]$Log, [string]$Session, [string]$JobId = '', [string]$Since, [string]$Until, [switch]$NoPowerShell) {
+    # Why one run of a Veeam job warned or failed: each VM or item's status and Veeam's reason, and the
+    # run's warning and error lines. From Veeam's PowerShell on a backup server (Backup & Replication
+    # 11 or later), else from the Veeam event log between the run before and this one finishing.
+    $issue = [ordered]@{ session = $Session; source = ''; objects = @(); log = @() }
+    if (-not $NoPowerShell -and $Session -match '^[0-9a-fA-F-]{36}$' -and (Get-Module -ListAvailable -Name 'Veeam.Backup.PowerShell' -ErrorAction SilentlyContinue)) {
+        try {
+            Import-Module Veeam.Backup.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking
+            $s = $null
+            try { $s = Get-VBRBackupSession -Id ([guid]$Session) -ErrorAction Stop } catch { $s = [Veeam.Backup.Core.CBackupSession]::Get([guid]$Session) }
+            if ($s) {
+                $issue.source = 'Veeam PowerShell'
+                $tasks = @()
+                try { $tasks = @(Get-VBRTaskSession -Session $s -ErrorAction Stop) } catch { try { $tasks = @($s.GetTaskSessions()) } catch { } }
+                $issue.objects = @($tasks | Sort-Object { if ([string]$_.Status -eq 'Success') { 1 } else { 0 } }, Name | Select-Object -First 30 | ForEach-Object {
+                    [ordered]@{ name = (Limit-Text ([string]$_.Name) 120); status = [string]$_.Status; reason = (Limit-Text (([string]$_.Info.Reason) -replace '\s+', ' ') 400) } })
+                try {
+                    $issue.log = @($s.Logger.GetLog().UpdatedRecords | Where-Object { [string]$_.Status -in 'EWarning', 'EFailed' } | Select-Object -First 20 | ForEach-Object {
+                        [ordered]@{ status = $(if ([string]$_.Status -eq 'EFailed') { 'Failed' } else { 'Warning' }); text = (Limit-Text (([string]$_.Title) -replace '\s+', ' ') 400) } })
+                } catch { }
+                return $issue
+            }
+        } catch { Write-AgentLog "WARN Veeam PowerShell couldn't read the run: $($_.Exception.Message)" }
+    }
+    # The event log: warnings and errors written during the run (not the job's own "finished" event)
+    $issue.source = 'event log'
+    try {
+        $from = [DateTime]::Parse($Since).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.000Z')
+        $to = [DateTime]::Parse($Until).ToUniversalTime().AddSeconds(5).ToString('yyyy-MM-ddTHH:mm:ss.000Z')
+        $xp = "*[System[(Level=2 or Level=3) and TimeCreated[@SystemTime>'$from' and @SystemTime<='$to']]]"
+        $evs = @(Get-WinEvent -LogName $Log -FilterXPath $xp -MaxEvents 200 -ErrorAction Stop | Sort-Object RecordId)
+        $mine = @($evs | Where-Object { $x = $_.ToXml(); ($Session -match '^[0-9a-fA-F-]{36}$' -and $x -match [regex]::Escape($Session)) -or ($JobId -match '^[0-9a-fA-F-]{36}$' -and $x -match [regex]::Escape($JobId)) })
+        if ($mine.Count) { $evs = $mine }  # events that name this run or job, when there are any
+        $issue.log = @($evs | Where-Object { $_.Id -notin 190, 191, 490, 790 } | Select-Object -Last 20 | ForEach-Object {
+            $t = ''; try { $t = [string]$_.Message } catch { }
+            [ordered]@{ status = $(if ($_.Level -eq 2) { 'Failed' } else { 'Warning' }); text = (Limit-Text (($t -split "`r?`n")[0] -replace '\s+', ' ') 400) } } | Where-Object { $_.text })
+    } catch { }
+    return $issue
+}
+
 function Get-VeeamJobs($State) {
     # Veeam Backup & Replication: every job writes a "... job '<name>' finished with
     # <result>" event to the Veeam Backup log (190 backup and replication, 490 backup
@@ -1981,7 +2028,7 @@ function Get-VeeamJobs($State) {
                 $v = $p.Value
                 $jobs[$p.Name] = @{ name = [string]$v.name; type = [string]$v.type; result = [string]$v.result; finished = (ConvertTo-IsoText $v.finished)
                     retry = [bool]$v.retry; detail = [string]$v.detail; last_success = (ConvertTo-IsoText $v.last_success); session = [string]$v.session
-                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }) }
+                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }); issue = $v.issue }
             }
         } catch { }
     }
@@ -2021,10 +2068,21 @@ function Get-VeeamJobs($State) {
     # Forget jobs with no run for 60 days (deleted, or retired).
     $cutoff = (Get-Date).ToUniversalTime().AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
     foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
-    $State.veeam = ($jobs | ConvertTo-Json -Depth 4 -Compress)
+    # Why the latest run of a job warned or failed: looked up once per run
+    $looked = 0
+    foreach ($k in @($jobs.Keys)) {
+        $j = $jobs[$k]
+        if ($j.result -notin 'Warning', 'Failed') { $j.issue = $null; continue }
+        if ($j.issue -and [string]$j.issue.session -eq [string]$j.session) { continue }
+        if ($looked -ge 5) { continue }  # a few per run, so one bad night doesn't make a slow run
+        $looked++
+        $since = Get-PreviousRun $j.runs $j.finished
+        $j.issue = Get-VeeamRunIssue -Log 'Veeam Backup' -Session $j.session -JobId $k -Since $since -Until $j.finished
+    }
+    $State.veeam = ($jobs | ConvertTo-Json -Depth 7 -Compress)
     return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
         [ordered]@{ source = 'Backup & Replication'; id = $k; name = $j.name; type = $j.type; result = $j.result; finished = $j.finished
-            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.session; runs = @($j.runs) } })
+            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.session; runs = @($j.runs); issue = $j.issue } })
 }
 
 function Get-VeeamAgentJobs($State) {
@@ -2038,7 +2096,7 @@ function Get-VeeamAgentJobs($State) {
                 $v = $p.Value
                 $jobs[$p.Name] = @{ name = [string]$v.name; result = [string]$v.result; finished = (ConvertTo-IsoText $v.finished)
                     retry = [bool]$v.retry; detail = [string]$v.detail; last_success = (ConvertTo-IsoText $v.last_success)
-                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }) }
+                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }); issue = $v.issue }
             }
         } catch { }
     }
@@ -2079,10 +2137,17 @@ function Get-VeeamAgentJobs($State) {
     }
     $cutoff = (Get-Date).ToUniversalTime().AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
     foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
-    $State.veeam_agent = ($jobs | ConvertTo-Json -Depth 4 -Compress)
+    foreach ($k in @($jobs.Keys)) {
+        $j = $jobs[$k]
+        if ($j.result -notin 'Warning', 'Failed') { $j.issue = $null; continue }
+        if ($j.issue -and [string]$j.issue.session -eq [string]$j.finished) { continue }
+        $since = Get-PreviousRun $j.runs $j.finished
+        $j.issue = Get-VeeamRunIssue -Log 'Veeam Agent' -Session $j.finished -Since $since -Until $j.finished -NoPowerShell
+    }
+    $State.veeam_agent = ($jobs | ConvertTo-Json -Depth 7 -Compress)
     return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
         [ordered]@{ source = 'Veeam Agent'; id = $k; name = $j.name; type = 'Agent backup (this device)'; result = $j.result; finished = $j.finished
-            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.finished; runs = @($j.runs) } })
+            retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.finished; runs = @($j.runs); issue = $j.issue } })
 }
 
 function Get-VboJobs($State) {
