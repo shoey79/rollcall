@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.47'
+$AgentVersion = '1.0.48'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -662,6 +662,14 @@ function Get-Disks {
         })
 }
 
+function Test-DelayedStart($Service) {
+    # Automatic (Delayed Start): WMI reports these as 'Auto' too. Windows Server 2016 / 10 and later say so
+    # in DelayedAutoStart; older ones only in the registry.
+    if ($Service.StartMode -ne 'Auto') { return $false }
+    if ($null -ne $Service.PSObject.Properties['DelayedAutoStart'] -and $null -ne $Service.DelayedAutoStart) { return [bool]$Service.DelayedAutoStart }
+    try { return [int](Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$($Service.Name)" -Name DelayedAutostart -ErrorAction Stop).DelayedAutostart -eq 1 } catch { return $false }
+}
+
 function Get-ServiceReport($AllServices, $Discovery) {
     $watched = @()
     foreach ($name in $Discovery.watch.Keys) {
@@ -670,6 +678,7 @@ function Get-ServiceReport($AllServices, $Discovery) {
             $watched += [ordered]@{
                 name = [string]$s.Name; display = [string]$s.DisplayName; state = [string]$s.State
                 start_mode = [string]$s.StartMode; role = [string]$Discovery.watch[$name]
+                delayed = (Test-DelayedStart $s)
             }
         }
     }
@@ -683,7 +692,7 @@ function Get-ServiceReport($AllServices, $Discovery) {
         try {
             if (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$($s.Name)\TriggerInfo") { continue }
         } catch { }
-        $stopped += [ordered]@{ name = [string]$s.Name; display = [string]$s.DisplayName; state = [string]$s.State }
+        $stopped += [ordered]@{ name = [string]$s.Name; display = [string]$s.DisplayName; state = [string]$s.State; delayed = (Test-DelayedStart $s) }
         if ($stopped.Count -ge 50) { break }
     }
     return [ordered]@{ watched = @($watched | Sort-Object { $_.name }); stopped_auto = $stopped }
@@ -1383,7 +1392,7 @@ function Get-TimeStatus([string]$Domain, [bool]$IsDc) {
     $line = @($dc | Where-Object { [string]$_ -match '^\s*DC:\s*\\\\(\S+)' } | Select-Object -First 1)
     if ($line.Count -and [string]$line[0] -match '^\s*DC:\s*\\\\(\S+)') { $out.target = $Matches[1] }
     if (-not $out.target) { $out.error = "couldn't find a domain controller"; return $out }
-    if ($out.target -replace '\..*$', '' -eq $env:COMPUTERNAME) { $out.error = 'this computer is the domain controller it would compare with'; return $out }
+    if ($out.target -replace '\..*$', '' -eq $env:COMPUTERNAME) { $out.error = 'this device is the domain controller it would compare with'; return $out }
     $chart = @(Invoke-W32tm @("/stripchart", "/computer:$($out.target)", '/samples:1', '/dataonly'))
     $hit = @($chart | Where-Object { [string]$_ -match ',\s*([+-]?\d+(?:[.,]\d+)?)s\s*$' } | Select-Object -First 1)
     if ($hit.Count -and [string]$hit[0] -match ',\s*([+-]?\d+(?:[.,]\d+)?)s\s*$') {
@@ -2070,7 +2079,7 @@ function Get-VeeamAgentJobs($State) {
     foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
     $State.veeam_agent = ($jobs | ConvertTo-Json -Depth 4 -Compress)
     return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
-        [ordered]@{ source = 'Veeam Agent'; id = $k; name = $j.name; type = 'Agent backup (this computer)'; result = $j.result; finished = $j.finished
+        [ordered]@{ source = 'Veeam Agent'; id = $k; name = $j.name; type = 'Agent backup (this device)'; result = $j.result; finished = $j.finished
             retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.finished; runs = @($j.runs) } })
 }
 

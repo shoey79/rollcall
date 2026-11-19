@@ -2,14 +2,14 @@
 
 *Who's up, and how are they doing?* (Formerly **Ping Monitor**.)
 
-Rollcall pings your computers and devices on a schedule and checks the services running on them. It can also:
+Rollcall pings your devices on a schedule and checks the services running on them. It can also:
 
 - read switches, NAS units and UPSs over **SNMP**;
 - collect their **syslog** messages;
 - show what Home Assistant already knows about a device, through a **linked Home Assistant device**;
 - look inside Windows and Linux servers with an **agent**: disks, services, containers, backups, logs, security and more.
 
-Every computer gets one of these states:
+Every device gets one of these states:
 
 | Status | Meaning |
 |---|---|
@@ -18,14 +18,14 @@ Every computer gets one of these states:
 | 🟠 Degraded | Answers, but a service, device or agent check has failed. You're notified |
 | 🔴 Down | Missed two checks in a row. You're notified |
 | 🔵 Paused | Maintenance mode: still checked, but no alerts |
-| ⚪ Off / Off schedule | Outside its monitoring times, or a computer that's usually off |
+| ⚪ Off / Off schedule | Outside its monitoring times, or a device that's usually off |
 
-You get a dashboard in the Home Assistant sidebar, a sensor for every computer and check, and phone notifications.
+You get a dashboard in the Home Assistant sidebar, a sensor for every device and check, and phone notifications.
 
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding computers, discovering devices, icons
+2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding devices, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
 4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, linked Home Assistant devices, upstream devices
 5. [Windows agent](#windows-agent)
@@ -56,16 +56,16 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 
 ### The Overview
 
-![The Overview: totals, alerts and every computer at a glance](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/dashboard.png)
-*Screenshots in this guide show made-up computers.*
+![The Overview: totals, alerts and every device at a glance](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/dashboard.png)
+*Screenshots in this guide show made-up devices.*
 
 Rollcall opens on the **Overview**:
 
-- **Tiles** show how many computers are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open a list of just those computers, as a temporary tab with **×** to go back to All.
-- **Alerts** lists everything that isn't green, worst and newest first. That includes computers not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the computer's Details on the right tab.
-- **At a glance** shows every computer as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
-  - **Group** (the default): one section per group. A computer's group is the one typed in its Edit form, or else its icon's type (Computers and servers, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
-  - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A computer in two tabs appears in both.
+- **Tiles** show how many devices are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open a list of just those devices, as a temporary tab with **×** to go back to All.
+- **Alerts** lists everything that isn't green, worst and newest first. That includes devices not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the device's Details on the right tab.
+- **At a glance** shows every device as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
+  - **Group** (the default): one section per group. A device's group is the one typed in its Edit form, or else its icon's type (Servers and PCs, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
+  - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A device in two tabs appears in both.
   - **Monitoring schedule**: one section per schedule, plus "Always monitored".
   - **Nothing**: all the tiles together.
 
@@ -74,10 +74,10 @@ Rollcall opens on the **Overview**:
 
 ### Tabs
 
-Tabs split a long list. Each is a saved filter, so it updates by itself as computers are added or change. The number on a tab is how many computers it shows. The coloured badge is how many of those need attention (red if any are down).
+Tabs split a long list. Each is a saved filter, so it updates by itself as devices are added or change. The number on a tab is how many devices it shows. The coloured badge is how many of those need attention (red if any are down).
 
 - **Built in:** **All**, **Needs attention** (down, degraded or missed a check), and **Windows**, **Linux** and **No agent**, which appear once you have a mix.
-- **Your own (admins):** choose **+ New tab**, name it and add conditions. It shows computers that match *all* or *any* of them, and lists what matches as you type. **Start from** offers ready-made starting points: name, IP range, Windows, Linux, domain controllers, web servers, low uptime, physical machines, virtual machines and Hyper-V VMs.
+- **Your own (admins):** choose **+ New tab**, name it and add conditions. It shows devices that match *all* or *any* of them, and lists what matches as you type. **Start from** offers ready-made starting points: name, IP range, Windows, Linux, domain controllers, web servers, low uptime, physical machines, virtual machines and Hyper-V VMs.
 
 | Condition | Options | Example |
 |---|---|---|
@@ -89,42 +89,42 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as compu
 | Server role (agent) | includes, doesn't include | `Domain controller`, `IIS`, `Immich` (comma-separated means any of them) |
 | Service check | includes, doesn't include | `SQL`, `HTTPS`, `32400` |
 | Physical or virtual | is | Physical, Virtual (any), Hyper-V VM, VMware VM, KVM / QEMU / Proxmox VM, Container, Not known |
-| Signed-in user (agent) | includes, doesn't include | One or more user names, separated by commas, e.g. `jsmith`. Handy for finding which computer someone is on |
+| Signed-in user (agent) | includes, doesn't include | One or more user names, separated by commas, e.g. `jsmith`. Handy for finding which device someone is on |
 | Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
 The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab.
 
-**Pause all in this tab** pauses every computer in the tab at once, e.g. for a site's patch night. If something is typed in the search box, only the computers shown are paused. **Resume N paused** ends the pause early for all of them. See [Pausing](#pausing-for-reboots-maintenance-mode).
+**Pause all in this tab** pauses every device in the tab at once, e.g. for a site's patch night. If something is typed in the search box, only the devices shown are paused. **Resume N paused** ends the pause early for all of them. See [Pausing](#pausing-for-reboots-maintenance-mode).
 
 ### Details
 
 ![Details of a Windows server with the agent: its checks and system information](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/details.png)
 
-**Details** on a row, or the computer's name, opens everything Rollcall knows about that computer, in tabs:
+**Details** on a row, or the device's name, opens everything Rollcall knows about that device, in tabs:
 
-- **Overview** (computers without an agent). The whole device on one page:
+- **Overview** (devices without an agent). The whole device on one page:
   - tiles for status, 24-hour uptime with its history bar (each segment is a half hour on the clock, e.g. 16:00 – 16:30, and the last runs up to now; hover over one to see its times and how it went), and ping time;
   - device tiles: a UPS's power, battery, runtime and load; a NAS's disks and how full each array is; a switch's ports and PoE; readings from its logs; a linked Pi-hole's figures;
   - a **Needs attention** list of failing checks, SNMP problems, log alerts and readings over their limits. Click an item to jump to its detail;
   - every check with its uptime, the latest warnings and errors from its logs, and the device's model, serial, firmware and location.
-- **Agent details** (computers with an agent): the agent's own tabs. See [Windows agent](#windows-agent).
-- **SNMP**, **Logs** and **Home Assistant**, when those are set up for the computer.
+- **Agent details** (devices with an agent): the agent's own tabs. See [Windows agent](#windows-agent).
+- **SNMP**, **Logs** and **Home Assistant**, when those are set up for the device.
 
-Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit opens on top of Details, and Details refreshes when you save or cancel. It closes if you delete the computer.
+Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit opens on top of Details, and Details refreshes when you save or cancel. It closes if you delete the device.
 
-### Adding and editing computers
+### Adding and editing devices
 
 ![Adding a device: name, address and the services to check](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/add.png)
 
 - **Manage → Add device** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
-- **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that computer are in the form too.
+- **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that device are in the form too.
 - Changes apply straight away, with no add-on restart.
 - The list is saved in the add-on's data folder (`hosts.json`), which is included in Home Assistant backups.
 
 **Hostnames** are resolved on every check, so the IP shown follows DNS changes. A name that can't be resolved counts as a failed ping. For `.local` names, see [Troubleshooting](#troubleshooting).
 
-**Bulk import.** You can list computers under `hosts:` in the add-on's Configuration tab:
+**Bulk import.** You can list devices under `hosts:` in the add-on's Configuration tab:
 
 ```yaml
 hosts:
@@ -138,7 +138,7 @@ hosts:
     host: 10.0.1.90        # no checks = ping only
 ```
 
-On the next start they're merged into the dashboard list. They're matched by name, so an existing computer is updated rather than duplicated. The add-on then clears the option, so the dashboard stays the one place to manage them. If Home Assistant doesn't let it clear the option, entries already imported are ignored on later starts. That way they can't overwrite your changes or bring back a computer you deleted.
+On the next start they're merged into the dashboard list. They're matched by name, so an existing device is updated rather than duplicated. The add-on then clears the option, so the dashboard stays the one place to manage them. If Home Assistant doesn't let it clear the option, entries already imported are ignored on later starts. That way they can't overwrite your changes or bring back a device you deleted.
 
 ### Discovering devices
 
@@ -146,7 +146,7 @@ On the next start they're merged into the dashboard list. They're matched by nam
 
 **Manage → Discover devices** scans your network for devices that aren't in Rollcall yet (admins and editors only).
 
-1. **Addresses to scan:** the networks to look at, e.g. `192.168.1.0/24`, `10.0.1.1-200` or single addresses, separated by commas. Rollcall suggests the network Home Assistant is on and the ones your computers are on. Only private addresses can be scanned, up to 1,024 per range (a /22) and 4,096 in all.
+1. **Addresses to scan:** the networks to look at, e.g. `192.168.1.0/24`, `10.0.1.1-200` or single addresses, separated by commas. Rollcall suggests the network Home Assistant is on and the ones your devices are on. Only private addresses can be scanned, up to 1,024 per range (a /22) and 4,096 in all.
 2. **SNMP community:** used to read switches, NAS boxes and UPS cards (`public` unless you've changed it).
 3. **Scan.** A /24 usually takes under a minute. You can close the window and come back; the last scan is kept.
 
@@ -159,7 +159,7 @@ From that it guesses what the device is: domain controller, Exchange, SQL Server
 - **Add** opens the Add form with the name, address (the DNS name when there is one), make and model, and suggested checks filled in. Check it and save. For Windows and Linux servers, the [agent](#windows-agent) gives far more detail than port checks.
 - **Hide** takes a device off the list (e.g. phones, TVs, guests). **Show hidden** brings them back.
 - Devices already in Rollcall are left out unless you tick **Show devices already in Rollcall**; then they link to their Details.
-- **Doesn't answer ping:** Rollcall checks by ping, so once added it would show as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent, as a computer counts as up while its agent reports.
+- **Doesn't answer ping:** Rollcall checks by ping, so once added it would show as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent, as a device counts as up while its agent reports.
 
 #### Networks Rollcall uses
 
@@ -174,13 +174,13 @@ The add-on runs in Home Assistant's container network, so it can't read MAC addr
 
 ### Icons and make/model
 
-Each computer has an icon, in the list and on the Overview. By default it's picked from the computer's name or make (e.g. "AP1", "NAS01", "SQL01", "NVR01", "Kitchen plug", "Tapo P110", "Landing light", "Tapo L530", "Hall thermostat", "Back door sensor", "Zappi", "Solis inverter"), its agent (Windows Server or desktop, Linux) or its checks (printer, RTSP camera, SNMP, SIP, Home Assistant, Pi-hole). In the form, *Automatic* shows which icon that gives, and follows the checks as you tick them.
+Each device has an icon, in the list and on the Overview. By default it's picked from the device's name or make (e.g. "AP1", "NAS01", "SQL01", "NVR01", "Kitchen plug", "Tapo P110", "Landing light", "Tapo L530", "Hall thermostat", "Back door sensor", "Zappi", "Solis inverter"), its agent (Windows Server or desktop, Linux) or its checks (printer, RTSP camera, SNMP, SIP, Home Assistant, Pi-hole). In the form, *Automatic* shows which icon that gives, and follows the checks as you tick them.
 
 To choose one yourself, choose **Icon** in Edit. The picker has about 75 icons in groups, with a search box (try "light" or "sensor"):
 
 | Group | Icons |
 |---|---|
-| Computers and servers | Rack, storage and tower servers, NAS, server rack, desktop, laptop, VM, database, single-board computer, web service, cloud |
+| Servers and PCs | Rack, storage and tower servers, NAS, server rack, desktop, laptop, VM, database, single-board computer, web service, cloud |
 | Network | Switch, router, firewall, access point, mesh Wi-Fi, modem/ONT, DNS/ad blocker |
 | Lighting | Light bulb, ceiling light, spotlight/downlight, lamp, wall/porch light, floodlight, garden/path light, LED strip, light switch/dimmer, remote/button |
 | Smart home | Smart home hub, home automation, smart plug, temperature, water leak, motion and door/window sensors, blinds, robot vacuum, sprinkler, weather station |
@@ -195,15 +195,15 @@ They're generic and drawn for Rollcall, with no company logos.
 For a manufacturer's logo or a photo of the hardware, choose **Upload image** in the icon picker:
 
 - PNG, JPEG, WebP or SVG, up to 300 KB each and 200 images in total.
-- Uploaded images can be used for any computer and are included in exports.
-- Deleting an image from the picker returns computers that used it to an automatic icon.
+- Uploaded images can be used for any device and are included in exports.
+- Deleting an image from the picker returns devices that used it to an automatic icon.
 - Only use images you have the right to use.
 
 **Make and model** (optional) is shown under the name, e.g. "Dell PowerEdge R720xd", and helps choose the automatic icon.
 
-**Group** (optional) puts the computer in a section of the Overview, e.g. *Servers* or *Home automation*. Leave it blank to group it by its icon's type; the field shows which group that is.
+**Group** (optional) puts the device in a section of the Overview, e.g. *Servers* or *Home automation*. Leave it blank to group it by its icon's type; the field shows which group that is.
 
-**Line under the name** chooses what the list shows under the computer's name:
+**Line under the name** chooses what the list shows under the device's name:
 
 | Choice | Shows |
 |---|---|
@@ -219,10 +219,10 @@ For a manufacturer's logo or a photo of the hardware, choose **Upload image** in
 
 Agents (Windows 1.0.13 and Linux 1.0.7 or later) report the machine's manufacturer, model and serial number (a Dell service tag, for instance), and whether it's a virtual machine: Hyper-V, VMware, KVM/QEMU (including Proxmox), VirtualBox, Xen or a cloud VM, or a container (LXC, Docker) on Linux.
 
-- A computer without an agent counts as a Hyper-V VM when a Hyper-V host's agent lists a VM with the same name.
+- A device without an agent counts as a Hyper-V VM when a Hyper-V host's agent lists a VM with the same name.
 - You can also type "VM" or "Hyper-V" in **Make and model**.
 - The list shows this under the name (e.g. *Hyper-V VM on HV01*, or *Dell Inc. PowerEdge R720xd · ABC1234*), unless you've typed a make and model.
-- **Custom-built PCs** often leave placeholders such as "System manufacturer", "System Product Name" or "To Be Filled By O.E.M." in the BIOS. These are ignored, along with dummy serial numbers. From Windows agent 1.0.30, the agent then reports the motherboard instead (e.g. *ASUSTeK COMPUTER INC. PRIME B660M-A*), and hovering over it says so.
+- **Custom-built PCs** often leave placeholders such as "System manufacturer", "System Product Name" or "To Be Filled By O.E.M." in the BIOS. These are ignored, along with dummy serial numbers. From Windows agent 1.0.30, the agent then reports the motherboard instead (e.g. *ASUSTeK DEVICE INC. PRIME B660M-A*), and hovering over it says so.
 - To split the list, make a tab with the **Physical or virtual** condition.
 
 ---
@@ -231,15 +231,15 @@ Agents (Windows 1.0.13 and Linux 1.0.7 or later) report the machine's manufactur
 
 ### How status works
 
-- **Ping** decides whether a computer is up. One miss turns it amber; a second miss in a row turns it red and notifies. The re-check after a miss comes `retry_interval` seconds later.
-- **Every other check** runs only while the computer answers. Each has its own count: one failure turns its chip amber, two in a row turn it red.
+- **Ping** decides whether a device is up. One miss turns it amber; a second miss in a row turns it red and notifies. The re-check after a miss comes `retry_interval` seconds later.
+- **Every other check** runs only while the device answers. Each has its own count: one failure turns its chip amber, two in a row turn it red.
 - **Agent checks** fold into one chip while they're fine: **Windows ✓ all 14 OK** (or Linux). Any that need attention get their own chip, and the summary says how many of the total are OK, e.g. **Windows: 14 of 16 OK** next to the two problem chips.
-- **A red check** makes the computer **Degraded** and sends an alert naming it, e.g. "🟠 SQL01: SQL is down". Recovery sends "🟢 SQL01: SQL is back up" if `notify_recovery` is on.
-- **When the whole computer stops answering**, you get one "down" alert, not one per check. Its checks start counting again once it's back, which gives services time to start after a reboot.
-- **Pausing** a computer pauses its checks too.
+- **A red check** makes the device **Degraded** and sends an alert naming it, e.g. "🟠 SQL01: SQL is down". Recovery sends "🟢 SQL01: SQL is back up" if `notify_recovery` is on.
+- **When the whole device stops answering**, you get one "down" alert, not one per check. Its checks start counting again once it's back, which gives services time to start after a reboot.
+- **Pausing** a device pauses its checks too.
 - **Uptime %** is time-weighted over the last 24 hours. Amber time counts as down. Gaps when the add-on wasn't running are left out rather than guessed. The row shows ping uptime; each check's own uptime shows when you hover over its chip, and in its sensor.
 
-For computers that can't be pinged, such as laptops reporting over the internet, see [Computers that report over the internet](#computers-that-report-over-the-internet).
+For devices that can't be pinged, such as laptops reporting over the internet, see [Devices that report over the internet](#computers-that-report-over-the-internet).
 
 ### Presets
 
@@ -366,7 +366,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | Form | Example | Checks |
 |---|---|---|
 | `tcp:PORT` | `tcp:5985` | The port accepts a connection |
-| `http:PORT/path` | `http:8080/status` | A web request to this computer |
+| `http:PORT/path` | `http:8080/status` | A web request to this device |
 | `https:PORT/path` | `https:443/owa` | The same over HTTPS |
 | Full URL | `https://mail.example.local/owa` | A specific URL, e.g. a virtual host or load-balanced name |
 | `cert:…` | `cert:8443` | A certificate's expiry; see [Certificate expiry](#certificate-expiry) |
@@ -389,7 +389,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 
 Tick **Certificate expiry on HTTPS (443)** under Network, or add custom checks:
 
-- `cert:8443`: the certificate on another port of this computer.
+- `cert:8443`: the certificate on another port of this device.
 - `SMTP=cert:25`: mail ports use STARTTLS (25 and 587 SMTP, 110 POP3, 143 IMAP, 21 FTP), so mail servers' SMTP certificates can be checked.
 - `cert:mail.example.com:443`: a certificate on another name or address. The name is also sent as SNI, so the right certificate is picked on a server that has several.
 
@@ -421,9 +421,9 @@ A firewall, router or multi-homed server can have more than one address worth wa
 
 ### Home Assistant sensors
 
-Any Home Assistant sensor can be a check on a computer. For example, the UniFi Network integration's CPU and memory sensors for an access point can sit alongside its ping. The chip shows the current value, e.g. **CPU 12%**.
+Any Home Assistant sensor can be a check on a device. For example, the UniFi Network integration's CPU and memory sensors for an access point can sit alongside its ping. The chip shows the current value, e.g. **CPU 12%**.
 
-In **Edit**, search under **Home Assistant sensors** (the search starts with the computer's name) and choose **Add**. CPU and memory are added as "problem above 90%", temperatures above 80; anything else just needs to be available. Edit the line under **Custom checks** to change it:
+In **Edit**, search under **Home Assistant sensors** (the search starts with the device's name) and choose **Add**. CPU and memory are added as "problem above 90%", temperatures above 80; anything else just needs to be available. Edit the line under **Custom checks** to change it:
 
 | Check | Meaning |
 |---|---|
@@ -432,7 +432,7 @@ In **Edit**, search under **Home Assistant sensors** (the search starts with the
 | `ha:sensor.office_ap_state!=Connected` | Red when the state is anything but Connected |
 | `ha:binary_sensor.nas_status` | Only needs to exist and not be unavailable |
 
-The condition describes the problem. Operators are `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and pause while the computer is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
+The condition describes the problem. Operators are `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and pause while the device is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
 To bring in *all* of a device's entities at once, link its Home Assistant device instead; see [Linked Home Assistant devices](#linked-home-assistant-devices).
 
@@ -588,7 +588,7 @@ If Home Assistant already has an integration for a device, link its Home Assista
 
 ![A Pi-hole linked to its Home Assistant device, with its readings and controls](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/ha.png)
 
-This adds a **Home Assistant** check and a **Home Assistant** tab in Details, including for computers with an agent. On computers without an agent, the Overview shows it too:
+This adds a **Home Assistant** check and a **Home Assistant** tab in Details, including for devices with an agent. On devices without an agent, the Overview shows it too:
 
 - **Readings:** every entity and its state. Diagnostic and configuration entities are folded away.
 - **Controls:** the device's buttons and switches, in their own list. Admins and editors can **Press**, **Turn on** or **Turn off**. Each one asks you to confirm first and is logged with who did it. Only that device's own controls can be used. A button shows when it was last pressed; until then Home Assistant reports its state as "unknown".
@@ -619,11 +619,11 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
    - **Group Policy** for the servers' OU: *Computer Configuration → Policies → Windows Settings → Scripts → Startup*, script `powershell.exe`, parameters `-NoProfile -ExecutionPolicy Bypass -File \\your-domain\NETLOGON\PingMonitorAgent.ps1 -Install`.
    - **By hand:** run that command once as an administrator on a server to start straight away.
    - **MECM (Run Scripts):** *Software Library → Scripts → Create Script*, import the script and have it approved (by default an author can't approve their own). Right-click a device collection → **Run Script**, choose it, set **Action** to `Install` and leave the rest at their defaults. It runs as SYSTEM straight away. MECM warns about the switch parameters; that's expected, and it's why `Action` exists. If it fails with a signing error, your client settings' PowerShell execution policy is *All Signed*: sign the script, or use *Bypass* for that collection.
-   - **The installer**, for computers looked after by people outside IT; see below.
+   - **The installer**, for devices looked after by people outside IT; see below.
 4. Within 5 minutes each server shows under **Waiting for approval**. Check the name and address, then **Approve** (or **Approve all**).
 5. Approved servers that aren't on the dashboard yet are added automatically, by IP, unless `agent_auto_add` is off. Existing entries are matched by name or IP.
 
-   If the same computer has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same computer as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
+   If the same device has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same device as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
 
 **What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. After its first report it adds a second task, **Ping Monitor Agent (start-up)**, that runs a minute after Windows starts, so a restart shows straight away. From agent 1.0.47 that start-up run waits up to 3 minutes for Rollcall to be reachable (DHCP, the domain network or a VPN can take longer than a minute), rather than giving up until the next 5-minute run. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
 
@@ -637,14 +637,14 @@ The agent logs to `C:\ProgramData\PingMonitor\agent.log`. To keep agents current
 
 #### Windows installer (.msi)
 
-For computers looked after by people who aren't in IT, use **Download installer (.msi)** on the Windows card. It has the agent, the addresses and the enrolment key built in, so they only need to double-click it and accept the administrator prompt. It:
+For devices looked after by people who aren't in IT, use **Download installer (.msi)** on the Windows card. It has the agent, the addresses and the enrolment key built in, so they only need to double-click it and accept the administrator prompt. It:
 
 - copies the agent to `C:\Program Files\Rollcall` and runs its install as SYSTEM, which creates the scheduled task;
 - shows in *Installed apps* as **Rollcall agent**; removing it there uninstalls the agent, its task and data;
-- lets a newer .msi replace an older one, keeping the computer's approval;
+- lets a newer .msi replace an older one, keeping the device's approval;
 - rolls back and shows an error if the agent couldn't be installed.
 
-When installed by double-clicking, it ends on a **Rollcall agent installed** screen saying the computer will appear in Rollcall within a minute or two (or, if something went wrong, a screen saying how to get an install log). The computer then appears under Agents for approval as usual. For silent installs (Intune, MECM, Group Policy software installation), which show no screens: `msiexec /i RollcallAgent-<version>.msi /qn`.
+When installed by double-clicking, it ends on a **Rollcall agent installed** screen saying the device will appear in Rollcall within a minute or two (or, if something went wrong, a screen saying how to get an install log). The device then appears under Agents for approval as usual. For silent installs (Intune, MECM, Group Policy software installation), which show no screens: `msiexec /i RollcallAgent-<version>.msi /qn`.
 
 The installer isn't code-signed, so Windows SmartScreen may say "Windows protected your PC" (choose **More info → Run anyway**). You can sign it yourself after downloading, with `signtool`. Many email systems block .msi attachments, so share it with a link instead.
 
@@ -654,7 +654,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 |---|---|---|
 | **Agent** | A run took longer than `agent_slow_seconds` (120) | No report for `agent_stale_minutes` (15) |
 | **Disk** | A volume under `agent_disk_warn` (15%) free | Under `agent_disk_crit` (5%) free |
-| **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row) |
+| **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row). Automatic (Delayed Start) services, which Windows starts a couple of minutes after it starts, don't count as stopped until it's been up 5 minutes; Details marks them *delayed start* |
 | **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off). The details say what asked for the restart (Windows Update, component servicing, Configuration Manager, files waiting to be replaced) and what was installed since the last one | |
 | **Vulnerabilities** | A known vulnerability in Windows scoring `vuln_min_score` (9) or more that a later Windows update fixes (see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
 | **IIS** | | An app pool or site stopped (two reports) |
@@ -668,7 +668,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Defender** | Definitions over 7 days old | Real-time protection off, or malware not removed |
 | **Security** | Notable events in the last 24 h | `agent_failed_logons` (20) or more failed logons in one report |
 | **LAPS** (where a LAPS policy applies) | Rotation more than a day overdue, the last LAPS run failed, the managed account missing, or LAPS set but not working | Rotation more than `agent_laps_overdue_days` (3) overdue (two reports) |
-| **BitLocker** (physical computers that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
+| **BitLocker** (physical devices that use it, and Windows 10/11 with a TPM by default) | A fixed drive not encrypted, protection suspended, encryption paused or being removed, a drive locked, or no recovery password on the Windows drive | |
 | **Domain security** (the PDC emulator) | For 24 h after someone is added to a privileged group; KRBTGT password over 180 days old; an enabled account that doesn't require a password | |
 | **Exchange** (Exchange servers) | Back pressure Medium, `agent_exchange_queue_warn` (250) or more messages waiting, anything in the poison queue, maintenance mode or a component inactive, a copy suspended or behind | Back pressure High, or a database copy failed or dismounted (two reports) |
 | **Group Policy** (domain members) | Failing, and not applied for 3 hours | |
@@ -677,19 +677,19 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **DFS Replication** (DFS Replication role) | Recovering its database after an unclean shutdown, a folder in initial sync or recovery, or a partner unreachable for over an hour | Replication stopped (dirty shutdown, offline too long, database not recovered, a folder in error, or the service stopped; two reports) |
 | **SQL Server** (SQL servers) | A database with no backup for `agent_sql_backup_hours` (36), in full recovery with its log not backed up, or offline; a SQL Agent job failed; can't connect or read | A database suspect or recovery pending (two reports) |
 | **Scheduled tasks** (servers) | A task's last run failed, or a timed task missed its run | |
-| **Certificates** | A certificate in the computer's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
+| **Certificates** | A certificate in the device's own stores within `cert_warn_days` (30) of expiry | Within `cert_crit_days` (7) of expiry, or expired (two reports) |
 | **Network** (adapters you tick) | A ticked adapter disabled, or its link slower than when it was ticked (e.g. 1 Gb/s down to 100 Mb/s) | A ticked adapter disconnected or gone (two reports) |
 | **Events** | Alert-worthy events in the last 24 h | |
 
 **Installed software:** the **Software** tab in Details lists every installed program with its version, publisher, install date and size, plus a filter box. **Recent changes** shows what was installed, removed, updated or downgraded in the last 30 days (the add-on keeps 180 days).
 - On Windows the list matches **Apps & features**: the machine's Uninstall entries (64- and 32-bit) and those of signed-in users. Windows updates and hidden system components are left out. It doesn't use `Win32_Product`, which is slow and can make MSI packages repair themselves.
 - On Linux it's the package list from `dpkg` or `rpm`.
-- The agent checks every run but only sends the list when something has changed, so reports stay small. If the add-on hasn't got a computer's list (e.g. after a restore), it asks for it.
+- The agent checks every run but only sends the list when something has changed, so reports stay small. If the add-on hasn't got a device's list (e.g. after a restore), it asks for it.
 - **Newer versions** are highlighted (never alerted) with *Newer: …* under the installed version, and **Only the N with a newer version** filters to them. Find software shows them too.
   - **Windows:** the add-on downloads Microsoft's winget catalogue once a day (a few MB from `cdn.winget.microsoft.com`) and matches programs the way winget does: by their Uninstall key (MSI product code), then by name and publisher. Nothing runs on the servers, so it works on every Windows version, including Server 2016 and 2019. Programs that aren't in the catalogue (most line-of-business software) aren't checked.
   - **Linux:** the newer versions the package manager already knows about (`apt list --upgradable` or `dnf check-update` from its cache).
   - Turn it off with the `software_updates` option. Newer versions need Windows agent 1.0.34 or Linux agent 1.0.15.
-- **Manage → Find software** searches every computer's list by program or publisher, e.g. *TeamViewer*, and shows which computers have it and which versions. Click a computer to open its Software tab.
+- **Manage → Find software** searches every device's list by program or publisher, e.g. *TeamViewer*, and shows which devices have it and which versions. Click a device to open its Software tab.
 - This needs Windows agent 1.0.33 or Linux agent 1.0.14.
 
 **Signed-in users:** the Details Overview shows who is signed in. Where there's more than one session, or a Remote Desktop or SSH session, a table lists each one: user, session (console, Remote Desktop or SSH), active or disconnected, idle time and when they signed in. On Windows this comes from `quser`, so disconnected Remote Desktop sessions are included; Windows Home editions only show the console user. On Linux it comes from `who`. Like security events, user names are only shown to Home Assistant admins. This needs Windows agent 1.0.32 or Linux agent 1.0.13.
@@ -701,7 +701,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 - **Something that happened** (alert-worthy events, security alerts, passwords found in files, changes to the agent's files, and additions to privileged groups such as Domain Admins): everything up to now is acknowledged, so it's green again straight away instead of after 24 hours. Anything new turns it amber again.
 - **Something that's still the case** (a pending reboot, a stopped app pool, a backup that hasn't run, a disk filling up, an SNMP warning): it counts as OK while it stays as it is or better. If it gets worse (amber to red) it alerts again, and if it clears and later comes back it alerts again too.
 - **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
-- **Defender:** a threat is cleared on the computer itself; the next agent report then clears the alert. There's no Acknowledge for it.
+- **Defender:** a threat is cleared on the device itself; the next agent report then clears the alert. There's no Acknowledge for it.
 
 Acknowledging doesn't send a notification. **N acknowledged**, under the alerts, lists what's acknowledged, who did it and when, each with **Undo**. Event-type acknowledgements drop off that list after 24 hours. Ones you don't need to see, e.g. passwords in files that have to stay, can be **Dismiss**ed (or **Dismiss all**): they stay acknowledged but disappear from the Overview. If the problem comes back or gets worse, it alerts again as usual. Only Home Assistant admins and Rollcall editors can acknowledge.
 
@@ -710,10 +710,10 @@ Acknowledging doesn't send a notification. **N acknowledged**, under the alerts,
 ![A server's D: drive over a year: used space against its size, with when it'll be full at that rate](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/graphs.png)
 
 - **Disks** (Storage tab): used space against the disk's size. Underneath, how fast it's growing and, if it is, roughly when it'll be full at that rate. The rate is worked out from the daily averages over the last 30 days, or the range shown if that's longer, once there are at least 3 days of history.
-- **Network adapters** (Network tab): received and sent traffic for each connected adapter that carries traffic. That's physical adapters, and virtual ones with an address, such as a Hyper-V host's vEthernet: up to 6 per computer. **Peak** shows the busiest figure in each period instead of the average. Each figure is the average between two agent reports (every few minutes), so a short burst reads lower than it was.
-- **CPU and memory** (**Graph** next to CPU on the Overview tab). CPU is the reading at each report, so it shows how busy the computer usually is rather than every spike.
+- **Network adapters** (Network tab): received and sent traffic for each connected adapter that carries traffic. That's physical adapters, and virtual ones with an address, such as a Hyper-V host's vEthernet: up to 6 per device. **Peak** shows the busiest figure in each period instead of the average. Each figure is the average between two agent reports (every few minutes), so a short burst reads lower than it was.
+- **CPU and memory** (**Graph** next to CPU on the Overview tab). CPU is the reading at each report, so it shows how busy the device usually is rather than every spike.
 - **History builds up from the update onwards.** Nothing is filled in from before. The traffic graph starts at the second report after the add-on starts, because it's worked out from two reports.
-- **Storage:** every report is kept for two days, then as hourly figures for a month, then as daily figures (average, lowest and highest) for `metrics_days`, 365 by default. That's a few MB per computer for a year. Deleting a device removes its graphs; **Reset uptime** doesn't touch them.
+- **Storage:** every report is kept for two days, then as hourly figures for a month, then as daily figures (average, lowest and highest) for `metrics_days`, 365 by default. That's a few MB per device for a year. Deleting a device removes its graphs; **Reset uptime** doesn't touch them.
 
 **Roles** are found from the server's installed Windows roles and services: domain controller, DNS, DHCP, file server, DFS, print server, IIS, Remote Desktop (Session Host, Broker, Gateway, Licensing), Hyper-V, WSUS, Certificate Services, AD FS, NPS, SQL Server, Exchange, SharePoint and Veeam. Each role's services are watched if they're set to start automatically. Roles added or removed later are picked up on the next run.
 
@@ -726,7 +726,7 @@ Acknowledging doesn't send a notification. **N acknowledged**, under the alerts,
 
 Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
-**Veeam backups.** On a Veeam server, or a computer backed up by Veeam Agent, the agent adds a **Backups** check and tab:
+**Veeam backups.** On a Veeam server, or a device backed up by Veeam Agent, the agent adds a **Backups** check and tab:
 
 - **Backup & Replication** (v12/13): every job's result is read from the *Veeam Backup* event log (backup, replication, backup copy, agent backup jobs managed by the backup server, and others).
   - A failed job is red, with one notification per failed run giving Veeam's reason. A failure Veeam will retry, or a warning, is amber.
@@ -735,49 +735,49 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
   - A copy job like that is also judged by its copies for being overdue: its **Last success** is the latest successful copy, and each copy has its own overdue check, so the copy job's own occasional entries don't make it look overdue.
   - Rollcall learns how often each job runs. A job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or silently stopped.
   - Jobs with no run for 60 days are dropped.
-- **Veeam Agent for Microsoft Windows** on the computer itself: each session's result, from the *Veeam Agent* event log. It works whether the agent is standalone or managed by a backup server, through an agent backup job or a backup policy. A **backup policy** (managed by the agent) writes nothing to the backup server's log, so put a Rollcall agent on the computers it protects to see their results. A failure Veeam Agent will retry is amber; one it won't is red. Overdue runs are spotted the same way as above.
+- **Veeam Agent for Microsoft Windows** on the device itself: each session's result, from the *Veeam Agent* event log. It works whether the agent is standalone or managed by a backup server, through an agent backup job or a backup policy. A **backup policy** (managed by the agent) writes nothing to the backup server's log, so put a Rollcall agent on the devices it protects to see their results. A failure Veeam Agent will retry is amber; one it won't is red. Overdue runs are spotted the same way as above.
 - **Backup for Microsoft 365:** each job's last status, from its PowerShell module, every 30 minutes (loading the module is slow). Failed is red; Warning, Stopped or Disconnected is amber; an enabled job more than 2 hours past its next scheduled run is amber ("missed"). Disabled jobs are listed but not checked.
 - **Ignore** on a job in the Backups tab (`backup:<job name>`) leaves it out, e.g. a weekly test job.
 
 **Alerted as they happen** (a notification for each):
 
-- **Security log:** account locked out (4740), account created or deleted (4720/4726), member added to a security group (4728/4732/4756, e.g. Domain Admins), audit policy changed (4719), Security log cleared (1102). The IDs are in `agent_security_alert_ids`. Group members that are local accounts are named from their SID, and changes made by the computer itself (LAPS, Group Policy) show as `SYSTEM`.
+- **Security log:** account locked out (4740), account created or deleted (4720/4726), member added to a security group (4728/4732/4756, e.g. Domain Admins), audit policy changed (4719), Security log cleared (1102). The IDs are in `agent_security_alert_ids`. Group members that are local accounts are named from their SID, and changes made by the device itself (LAPS, Group Policy) show as `SYSTEM`.
 - **System log:** unexpected shutdowns and crashes (Kernel-Power 41, EventLog 6008, BugCheck 1001), disk and NTFS errors, and any Critical-level event. The list is in `agent_event_watch`, as `Source:ID` or just an ID.
 - **Microsoft Defender:** every detection, saying whether it was removed.
 
-**Failed logons** are grouped by account and source. Each group shows Windows' reason (e.g. "user name doesn't exist", "wrong password", "account locked out"), the logon type, the method (NTLM, Kerberos) and the client's computer name. A user name sent with the domain already in it reads e.g. `contoso\svc_backup (with domain CONTOSO)`, which usually means a saved credential is typed wrongly.
+**Failed logons** are grouped by account and source. Each group shows Windows' reason (e.g. "user name doesn't exist", "wrong password", "account locked out"), the logon type, the method (NTLM, Kerberos) and the client's device name. A user name sent with the domain already in it reads e.g. `contoso\svc_backup (with domain CONTOSO)`, which usually means a saved credential is typed wrongly.
 
 **Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker, certificates and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
 
 ### LAPS
 
-On computers where a LAPS policy applies (agent 1.0.18 or later), Rollcall checks that the managed local admin password is being rotated on the schedule the policy sets. It covers Windows LAPS (from Group Policy, Intune or local configuration, backing up to AD or Entra ID) and legacy Microsoft LAPS (AdmPwd), including Windows LAPS' legacy emulation mode.
+On devices where a LAPS policy applies (agent 1.0.18 or later), Rollcall checks that the managed local admin password is being rotated on the schedule the policy sets. It covers Windows LAPS (from Group Policy, Intune or local configuration, backing up to AD or Entra ID) and legacy Microsoft LAPS (AdmPwd), including Windows LAPS' legacy emulation mode.
 
 - **The policy** is read the way Windows reads it: Intune, then Group Policy, then local configuration, then legacy. That includes the password age and the managed account.
-- **The due date** comes from the password's expiry on the computer's own AD object (`msLAPS-PasswordExpirationTime`, or `ms-Mcs-AdmPwdExpirationTime` for legacy LAPS), which is what LAPS itself works from. The computer can read the expiry; the password itself is never read. The lookup happens at most hourly.
+- **The due date** comes from the password's expiry on the computer's own AD object (`msLAPS-PasswordExpirationTime`, or `ms-Mcs-AdmPwdExpirationTime` for legacy LAPS), which is what LAPS itself works from. The device can read the expiry; the password itself is never read. The lookup happens at most hourly.
 - **Without AD** (Entra ID backup, or a laptop away from the office), the due date is the last rotation plus the policy's password age. The last rotation comes from the managed account's password-last-set time and Windows LAPS' own events (10018/10029 backed up, 10020 account updated).
 - **Alerts:** amber once rotation is more than a day overdue, red once it's more than `agent_laps_overdue_days` (3) overdue. Also amber when the latest LAPS run failed (event 10005, with its error), the managed account doesn't exist, there's no password in AD yet, backup is disabled in the policy, or a legacy policy is set with no LAPS client installed.
 - **Domain controllers:** Windows LAPS manages the DSRM password there, if *Enable password backup for DSRM accounts* is on.
-- **Computers without LAPS** don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
+- **Devices without LAPS** don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
 
 The Security tab shows the product, where the policy comes from, where it backs up to, how often it rotates, the managed account, when the password was last set and when it expires, the last backup and the last LAPS run.
 
 ### BitLocker
 
-Rollcall checks BitLocker on each fixed drive of physical computers (agent 1.0.21 or later; the TPM check needs 1.0.22). It reads the state from Windows (WMI), the same as `manage-bde -status`, and never reads the keys or recovery passwords.
+Rollcall checks BitLocker on each fixed drive of physical devices (agent 1.0.21 or later; the TPM check needs 1.0.22). It reads the state from Windows (WMI), the same as `manage-bde -status`, and never reads the keys or recovery passwords.
 
-- **Which computers:**
+- **Which devices:**
   - **Virtual machines** (Hyper-V, VMware, VirtualBox and others) aren't checked; their drives are still listed.
-  - A physical computer with a BitLocker-encrypted drive is always checked.
+  - A physical device with a BitLocker-encrypted drive is always checked.
   - One that doesn't use BitLocker is only expected to when it has a TPM, and `agent_bitlocker_require` covers it: `workstations` (Windows 10/11, the default), `all` (servers too) or `off`. No TPM, no warning. A TPM that's turned off still counts as present, and the alert says it's turned off.
-  - Computers without BitLocker installed (servers without the feature) don't get the check.
-- **The TPM** is read from Windows (`Win32_Tpm`), the same as `Get-Tpm`: its version, maker, and whether it's turned on. The Security tab shows it, and why a computer isn't checked when it isn't.
+  - Devices without BitLocker installed (servers without the feature) don't get the check.
+- **The TPM** is read from Windows (`Win32_Tpm`), the same as `Get-Tpm`: its version, maker, and whether it's turned on. The Security tab shows it, and why a device isn't checked when it isn't.
 - **Amber** when a fixed drive isn't encrypted, protection is suspended, encryption is paused, the drive is being decrypted, a drive is locked, or the Windows drive has no recovery password (so it couldn't be recovered if the TPM failed). It never goes red: an unencrypted drive isn't an outage.
-- **Suspended protection** is often deliberate: Windows Update and firmware updates suspend it until the next restart. When a restart is pending the alert says so, and it clears once the computer restarts and protection resumes.
+- **Suspended protection** is often deliberate: Windows Update and firmware updates suspend it until the next restart. When a restart is pending the alert says so, and it clears once the device restarts and protection resumes.
 - **Encrypting** shows the percentage and stays green.
 - Removable drives (BitLocker To Go) and drives without a letter aren't checked.
 
-The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a computer, **Ignore** the whole check (`bitlocker:bitlocker`).
+The Security tab shows each drive with its state, protection, encryption method and what unlocks it (TPM, PIN, recovery password, password…). To leave out one drive, use **Ignore** on its row (`bitlocker:D:`); to leave the check off a device, **Ignore** the whole check (`bitlocker:bitlocker`).
 
 ### Exchange
 
@@ -793,17 +793,17 @@ To leave the check off a server, ignore it (`exchange:exchange`).
 
 ### Time
 
-On every domain-joined Windows computer (agent 1.0.46 or later), the agent measures how far its clock is from the domain with `w32tm /stripchart`, the same as running it by hand. It's on the **Roles** tab.
+On every domain-joined Windows device (agent 1.0.46 or later), the agent measures how far its clock is from the domain with `w32tm /stripchart`, the same as running it by hand. It's on the **Roles** tab.
 
 - **Domain members** are compared with the domain controller they use; **other domain controllers** with the PDC emulator, which the rest of the domain takes its time from.
 - **Amber** when the clock is `agent_time_warn_seconds` (60) or more out, or Windows Time isn't syncing from anything ("Local CMOS Clock", "Free-running System Clock" or NoSync). **Red** at `agent_time_crit_seconds` (240) on two reports in a row: Kerberos refuses sign-ins at 5 minutes, so that's a warning before people can't log on.
 - **The PDC emulator** has nothing to compare with, so it's checked for a real time source instead: amber when it runs on its own clock, since the whole domain then drifts with it. Point it at an NTP server (`w32tm /config /manualpeerlist:"pool.ntp.org" /syncfromflags:manual /reliable:yes /update`).
 - If the domain controller can't be reached for the comparison, the check says so and stays green, rather than alerting for something the time isn't to blame for.
-- Can be ignored on a computer (`time:time`).
+- Can be ignored on a device (`time:time`).
 
 ### Group Policy and SYSVOL replication
 
-**Group Policy** is checked on every domain-joined computer (agent 1.0.26 or later), from Group Policy's own results in the System log.
+**Group Policy** is checked on every domain-joined device (agent 1.0.26 or later), from Group Policy's own results in the System log.
 
 - **Amber** when the latest result is a failure and policy hasn't applied for 3 hours. Policy refreshes every 90 minutes or so, so a failure at start-up (before the network is up) that the next refresh fixes doesn't alert.
 - Failures are explained, e.g. *Couldn't read a policy from SYSVOL* (1058), *Couldn't find a domain controller* (1054), *No network connection to a domain controller* (1129), *A settings extension failed* (1085), with Windows' own message.
@@ -813,7 +813,7 @@ On every domain-joined Windows computer (agent 1.0.46 or later), the agent measu
 - **Red** when DFS-R has stopped replicating SYSVOL: after an unclean shutdown (event 2213, which needs resuming with the command in the event), because the DC was offline longer than DFS-R allows (4012, which needs a non-authoritative sync), or the folder is in error.
 - **Amber** while it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since), during initial sync or recovery, or while SYSVOL still replicates with FRS. FRS isn't supported from Windows Server 2019; migrate with `dfsrmig`.
 
-Both are on the **Roles** tab. Each can be ignored on a computer (`gpo:gpo`, `sysvol:sysvol`).
+Both are on the **Roles** tab. Each can be ignored on a device (`gpo:gpo`, `sysvol:sysvol`).
 
 ### DFS Replication
 
@@ -861,13 +861,13 @@ The agent (1.0.24 or later) lists the scheduled tasks outside Task Scheduler's *
 
 ### Certificates
 
-The agent (1.0.23 or later) lists the certificates with a private key in the computer's **Personal**, **Remote Desktop** and **Web Hosting** stores, and when each expires. That covers certificates the network check can't see, such as LDAPS on domain controllers, SQL Server, RD Connection Broker and internal services. Keys are never read.
+The agent (1.0.23 or later) lists the certificates with a private key in the device's **Personal**, **Remote Desktop** and **Web Hosting** stores, and when each expires. That covers certificates the network check can't see, such as LDAPS on domain controllers, SQL Server, RD Connection Broker and internal services. Keys are never read.
 
 - **Amber** within `cert_warn_days` (30) of expiry, **red** within `cert_crit_days` (7) or once expired. These are the same options as the network certificate check.
 - **Renewals don't alert.** When a newer certificate with the same name is valid, the old one is marked *Replaced*. A certificate that expired over 30 days ago and isn't bound to anything is marked *Old, not in use*. Neither counts.
 - **Used by** shows what a certificate is bound to: HTTPS bindings (IIS, RD Gateway, WinRM, ADFS), from `netsh http show sslcert`, and the Remote Desktop listener. Services such as LDAPS and SQL Server pick a certificate themselves, so every certificate counts, bound or not.
 - Windows' own self-signed Remote Desktop certificate isn't checked, because Windows renews it.
-- To leave one out, use **Ignore** on its row (`cert:<thumbprint>`, or `cert:<name>`); to leave the check off a computer, ignore the whole check (`cert:certs`).
+- To leave one out, use **Ignore** on its row (`cert:<thumbprint>`, or `cert:<name>`); to leave the check off a device, ignore the whole check (`cert:certs`).
 
 ### Domain security
 
@@ -876,13 +876,13 @@ The domain-wide checks run on one domain controller only: the one holding the **
 - **Privileged groups:** the members of Domain Admins, Enterprise Admins, Schema Admins, Administrators, Account Operators, Server Operators, Backup Operators, Print Operators, DnsAdmins and Group Policy Creator Owners. Rollcall remembers who was there; anyone added later is highlighted with the time, and the check is **amber for 24 hours**. Removals are listed too. Members there when Rollcall first looked show as *before monitoring*. The DC's security log still reports each change as it happens (events 4728/4732/4756); this check covers changes made on any DC and gives the full picture.
 - **KRBTGT:** **amber** once its password is over 180 days old. Reset it twice, some hours apart, so tickets issued with the old key expire in between.
 - **Accounts that don't require a password** (enabled, with *password not required* set): **amber**. To accept one, use **Ignore** on its row (`aduser:<name>`).
-- **For review, without alerting:** enabled accounts whose password never expires, and enabled users and computers with no logon for 90 days. *Last logon* is AD's replicated value (`lastLogonTimestamp`), which can be up to 14 days behind.
+- **For review, without alerting:** enabled accounts whose password never expires, and enabled users and devices with no logon for 90 days. *Last logon* is AD's replicated value (`lastLogonTimestamp`), which can be up to 14 days behind.
 
 To leave the check off, ignore it (`domain:domain`).
 
 ### Administrators group
 
-The Security tab (admins only, agent 1.0.17 or later) lists every direct member of the computer's built-in Administrators group, with its type (user or group), where it's from (Local, Domain, Azure AD, Built-in) and its SID.
+The Security tab (admins only, agent 1.0.17 or later) lists every direct member of the device's built-in Administrators group, with its type (user or group), where it's from (Local, Domain, Azure AD, Built-in) and its SID.
 
 - The built-in Administrator and disabled local accounts are marked. A SID Windows can't name shows as "Unknown (deleted?)", usually an account that has since been deleted. An Azure AD (Entra ID) SID is labelled as such.
 - Groups in the list (e.g. Domain Admins) are listed, not expanded into their members.
@@ -920,7 +920,7 @@ On the **Security** tab, choose **Filter…** next to an event (admins and edito
 | Note | Why it's expected; shown next to filtered events | "LAPS manages this account" |
 
 - `*` stands for any run of characters and `?` for any one. Matching ignores upper and lower case. An empty box matches anything.
-- For a local account on the computer the event came from, the account is suggested as `*\name`, so one filter covers that account on every computer.
+- For a local account on the device the event came from, the account is suggested as `*\name`, so one filter covers that account on every device.
 - The form says how many of the listed events the filter matches before you save it, and warns if it would hide every event of a type.
 - **What a filter does:** matching events don't notify and don't turn the Security check amber. They're still listed, greyed out, with the note. It applies straight away, including to events from the last 24 hours, so an alert it covers clears now.
 - **Security filters**, under the events, lists every filter for this server and for all servers, with who added it and when. **Apply to all servers** widens one; **Remove** deletes it, and matching events from the last 24 hours count again.
@@ -931,7 +931,7 @@ On the **Security** tab, choose **Filter…** next to an event (admins and edito
 | Part | Matches | Example |
 |---|---|---|
 | Account | The account in the failed logon | `CONTOSO\SRV01`, `*\scanner` |
-| From | The address or computer it came from | `::1` (the server itself), `192.168.1.*` |
+| From | The address or device it came from | `::1` (the server itself), `192.168.1.*` |
 | Reason | Windows' reason | `user name doesn't exist`, `wrong password` |
 
 Matching failed logons stay listed, greyed out with the note, and the count shows how many were filtered. They don't count towards `agent_failed_logons`, so they no longer turn Security red; failed logons that don't match still do, and the Security check names only those. They're listed under **Security filters** with the event filters.
@@ -947,13 +947,13 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 
-Pausing a computer silences its agent alerts too.
+Pausing a device silences its agent alerts too.
 
 ### Passwords left in files
 
 The agents can look for passwords saved in plain text: in scripts, configuration files, notes, spreadsheets, setup answer files and command histories. It's off unless you turn it on.
 
-> **Passwords never leave the computer.** The agent reads the files on the computer itself. For each password it finds, it sends Rollcall only:
+> **Passwords never leave the device.** The agent reads the files on the device itself. For each password it finds, it sends Rollcall only:
 > - the file's path
 > - the line number (for Word files, the paragraph number)
 > - what kind of thing it is, e.g. *Password in a database connection string*
@@ -964,8 +964,8 @@ The agents can look for passwords saved in plain text: in scripts, configuration
 
 **Turning it on**
 
-- The `agent_secret_scan` option picks which computers scan by default: `off` (the default), `servers`, `workstations` (Windows 10 and 11) or `all`.
-- To change one computer, open its Details → **Security** → **Passwords left in files** → **Scan settings for this computer**. Choose **On** or **Off**, add extra folders (one per line, e.g. `D:\Shares\IT` or `/etc/myapp`), and choose how often a full scan runs (every 24 hours by default).
+- The `agent_secret_scan` option picks which devices scan by default: `off` (the default), `servers`, `workstations` (Windows 10 and 11) or `all`.
+- To change one device, open its Details → **Security** → **Passwords left in files** → **Scan settings for this device**. Choose **On** or **Off**, add extra folders (one per line, e.g. `D:\Shares\IT` or `/etc/myapp`), and choose how often a full scan runs (every 24 hours by default).
 - It needs Windows agent 1.0.36 or Linux agent 1.0.17.
 
 **Where it looks**
@@ -1004,8 +1004,8 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **The check is amber at most** (*Passwords in files*) and never sends a notification.
 - **Fix:** move the password into a password manager or the program's protected store, then remove it from the file. The finding clears after the next scan.
 - **Ignore:** use **Ignore** on a row for a finding you've accepted (e.g. a test password). It stays ignored until that file, setting or kind of finding changes.
-- **Ignore all:** accepts everything found so far on that computer, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
-- **Turning it off** for a computer removes its check and Rollcall's findings straight away. The agent deletes its own scan files on its next run.
+- **Ignore all:** accepts everything found so far on that device, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
+- **Turning it off** for a device removes its check and Rollcall's findings straight away. The agent deletes its own scan files on its next run.
 - To try it on a folder without sending anything:
   - Windows: `PingMonitorAgent.ps1 -SecretTest D:\Shares`
   - Linux: `python3 pingmonitor-agent.py --secret-test /srv`
@@ -1019,7 +1019,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, which is signed (see [Updating agents automatically](#updating-agents-automatically)).
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
-- **Revoke** stops a server's reports. Deleting a computer from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
+- **Revoke** stops a server's reports. Deleting a device from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
 - **Reports go over HTTP by default**, so they're readable on your network. To use HTTPS, turn on **Agent port uses HTTPS** (`agent_ssl`) under **Manage → Settings → Agent port**, with a certificate in Home Assistant's `/ssl` folder (`agent_certfile`, `agent_keyfile`), and download the script with an `https://` address. Tick **Accept a self-signed certificate** if yours is self-signed.
 
 ---
@@ -1110,7 +1110,7 @@ It doesn't update itself: to update, download it again and run `--install` again
 
 ## Known vulnerabilities
 
-Computers with an agent get a **Vulnerabilities** check: known vulnerabilities (CVEs) in what's installed, from public data the add-on downloads once a day. Only vulnerabilities that an update fixes count, so each one has something to do about it.
+Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CVEs) in what's installed, from public data the add-on downloads once a day. Only vulnerabilities that an update fixes count, so each one has something to do about it.
 
 - **Amber:** a vulnerability scoring `vuln_min_score` or more out of 10 (its CVSS base score; 9 by default, which is "critical"). Amber isn't notified, like other amber checks.
 - **Red, and notified:** any vulnerability, whatever its score (so it's listed even below `vuln_min_score`), on CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, or that Microsoft says is being exploited, whatever its score.
@@ -1119,13 +1119,13 @@ Computers with an agent get a **Vulnerabilities** check: known vulnerabilities (
 - Like other security details, the list is only shown to Home Assistant admins and editors; others see the check's colour.
 - Turn it off with `vuln_checks`. Its alerts are emailed under **Security**.
 
-**Windows** (any agent version): Microsoft publishes, for each CVE, the Windows build that fixes it, e.g. `10.0.17763.6414`. Rollcall downloads the last 12 months of Microsoft's security update data (the MSRC API, `api.msrc.microsoft.com`) and compares each computer's build, which the agent already reports with its update revision. Desktop Windows and Windows Server are compared separately: some share a build number (Windows 11 24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 are both 17763) but are updated separately, with their own revisions. A computer further behind than 12 months is flagged by the **Updates** check anyway; a Windows version Microsoft hasn't updated in that time is shown as probably out of support. Only Windows itself is checked: other programs (including Office, SQL Server and Exchange) aren't yet. Computers that get hotpatch updates are compared with the monthly updates, so they may show fixes as missing until their next baseline update.
+**Windows** (any agent version): Microsoft publishes, for each CVE, the Windows build that fixes it, e.g. `10.0.17763.6414`. Rollcall downloads the last 12 months of Microsoft's security update data (the MSRC API, `api.msrc.microsoft.com`) and compares each device's build, which the agent already reports with its update revision. Desktop Windows and Windows Server are compared separately: some share a build number (Windows 11 24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 are both 17763) but are updated separately, with their own revisions. A device further behind than 12 months is flagged by the **Updates** check anyway; a Windows version Microsoft hasn't updated in that time is shown as probably out of support. Only Windows itself is checked: other programs (including Office, SQL Server and Exchange) aren't yet. Devices that get hotpatch updates are compared with the monthly updates, so they may show fixes as missing until their next baseline update.
 
 **Linux** (Linux agent 1.0.20 or later, which sends each package's source package and the distro's release): Debian, Ubuntu (not the Pro or FIPS streams), AlmaLinux and Rocky Linux, using [OSV.dev](https://osv.dev)'s data. A package counts when a newer version fixes a vulnerability, not for issues the distro hasn't fixed. Where several versions of a package are installed (e.g. an old kernel left beside the running one), the newest counts. Scores come from the CVSS 3 vector in OSV's record; a vulnerability without one counts only if it's known to be exploited. `vuln_linux_source` chooses where the matching is done:
 
-- `local` (the default): the add-on downloads OSV's data for each distro your agents run, once a day (`storage.googleapis.com`), and matches it itself. Nothing about your computers is sent anywhere. These downloads are larger, and building the index takes a little while on slow hardware.
-- `online`: the add-on sends OSV.dev's API (`api.osv.dev`) one combined list of the package names and versions across all your Linux computers, once a day and when a list changes, and fetches the details of what applies. No computer names, addresses or which computer has which package are sent. Downloads are small.
-- `off`: Linux computers aren't checked.
+- `local` (the default): the add-on downloads OSV's data for each distro your agents run, once a day (`storage.googleapis.com`), and matches it itself. Nothing about your devices is sent anywhere. These downloads are larger, and building the index takes a little while on slow hardware.
+- `online`: the add-on sends OSV.dev's API (`api.osv.dev`) one combined list of the package names and versions across all your Linux devices, once a day and when a list changes, and fetches the details of what applies. No device names, addresses or which device has which package are sent. Downloads are small.
+- `off`: Linux devices aren't checked.
 
 The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Software tab says so, and the data already downloaded is used until it can.
 
@@ -1145,25 +1145,25 @@ Under **Agents → Where the agents report to** there are two addresses: **Insid
 
 For the outside address to work, forward its port on your firewall to Home Assistant's agent port, or publish it through a reverse proxy, and use HTTPS (`agent_ssl`). Otherwise reports and each server's token cross the internet unencrypted. Servers still have to be approved, and every report is checked against that server's own token.
 
-### Computers that report over the internet
+### Devices that report over the internet
 
-A computer that reports through the outside address usually can't be pinged from Home Assistant. **Tell it's up by** (in Edit) handles this:
+A device that reports through the outside address usually can't be pinged from Home Assistant. **Tell it's up by** (in Edit) handles this:
 
 - **Automatic** (the default): it's up while it answers ping or, if it has an agent, while the agent has reported in the last 10 minutes. The status then says **Up (agent)**, and the list shows "report 2 min ago" instead of a ping time. It's only treated as down when both fail: no ping reply and no report for over 10 minutes.
 - **Ping only**: the fastest down alerts, for servers that are always on the network. With Automatic, a crashed server with an agent can take up to about 10 minutes to show as down.
 - **Agent only**: never pinged. It's up while reports arrive, amber ("Report late") once a report is over about 11 minutes old, and down with a notification after `agent_stale_minutes` (at least 12).
 
-In each case it's up again as soon as a report arrives. Port, web and certificate checks still have to reach the computer from Home Assistant, so leave those off for computers only reachable over the internet.
+In each case it's up again as soon as a report arrives. Port, web and certificate checks still have to reach the device from Home Assistant, so leave those off for devices only reachable over the internet.
 
 ### Updating agents automatically
 
 Each add-on release carries the latest agents. Under **Agents → Download and install**, tick **Update Windows agents automatically** and/or **Update Linux agents automatically**. At its next report, any agent older than the add-on's copy downloads it and replaces itself; the new version runs from the report after that. To update just one server, use **Update** next to it in the Approved list. Both are off by default, and the Agent column shows which servers are out of date.
 
-**New versions go to one computer first.** With automatic updates on, a new agent version is sent to one computer first, preferably a server. Every other agent only gets it once that computer has reported on the new version, usually within 5–10 minutes. If it hasn't reported within 20 minutes of fetching the update, the rollout stops: no other agent is updated, you get a notification, and Agents shows the computer concerned with two choices:
-- **Retry** tries it on a different computer first.
+**New versions go to one device first.** With automatic updates on, a new agent version is sent to one device first, preferably a server. Every other agent only gets it once that device has reported on the new version, usually within 5–10 minutes. If it hasn't reported within 20 minutes of fetching the update, the rollout stops: no other agent is updated, you get a notification, and Agents shows the device concerned with two choices:
+- **Retry** tries it on a different device first.
 - **Update the rest** sends it to every agent anyway.
 
-If the first computer is switched off before it fetches the update, another one is chosen after an hour. With only one agent of a kind, it's updated straight away as before; if it goes quiet afterwards you're still told why. **Update** next to a single server always sends it straight away.
+If the first device is switched off before it fetches the update, another one is chosen after an hour. With only one agent of a kind, it's updated straight away as before; if it goes quiet afterwards you're still told why. **Update** next to a single server always sends it straight away.
 
 An agent only installs an update if all of these pass; otherwise it keeps its current version and logs why:
 
@@ -1190,7 +1190,7 @@ Set up under **Manage → Settings → Email alerts**. One list of addresses get
 
 **What to email** (tick any):
 
-- **Red alerts** (on): problems as they happen, such as a computer down, a check gone red, a failed backup or a Defender threat that wasn't removed.
+- **Red alerts** (on): problems as they happen, such as a device down, a check gone red, a failed backup or a Defender threat that wasn't removed.
 - **When things come back** (on): when something that was red works again.
 - **Amber warnings and events** (off): as they happen, e.g. a late or missed backup, Windows log and security events, or a threat Defender removed. Left off, these go in the daily summary instead.
 - **Daily summary** (on), at **Daily summary at** (08:00 by default, in Home Assistant's time zone): everything that isn't responding, red, amber or paused, plus the warnings and events not already emailed. If Home Assistant was off at that time, it's sent when it starts, up to an hour late; after that, that day is skipped.
@@ -1199,7 +1199,7 @@ Set up under **Manage → Settings → Email alerts**. One list of addresses get
 
 | Tick | Covers |
 |---|---|
-| Devices not responding | A computer or device that stops replying, and when it's back |
+| Devices not responding | A device that stops replying, and when it's back |
 | Service checks | Ports, websites, certificates, SIP and Home Assistant sensors |
 | SNMP and syslog | Firewalls, VPNs and REDs, switches, iDRACs and syslog alerts |
 | Agent checks and log events | Disks, services, Windows updates and the other agent checks, and Windows or Linux log events |
@@ -1246,8 +1246,8 @@ Choose **Pause** on a row, or in Details, before rebooting or working on a machi
 - When it has gone down and replies again, monitoring resumes by itself, with a "back online" message if `notify_recovery` is on.
 - If it isn't back by the time limit, it goes red and you're alerted.
 - While it's waiting for the machine to go down, it's checked every 5 seconds, so a quick reboot isn't missed.
-- A computer with an agent normally counts as up for 10 minutes after each report, even if ping fails. While it's paused, if it usually answers ping, a missed ping counts as it going down, and it's back when ping answers again.
-- A restart is also spotted from the agent's uptime: if the computer booted after the pause began, it counts as having gone down and come back. This covers computers that don't answer ping. The Windows agent (1.0.37 or later) also runs a minute after Windows starts, so this is noticed straight away rather than up to 5 minutes later.
+- A device with an agent normally counts as up for 10 minutes after each report, even if ping fails. While it's paused, if it usually answers ping, a missed ping counts as it going down, and it's back when ping answers again.
+- A restart is also spotted from the agent's uptime: if the device booted after the pause began, it counts as having gone down and come back. This covers devices that don't answer ping. The Windows agent (1.0.37 or later) also runs a minute after Windows starts, so this is noticed straight away rather than up to 5 minutes later.
 - If it never appeared to go down or restart, it resumes quietly at the time limit.
 - **Resume** ends the pause early.
 
@@ -1255,22 +1255,22 @@ Paused time doesn't count towards uptime, and pauses survive an add-on restart. 
 
 ### Monitoring schedules
 
-By default every computer is monitored all the time. For one that's only meant to be on at certain times, open **Edit → Monitoring schedule**, choose **Only at set times** and add one or more windows, each with its days and times, e.g. Mon–Fri 07:00–19:00, or Sat 22:00–06:00 for an overnight job. A window can run past midnight; it belongs to the day it starts.
+By default every device is monitored all the time. For one that's only meant to be on at certain times, open **Edit → Monitoring schedule**, choose **Only at set times** and add one or more windows, each with its days and times, e.g. Mon–Fri 07:00–19:00, or Sat 22:00–06:00 for an overnight job. A window can run past midnight; it belongs to the day it starts.
 
-- **Outside its windows** the computer shows as **Off schedule** (grey), with when monitoring resumes. It's still pinged: if it's on anyway, the dot turns half green, half grey and it shows **On · off schedule**. Nothing alerts either way, and off-schedule time doesn't count against uptime.
+- **Outside its windows** the device shows as **Off schedule** (grey), with when monitoring resumes. It's still pinged: if it's on anyway, the dot turns half green, half grey and it shows **On · off schedule**. Nothing alerts either way, and off-schedule time doesn't count against uptime.
 - **When a window opens** it shows **Starting up** until it replies, for up to the allowance you set (15 minutes by default, 0–240). If it hasn't replied by then, you get the usual down alert. Its services and agent checks get the same allowance: one that fails while it's starting shows as *starting up* (blue) and doesn't alert. Anything still failing when the allowance ends alerts straight away.
 - **When a window closes**, it goes back to Off schedule without an alert.
 - **Problems its agent reported stay on the Overview.** A failed backup, a full disk or a stopped service from the last report is still listed outside the window, marked *off schedule; from the report …*, and the tile says how many checks need attention. They clear when a later report says they're fixed.
 - **Backup results still notify.** A failed or overdue Veeam job is sent even if the report arrives outside the window (e.g. a backup server that's only on overnight). Only a manual **Pause** holds them back.
 
-Times are in Home Assistant's time zone (Settings → System → General) and follow daylight saving. The schedule shows under the computer's name, and its sensor has `off_schedule` and `schedule` attributes. A manual **Pause** still works on a scheduled computer and takes priority while it lasts.
+Times are in Home Assistant's time zone (Settings → System → General) and follow daylight saving. The schedule shows under the device's name, and its sensor has `off_schedule` and `schedule` attributes. A manual **Pause** still works on a scheduled device and takes priority while it lasts.
 
-**Computers that are usually off.** For something that's only switched on now and then (cold storage, a monthly backup target), choose **Whenever it's switched on**. Being off is then normal: it shows as **Off** (grey), never alerts for it, and off time doesn't count against uptime. While it's on, it's monitored like any other computer, so a failed disk or stopped service still alerts during that monthly run.
-- **Start-up allowance:** each time it's switched on, its services and agent checks get time to start before anything alerts (**Allow … minutes**, 15 by default, 0–240). Until then a failed check shows as *starting up* and the computer as **Starting up**, with the time the allowance ends. Anything still failing after that alerts straight away. Restarting the add-on while it's on doesn't start a new allowance.
+**Devices that are usually off.** For something that's only switched on now and then (cold storage, a monthly backup target), choose **Whenever it's switched on**. Being off is then normal: it shows as **Off** (grey), never alerts for it, and off time doesn't count against uptime. While it's on, it's monitored like any other device, so a failed disk or stopped service still alerts during that monthly run.
+- **Start-up allowance:** each time it's switched on, its services and agent checks get time to start before anything alerts (**Allow … minutes**, 15 by default, 0–240). Until then a failed check shows as *starting up* and the device as **Starting up**, with the time the allowance ends. Anything still failing after that alerts straight away. Restarting the add-on while it's on doesn't start a new allowance.
 
-**Never alert.** **Never alert for this computer** (Edit → Monitoring schedule) turns off every notification for it: down, checks, agent, events and updates. The dashboard still shows its real status, it still counts in tabs such as Needs attention, and its entities and events still update, so your own automations keep working. A 🔕 next to its name shows it's set. It can be combined with any schedule.
+**Never alert.** **Never alert for this device** (Edit → Monitoring schedule) turns off every notification for it: down, checks, agent, events and updates. The dashboard still shows its real status, it still counts in tabs such as Needs attention, and its entities and events still update, so your own automations keep working. A 🔕 next to its name shows it's set. It can be combined with any schedule.
 
-**Critical alerts.** **Critical** (Edit → Monitoring schedule) is for computers that should wake you, such as a mail server. When it goes down, one of its checks goes red, or a Veeam backup job fails, the notification sent to the Home Assistant app is a critical alert:
+**Critical alerts.** **Critical** (Edit → Monitoring schedule) is for devices that should wake you, such as a mail server. When it goes down, one of its checks goes red, or a Veeam backup job fails, the notification sent to the Home Assistant app is a critical alert:
 - **iPhone:** a critical alert, which plays a sound even when the phone is muted or on Do Not Disturb. iOS asks you to allow critical alerts for the Home Assistant app the first time.
 - **Android:** a high-priority notification on the `alarm_stream` channel, which plays as an alarm even on vibrate or silent. To get through Do Not Disturb too, allow that channel to override it in Android's notification settings for the Home Assistant app.
 
@@ -1284,17 +1284,17 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 **Manage → Settings** (admins and editors) changes the add-on's settings from the dashboard: check intervals, notifications, alert limits, agent options, the agent port and who can make changes. They're the same settings as the add-on's **Configuration** tab, grouped into tabs with a search box, and saved to the same place, so the two always agree.
 
-- **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each computer's next check or agent report; turning **Agent port uses HTTPS** on or off switches the agent port over at once.
+- **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each device's next check or agent report; turning **Agent port uses HTTPS** on or off switches the agent port over at once.
 - **Checked as you type.** A value out of range is marked and **Save** waits until it's fixed. If Home Assistant turns a change down, nothing is changed and the reason is shown.
 - **Who can make changes** (`admin_only_changes`, `editors`) can only be changed by Home Assistant admins, not by editors.
 - **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
-- Computers aren't listed here; add and edit them on the dashboard.
+- Devices aren't listed here; add and edit them on the dashboard.
 
 ### Who can see and change things
 
 The **Rollcall** sidebar panel is visible to every Home Assistant user.
 
-- **Admins** (and the owner) can do everything: add, edit and delete computers, pause and resume, acknowledge, approve agents, use linked devices' controls and reset uptime.
+- **Admins** (and the owner) can do everything: add, edit and delete devices, pause and resume, acknowledge, approve agents, use linked devices' controls and reset uptime.
 - **Everyone else** gets a **View only** dashboard, with status, checks, uptime and **Check now**. The editing buttons are hidden, and the add-on itself refuses changes from non-admins, so typing the URLs directly doesn't get around it.
 - **`editors`**: Home Assistant usernames (or display names) of non-admins who may also make changes, e.g. `editors: [sam]`.
 - **`admin_only_changes: false`** lets anyone who can open the panel make changes.
@@ -1307,12 +1307,12 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 
 **Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
 
-- **Export** downloads one zip: computers and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP and iLO passwords. The email password and Microsoft 365 client secret are left out.
+- **Export** downloads one zip: devices and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key and any SNMP and iLO passwords. The email password and Microsoft 365 client secret are left out.
 - **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
 
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.
 
-**Reset all uptime** (Manage menu) clears the uptime history for every computer. It asks you to type a 4-digit code first, so it can't be clicked by accident.
+**Reset all uptime** (Manage menu) clears the uptime history for every device. It asks you to type a 4-digit code first, so it can't be clicked by accident.
 
 ### Add-on security
 
@@ -1347,7 +1347,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `persistent_notification` | true | A bell notification in Home Assistant while something is down |
 | `notify_recovery` | true | Also notify when something comes back |
 | `notification_url` | blank | Where tapping a notification goes; blank opens this dashboard |
-| `maintenance_minutes` | 30 | Default time limit when pausing a computer |
+| `maintenance_minutes` | 30 | Default time limit when pausing a device |
 | **Email alerts** | | |
 | `email_send` | off | `off`, `smtp` or `microsoft365` |
 | `email_to` | `[]` | Addresses that get email alerts and the daily summary |
@@ -1380,19 +1380,19 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_disk_crit` | 5 | Default red level, % free |
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
-| `agent_bitlocker_require` | workstations | Which physical computers with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical computers that use it are always checked; virtual machines never are |
+| `agent_bitlocker_require` | workstations | Which physical devices with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical devices that use it are always checked; virtual machines never are |
 | `agent_sql_backup_hours` | 36 | SQL Server: amber when a database has had no full or differential backup for this long |
 | `agent_exchange_queue_warn` | 250 | Exchange: amber when this many messages are waiting for delivery |
-| `agent_time_warn_seconds` | 60 | Time: amber when a domain computer's clock is this far from its domain controller's |
+| `agent_time_warn_seconds` | 60 | Time: amber when a domain device's clock is this far from its domain controller's |
 | `agent_time_crit_seconds` | 240 | Time: red at this (Kerberos sign-ins fail at 300) |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
-| `vuln_checks` | true | The **Vulnerabilities** check on computers with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
+| `vuln_checks` | true | The **Vulnerabilities** check on devices with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
-| `agent_secret_scan` | off | Which computers look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
+| `agent_secret_scan` | off | Which devices look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
 | `ip_ranges` | `[]` | Names for parts of your network, shown next to each device's address and in Details, e.g. `Servers=10.0.1.0/24`, `IoT=192.168.20.10-200`, `Workstations=10.0.2.*`. Several ranges can share a name (`Servers=10.0.1.0/24, 10.0.3.0/24`); where they overlap, the smallest wins. The search box matches them too |
-| `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
+| `name_line` | auto | What the list shows under each name, unless a device has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |
@@ -1406,7 +1406,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_keyfile` | privkey.pem | Its private key |
 | **Other** | | |
 | `log_level` | info | debug, info, warning or error |
-| `hosts` | `[]` | Optional bulk import; see [Adding and editing computers](#adding-and-editing-computers) |
+| `hosts` | `[]` | Optional bulk import; see [Adding and editing devices](#adding-and-editing-computers) |
 
 ### Ports
 
@@ -1419,7 +1419,7 @@ The dashboard itself uses Home Assistant's ingress, with no port of its own.
 
 ### What it creates in Home Assistant
 
-**Computer sensors:** `sensor.ping_monitor_<name>`, with state `green` / `amber` / `degraded` / `red` / `maintenance`, and attributes `ip`, `ip_range`, `host`, `upstream_device`, `unreachable`, `uptime_24h`, `latency_ms`, `consecutive_failures`, `last_check`, `last_change`, `maintenance_until`, `services` (each check's status), `off_schedule` and `schedule`.
+**Device sensors:** `sensor.ping_monitor_<name>`, with state `green` / `amber` / `degraded` / `red` / `maintenance`, and attributes `ip`, `ip_range`, `host`, `upstream_device`, `unreachable`, `uptime_24h`, `latency_ms`, `consecutive_failures`, `last_check`, `last_change`, `maintenance_until`, `services` (each check's status), `off_schedule` and `schedule`.
 
 **Check sensors:** `sensor.ping_monitor_<name>_<check>` (e.g. `sensor.ping_monitor_sql01_sql`), with state `green` / `amber` / `red` / `unknown`, and attributes `target`, `detail` (e.g. `HTTP 503`, `connection refused`), `uptime_24h`, `latency_ms`, `last_check` and `last_change`.
 
@@ -1427,7 +1427,7 @@ The dashboard itself uses Home Assistant's ingress, with no port of its own.
 
 All sensors are refreshed every 60 seconds, so they come back within a minute of a Home Assistant restart. They're pushed through the API, so they can't be renamed or given an area in the UI.
 
-**Events:** `ping_monitor_status_changed` on every computer status change (`name`, `host`, `ip`, `old_status`, `new_status`, `entity_id`, `unreachable`, `upstream`), and `ping_monitor_service_changed` on every check change (adds `service`, `target`, `detail`, `host_entity_id`). For example:
+**Events:** `ping_monitor_status_changed` on every device status change (`name`, `host`, `ip`, `old_status`, `new_status`, `entity_id`, `unreachable`, `upstream`), and `ping_monitor_service_changed` on every check change (adds `service`, `target`, `detail`, `host_entity_id`). For example:
 
 ```yaml
 automation:
@@ -1443,11 +1443,11 @@ automation:
         data: { color_name: red, flash: long }
 ```
 
-**Dashboard card (optional).** The add-on's own page is the main dashboard, but this Markdown card lists the computers on any Home Assistant dashboard:
+**Dashboard card (optional).** The add-on's own page is the main dashboard, but this Markdown card lists the devices on any Home Assistant dashboard:
 
 ```yaml
 type: markdown
-title: Computers
+title: Devices
 content: >
   | | Name | IP | Uptime 24h | Checks down |
   |---|---|---|---|---|
@@ -1468,7 +1468,7 @@ In the add-on's data folder (included in Home Assistant backups):
 
 | File | Holds |
 |---|---|
-| `hosts.json` | Computers and their checks |
+| `hosts.json` | Devices and their checks |
 | `views.json` | Tabs |
 | `agents.json` | Agent approvals, token hashes and the enrolment key |
 | `agent_settings.json` | Ignores, thresholds, acknowledgements, agent addresses |
@@ -1524,8 +1524,8 @@ Anything that looks like a password, token, key or SNMP community is masked befo
 
 ## Troubleshooting
 
-**A computer shows down but it's on.**
-Checks come from the Home Assistant machine, so remote sites must be routable from it, and firewalls must allow ICMP echo and the ports you check. For a computer that can't be pinged, use an agent with **Tell it's up by: Automatic** or **Agent only**.
+**A device shows down but it's on.**
+Checks come from the Home Assistant machine, so remote sites must be routable from it, and firewalls must allow ICMP echo and the ports you check. For a device that can't be pinged, use an agent with **Tell it's up by: Automatic** or **Agent only**.
 
 **A hostname doesn't resolve.**
 Home Assistant's DNS treats `.local` as mDNS, so Active Directory names like `server.example.local` may not resolve from the add-on. Use the IP address instead.

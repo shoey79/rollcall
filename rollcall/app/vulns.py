@@ -1,12 +1,12 @@
 """Known vulnerabilities (CVEs) in what the agents report, from public data Rollcall downloads.
 
 - Windows: Microsoft's security update data (the MSRC CVRF API, monthly). Each CVE lists the build
-  that fixes it on each Windows version, e.g. 10.0.17763.6414. A computer whose build (with its
+  that fixes it on each Windows version, e.g. 10.0.17763.6414. A device whose build (with its
   update revision, from the agent) is lower on the same Windows version is missing that fix, so no
-  product names need matching. The last 12 months are kept; a computer further behind than that is
+  product names need matching. The last 12 months are kept; a device further behind than that is
   already flagged by the Updates check.
 - Linux: OSV.dev's data for Debian, Ubuntu, AlmaLinux and Rocky Linux. Either the add-on downloads
-  each distro's data and matches here ("local": nothing about the computers is sent anywhere), or
+  each distro's data and matches here ("local": nothing about the devices is sent anywhere), or
   it asks OSV.dev's API with one combined list of package names and versions ("online"). Only
   vulnerabilities with a fixed version newer than the one installed count: something an update
   fixes, rather than issues the distro hasn't fixed (or decided not to).
@@ -305,7 +305,7 @@ def msrc_merge(months: list[dict]) -> dict:
 
 
 def windows_findings(build: str, idx: dict, kev: set, min_score: float, server: bool = False) -> list[dict]:
-    """CVEs fixed in a later build of this computer's Windows version (Server or desktop)."""
+    """CVEs fixed in a later build of this device's Windows version (Server or desktop)."""
     b = _build(build)
     if not b or not idx:
         return []
@@ -624,7 +624,7 @@ class Feeds:
         return changed
 
     async def refresh_osv_online(self, session, queries: list, now: float) -> bool:
-        """queries: [(os_key, package, version)], pooled across every computer."""
+        """queries: [(os_key, package, version)], pooled across every device."""
         qhash = hashlib.sha256(json.dumps(sorted(queries)).encode()).hexdigest()[:16]
         if qhash == self.meta.get("osv_qhash") and now - (self.meta.get("osv_online_at") or 0) < self.DAY:
             return False

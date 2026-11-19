@@ -8,8 +8,8 @@ Rollcall is a Home Assistant add-on with its own sidebar dashboard. It started a
 
 ## What it does
 
-- **Ping** every computer on a schedule: green when it answers, amber after one miss, red (and a notification) after two.
-- **Service checks** on each computer: TCP ports and web pages, with 80+ presets (IIS, SQL Server, Exchange, RDP, domain controllers, Proxmox, Plex, Jellyfin, Immich, UniFi, iDRAC…). A failing service shows the computer as *Degraded*.
+- **Ping** every device on a schedule: green when it answers, amber after one miss, red (and a notification) after two.
+- **Service checks** on each device: TCP ports and web pages, with 80+ presets (IIS, SQL Server, Exchange, RDP, domain controllers, Proxmox, Plex, Jellyfin, Immich, UniFi, iDRAC…). A failing service shows the device as *Degraded*.
 - **Windows agent** (PowerShell, deploy by Group Policy or MECM): works out each server's roles and reports disk space, role services, System/Application errors, Security log events (lockouts, admin-group changes, cleared logs), Defender, IIS, AD replication, DHCP scopes, Hyper-V and more.
 - **Linux agent** (one Python file, no dependencies): disks, failed systemd units, Docker containers and health checks, Immich, journal errors, SSH/sudo failures, user and group changes, pending updates.
 - **Known vulnerabilities:** CVE alerts for Windows builds and Linux packages, from Microsoft's, OSV.dev's and CISA's public data.
@@ -17,7 +17,7 @@ Rollcall is a Home Assistant add-on with its own sidebar dashboard. It started a
 - **Home Assistant sensors as checks**, e.g. CPU and memory of UniFi access points.
 - **Dashboard** with sorting, search, tabs and custom filters (name, IP range, OS, role, status…), a 24-hour history strip and uptime %.
 - **Alerts** as phone notifications (tap to open the dashboard) and Home Assistant notifications; **maintenance mode** for reboots.
-- **Entities** for every computer and check, for your own automations and cards.
+- **Entities** for every device and check, for your own automations and cards.
 
 ## Install
 

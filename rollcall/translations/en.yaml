@@ -1,7 +1,7 @@
 configuration:
   interval:
     name: Check interval (seconds)
-    description: How often each computer and service is checked, from 30 to 3600 seconds.
+    description: How often each device and service is checked, from 30 to 3600 seconds.
   retry_interval:
     name: Re-check after a miss (seconds)
     description: How soon something that didn't answer is checked again before it goes red. Lower it (e.g. 60) to find out sooner.
@@ -55,7 +55,7 @@ configuration:
     description: "HH:MM in Home Assistant's time zone, e.g. 08:00."
   email_about_devices:
     name: "Devices not responding"
-    description: "A computer or device that stops replying, and when it's back."
+    description: "A device that stops replying, and when it's back."
   email_about_services:
     name: "Service checks"
     description: "Ports, websites, certificates, SIP and Home Assistant sensors."
@@ -106,7 +106,7 @@ configuration:
     description: How much the add-on writes to its Log tab. "info" is right for everyday use; "debug" helps when troubleshooting.
   maintenance_minutes:
     name: Default pause length (minutes)
-    description: The time limit offered when you pause a computer for a reboot or maintenance.
+    description: The time limit offered when you pause a device for a reboot or maintenance.
   notification_url:
     name: Notification link
     description: Where tapping a notification goes. Leave blank to open the Rollcall dashboard.
@@ -139,7 +139,7 @@ configuration:
     description: An agent goes amber when one run takes longer than this. 0 turns it off.
   agent_disk_warn:
     name: Disk space warning (% free)
-    description: Disks go amber at or below this much free space. Each disk can have its own limits in the computer's details.
+    description: Disks go amber at or below this much free space. Each disk can have its own limits in the device's details.
   agent_disk_crit:
     name: Disk space alert (% free)
     description: Disks go red at or below this much free space.
@@ -151,7 +151,7 @@ configuration:
     description: The LAPS check goes red once a password rotation is this many days overdue.
   agent_bitlocker_require:
     name: Require BitLocker on
-    description: Which physical computers with a TPM must use BitLocker. "workstations" means Windows 10 and 11. Computers that already use BitLocker are always checked; virtual machines never are.
+    description: Which physical devices with a TPM must use BitLocker. "workstations" means Windows 10 and 11. Devices that already use BitLocker are always checked; virtual machines never are.
   agent_sql_backup_hours:
     name: SQL Server backup age (hours)
     description: A database goes amber when it has had no full or differential backup for this long.
@@ -169,22 +169,22 @@ configuration:
     description: "Vulnerabilities scoring this much or more out of 10 go amber. 9 means \"critical\"; 7 includes \"high\" too. Known-exploited ones always count."
   vuln_linux_source:
     name: Linux vulnerability data
-    description: "\"local\": download each distro's data from OSV.dev daily and match it here, so nothing about your computers is sent anywhere (larger downloads). \"online\": send OSV.dev one combined list of package names and versions and let it match (small downloads; no computer names or addresses). \"off\": don't check Linux."
+    description: "\"local\": download each distro's data from OSV.dev daily and match it here, so nothing about your devices is sent anywhere (larger downloads). \"online\": send OSV.dev one combined list of package names and versions and let it match (small downloads; no device names or addresses). \"off\": don't check Linux."
   agent_secret_scan:
     name: Scan for passwords left in files
-    description: Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details.
+    description: Which devices' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each device can be turned on or off in its details.
   ip_ranges:
     name: Named IP ranges
     description: "Names for parts of your network, shown next to each device's address, e.g. Servers=10.0.1.0/24 or IoT=192.168.20.10-200. A range can be a subnet, a span (10.0.1.10-50) or end in a wildcard (10.0.1.*); separate several with commas. Where ranges overlap, the smallest one wins."
   name_line:
     name: Line under each name
-    description: What the dashboard shows under each computer's name, unless the computer has its own choice. "auto" shows the make and model, or else the operating system.
+    description: What the dashboard shows under each device's name, unless the device has its own choice. "auto" shows the make and model, or else the operating system.
   agent_exchange_queue_warn:
     name: Exchange queue warning (messages)
     description: The Exchange check goes amber when this many messages are waiting to be delivered.
   agent_time_warn_seconds:
     name: "Clock out by (amber, seconds)"
-    description: "A domain computer's Time check goes amber when its clock is this far from its domain controller's."
+    description: "A domain device's Time check goes amber when its clock is this far from its domain controller's."
   agent_time_crit_seconds:
     name: "Clock out by (red, seconds)"
     description: "The Time check goes red at this. Kerberos sign-ins fail at 300 seconds (5 minutes)."
@@ -211,7 +211,7 @@ configuration:
     description: Things to ignore on every server, e.g. a service, event or disk. Most ignores are easier to add with the Ignore buttons in the dashboard.
   agent_auto_add:
     name: Add approved servers automatically
-    description: When you approve an agent, add its computer to the dashboard straight away.
+    description: When you approve an agent, add its device to the dashboard straight away.
   agent_ssl:
     name: Agent port uses HTTPS
     description: Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder.
@@ -222,8 +222,8 @@ configuration:
     name: Agent HTTPS private key
     description: The certificate's private key file in Home Assistant's /ssl folder.
   hosts:
-    name: Import computers
-    description: Optional. Computers listed here are imported into the dashboard once, then this list is emptied. Adding them in the dashboard is easier.
+    name: Import devices
+    description: Optional. Devices listed here are imported into the dashboard once, then this list is emptied. Adding them in the dashboard is easier.
 network:
   8100/tcp: Agent reports (Windows and Linux servers send their health here)
   5140/udp: Syslog (devices send their log messages here)

@@ -974,16 +974,16 @@ def build_report(state, conf):
 
 
 # --------------------------------------------------------------------------
-# Password exposure scan (opt-in: turned on per computer in the Rollcall dashboard)
+# Password exposure scan (opt-in: turned on per device in the Rollcall dashboard)
 # --------------------------------------------------------------------------
-# PRIVACY: no password ever leaves this computer. Not the password, not part of it, not a hash
+# PRIVACY: no password ever leaves this device. Not the password, not part of it, not a hash
 # of it and not the text around it. A finding holds only:
 #   path  - the file it is in        line - the line (or paragraph) number
 #   rule  - which kind of thing matched, e.g. "keyvalue"
 #   key   - the setting's name, e.g. "DbPassword" (letters, digits, space and ._- only, up to 40)
 #   len   - how many characters the value has
 # The matched value is measured and then dropped; it is never stored, logged or sent. The
-# findings kept between runs in secrets.json on this computer hold the same fields, nothing more.
+# findings kept between runs in secrets.json on this device hold the same fields, nothing more.
 # File and folder names are sent as they are, so the admin can find the file.
 SECRETS_PATH = os.path.join(DATA_DIR, "secrets.json")
 SECRET_BUDGET = 45                       # seconds of scanning per agent run; carries on next run
@@ -1423,7 +1423,7 @@ ACTIVE = {"server": None, "preferred": None, "pushed": [], "route": None, "side"
 
 
 def route_side(route, ips):
-    """"inside" if one of this computer's IPv4 addresses is on an internal network set under Agents."""
+    """"inside" if one of this device's IPv4 addresses is on an internal network set under Agents."""
     import ipaddress
     nets = []
     for n in route.get("networks") or []:

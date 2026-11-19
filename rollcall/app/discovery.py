@@ -79,7 +79,7 @@ def parse_ranges(text: str) -> tuple[list[str], list[str]]:
 
 
 def suggest_ranges(host_ips: list[str], local: list[str]) -> list[str]:
-    """Ranges worth scanning: Home Assistant's own networks, then the /24s of computers already in Rollcall."""
+    """Ranges worth scanning: Home Assistant's own networks, then the /24s of devices already in Rollcall."""
     out = []
     for cidr in local:
         try:
@@ -167,7 +167,7 @@ class _Udp(asyncio.DatagramProtocol):
 
 
 async def nbstat(ip: str, timeout: float = 1.0) -> dict:
-    """NetBIOS node status (UDP 137): the computer's name, its workgroup or domain, and its MAC address."""
+    """NetBIOS node status (UDP 137): the device's name, its workgroup or domain, and its MAC address."""
     tid = secrets.randbits(16)
     q = struct.pack(">HHHHHH", tid, 0, 1, 0, 0, 0) + b"\x20" + b"CK" + b"AA" * 15 + b"\x00" + struct.pack(">HH", 0x21, 1)
     loop = asyncio.get_running_loop()

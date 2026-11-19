@@ -187,6 +187,9 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-sub{grid-column:1/-1;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .st-f{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--text)}
 .st-f small{font-weight:400;color:var(--muted);line-height:1.4}
+/* the help text takes any spare height, so the boxes in a row line up even when one side's help is longer */
+.st-f:not(.bool)>small:first-of-type{flex:1 0 auto}
+.st-f input:not([type=checkbox]),.st-f select{box-sizing:border-box;height:36px}
 .st-f input:not([type=checkbox]),.st-f select,.st-f textarea{font:inherit;font-size:14px;font-weight:400;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
 .st-f textarea{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;min-height:74px;resize:vertical}
 .st-f input:focus,.st-f select:focus,.st-f textarea:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
@@ -433,9 +436,15 @@ tr.flashrow td{animation:flash 1.6s ease-out}
 #rows td[data-label="Name"]{white-space:normal;min-width:190px;max-width:340px}
 #rows td[data-label="Name"] .model,#rows td[data-label="Name"] .sched,#rows td[data-label="Name"] .host{overflow-wrap:anywhere}
 #rows td[data-label="Name"] .name{overflow-wrap:anywhere}
+@media (min-width:761px){#rows td[data-label="Name"] .svcs{max-width:none}}  /* chips use the whole column, so two fit side by side */
 @media (min-width:761px) and (max-width:1200px){
   #rows td[data-label=""]{white-space:normal}
-  #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:130px}
+  #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:178px}
+}
+/* Buttons on two rows whenever the table doesn't fit its box (fitTable), so none is cut off */
+@media (min-width:761px){
+  .wrap.tight #rows td[data-label=""]{white-space:normal}
+  .wrap.tight #rows td[data-label=""] .actions{flex-wrap:wrap;justify-content:flex-end;max-width:200px;min-width:178px}
 }
 /* On narrower screens, drop the least useful columns rather than scroll sideways */
 @media (min-width:761px) and (max-width:1080px){th[data-sort="since"],#rows td[data-label="Since"]{display:none}}
@@ -503,15 +512,15 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <select id="sortMobile" aria-label="Sort by"></select>
     <span class="tbgap"></span>
     <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
-    <button id="pauseTab" class="edit-only" hidden title="Pause alerts for every computer shown in this tab"></button>
-    <button id="resumeTab" class="edit-only" hidden title="Resume monitoring for every paused computer in this tab"></button>
+    <button id="pauseTab" class="edit-only" hidden title="Pause alerts for every device shown in this tab"></button>
+    <button id="resumeTab" class="edit-only" hidden title="Resume monitoring for every paused device in this tab"></button>
     <div class="menuwrap edit-only">
       <button type="button" id="menuBtn" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="mainMenu">Manage<span class="badge" id="menuBadge" hidden></span> ▾</button>
       <div class="menu" id="mainMenu" role="menu" hidden>
         <button type="button" id="addHost" role="menuitem">Add device</button>
         <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
         <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added">Discover devices</button>
-        <button type="button" id="swBtn" role="menuitem" title="Which computers have a program installed, and which version">Find software</button>
+        <button type="button" id="swBtn" role="menuitem" title="Which devices have a program installed, and which version">Find software</button>
         <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options">Settings</button>
         <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export">Export / import</button>
         <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log">Log</button>
@@ -552,7 +561,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 
 <dialog id="swDlg" class="wide">
   <form method="dialog">
-    <div class="dlg-head"><h2>Find software</h2><div class="sub">Which computers with an agent have a program installed, and which version. Searches program names and publishers.</div></div>
+    <div class="dlg-head"><h2>Find software</h2><div class="sub">Which devices with an agent have a program installed, and which version. Searches program names and publishers.</div></div>
     <div class="dlg-body"><div class="swsearch"><input type="search" id="swQ" placeholder="e.g. TeamViewer, Chrome, Adobe" autocomplete="off" aria-label="Program or publisher"><button type="button" class="primary" id="swGo">Search</button></div><div id="swOut"></div></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
   </form>
@@ -588,7 +597,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="dlg-body">
       <div class="bk">
         <h3>Export</h3>
-        <p>Downloads one file with your computers and their checks, tabs, pauses, agent approvals, ignores and disk thresholds,
+        <p>Downloads one file with your devices and their checks, tabs, pauses, agent approvals, ignores and disk thresholds,
           each agent's last report, uptime history, and the Configuration-tab settings.</p>
         <p class="warn">Keep the file safe: it contains the agent enrolment key and could be used to restore your monitoring elsewhere.</p>
         <button type="button" class="primary" id="bkExport">Download export</button> <span class="hint" id="bkExportNote"></span>
@@ -621,12 +630,12 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 
 <dialog id="tabDlg">
   <form id="tabForm" novalidate>
-    <div class="dlg-head"><h2 id="tabTitle">New tab</h2><div class="sub">A tab shows the computers that match its conditions, and updates as computers are added or change.</div></div>
+    <div class="dlg-head"><h2 id="tabTitle">New tab</h2><div class="sub">A tab shows the devices that match its conditions, and updates as devices are added or change.</div></div>
     <div class="dlg-body">
       <div class="fields" style="grid-template-columns:1fr"><label class="field">Tab name<input id="tName" maxlength="40" placeholder="SQL servers" autocomplete="off"></label></div>
       <div class="group-title">Start from</div>
       <div class="tpl" id="tTemplates"></div>
-      <div class="tabfield">Show computers that match
+      <div class="tabfield">Show devices that match
         <select id="tMatch"><option value="all">all of these conditions</option><option value="any">any of these conditions</option></select></div>
       <div class="rules" id="tRules"></div>
       <button type="button" id="tAddRule">+ Add condition</button>
@@ -723,7 +732,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         </div>
       </fieldset>
       <fieldset>
-        <legend>Home Assistant device <small>— e.g. Pi-hole: its integration's readings shown with this computer</small></legend>
+        <legend>Home Assistant device <small>— e.g. Pi-hole: its integration's readings shown with this device</small></legend>
         <div id="haDevLinked"></div>
         <input type="search" id="haDevSearch" class="preset-filter" placeholder="Search Home Assistant devices, e.g. pi-hole" autocomplete="off" spellcheck="false">
         <div id="haDevResults" class="haresults"></div>
@@ -738,7 +747,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <div id="customList"></div>
         <button type="button" id="addCustom">+ Add custom check</button>
         <p class="hint">
-          A port: <code>tcp:5985</code> · a web page on this computer: <code>https:443/owa</code> ·
+          A port: <code>tcp:5985</code> · a web page on this device: <code>https:443/owa</code> ·
           a full URL: <code>https://mail.example.local/owa</code><br>
           Give it a name with <code>Name=</code>, e.g. <code>Reporting=tcp:50123</code><br>
           Certificate expiry: <code>cert:443</code>, <code>SMTP=cert:25</code> (mail ports use STARTTLS), or on another name or address <code>cert:mail.example.com:443</code><br>
@@ -762,9 +771,9 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           <label class="schedopt"><input type="radio" name="checkBy" value="auto" checked> <span><b>Automatic</b>: up while it answers ping or, if it has an agent, while the agent has reported in the last 10 minutes. Suits laptops that are sometimes on the internet. Without an agent, this is the same as ping.</span></label>
           <label class="schedopt"><input type="radio" name="checkBy" value="ping"> <span><b>Ping only</b>: the fastest down alerts (a minute or two) for servers that are always on the network</span></label>
           <label class="schedopt"><input type="radio" name="checkBy" value="agent"> <span><b>Agent only</b>: never pinged; up while reports arrive, amber when one is late, down after <span class="stalemin">15</span> minutes without one</span></label>
-          <p class="hint" style="margin:4px 0 0">Port and web checks still need the computer to be reachable from Home Assistant.</p>
+          <p class="hint" style="margin:4px 0 0">Port and web checks still need the device to be reachable from Home Assistant.</p>
         </div>
-        <label class="schedopt" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><input type="checkbox" id="fNoAlerts"> <span><b>Never alert for this computer</b>: no phone or Home Assistant notifications for it at all; the dashboard still shows its status and checks</span></label>
+        <label class="schedopt" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><input type="checkbox" id="fNoAlerts"> <span><b>Never alert for this device</b>: no phone or Home Assistant notifications for it at all; the dashboard still shows its status and checks</span></label>
         <label class="schedopt"><input type="checkbox" id="fCritical"> <span><b>Critical</b>: when it goes down or a check goes red, the phone notification is a critical alert that sounds even when the phone is on silent (Home Assistant app only; "back up" messages stay normal)</span></label>
       </fieldset>
     </div>
@@ -916,10 +925,17 @@ function chip(s) {
   const val = s.kind === "ha" && s.detail && s.status !== "unknown" ? " " + s.detail.split(" (")[0] : "";
   return `<span class="svc ${s.status}" title="${esc(tip)}"><i></i>${esc(s.label)}${esc(val.length > 18 ? val.slice(0, 17) + "…" : val)}</span>`;
 }
+const CHIP_MAX = 6;  // check chips shown under a device's name before the rest fold into "+N more"
 function svcChips(h) {
   const probes = h.services.filter(s => !s.agent);
   const ag = h.services.filter(s => s.agent);
-  let out = probes.map(chip).join("");
+  // Keep rows compact: every check that isn't green gets a chip, then green ones up to CHIP_MAX in all;
+  // the rest fold into one "+N more" chip that lists them.
+  const bad = probes.filter(s => s.status !== "green"), good = probes.filter(s => s.status === "green");
+  const room = probes.length > CHIP_MAX ? Math.max(0, CHIP_MAX - 1 - bad.length) : good.length;
+  const shown = new Set([...bad, ...good.slice(0, room)]), folded = good.slice(room);
+  let out = probes.filter(s => shown.has(s)).map(chip).join("") + (folded.length
+    ? `<span class="svc more green" title="${esc(folded.map(s => s.label).join(", "))}: all OK"><i></i>+${folded.length} more ✓</span>` : "");
   if (h.agent) {
     // Only agent checks that need attention get their own chip; the rest fold into one.
     const issues = ag.filter(s => s.status !== "green");
@@ -977,7 +993,7 @@ function render() {
     const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
     return `<tr class="${h.unreachable && !h.maint_until ? "unreach" : h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${upstreamNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : h.critical ? ` <span class="quiet" title="Critical: its alerts sound even when the phone is on silent">🚨</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this device">🔕</span>` : h.critical ? ` <span class="quiet" title="Critical: its alerts sound even when the phone is on silent">🚨</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}${h.ip_range ? `<small class="iprange" title="Named IP range (Settings, Display)">${esc(h.ip_range)}</small>` : ""}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -994,7 +1010,18 @@ function render() {
       </div></td>
     </tr>`;
   }).join("");
+  fitTable();
 }
+// If the table is wider than its box (long names, many columns, browser zoom...), put the buttons on two
+// rows so none of them is cut off; checked again whenever the box changes size.
+function fitTable() {
+  const rows = document.getElementById("rows"), wrap = rows && rows.closest(".wrap");
+  if (!wrap || !wrap.offsetWidth) return;
+  wrap.classList.remove("tight");
+  if (rows.closest("table").scrollWidth > wrap.clientWidth + 1) wrap.classList.add("tight");
+}
+let fitWidth = 0;
+try { new ResizeObserver(es => { const w = Math.round(es[0].contentRect.width); if (w !== fitWidth) { fitWidth = w; fitTable(); } }).observe(document.querySelector("#rows").closest(".wrap")); } catch (e) { window.addEventListener("resize", fitTable); }
 
 // ---- Device icons: drawn for Rollcall (no company logos); upload your own for those ----
 const ICONS = {
@@ -1077,7 +1104,7 @@ const ICONS = {
   device: ["Other device", '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/>'],
 };
 const ICON_GROUPS = [
-  ["Computers and servers", "server storage nas tower rack desktop laptop vm database sbc web cloud"],
+  ["Servers and PCs", "server storage nas tower rack desktop laptop vm database sbc web cloud"],
   ["Network", "switch router firewall ap mesh modem dns"],
   ["Lighting", "bulb ceiling spotlight lamp walllight floodlight garden strip lightswitch remote"],
   ["Smart home", "hub homeauto plug sensor leak motion contact blinds vacuum sprinkler weather"],
@@ -1088,10 +1115,13 @@ const ICON_GROUPS = [
   ["Power and energy", "ups battery inverter solar ev meter"],
 ];
 let uploadedIcons = [], iconQuery = "";
-// The icon a computer shows (built-in key), and the Overview group it falls in
+// The icon a device shows (built-in key), and the Overview group it falls in
 function iconKeyOf(h) { const ic = h.icon || ""; return ic.startsWith("b:") ? ic.slice(2) : ic.startsWith("u:") ? "" : autoIcon(h); }
 function typeGroup(h) { const k = iconKeyOf(h); const g = ICON_GROUPS.find(([, ks]) => ks.split(" ").includes(k)); return g ? g[0] : "Other"; }
 const groupOf = h => h.group || typeGroup(h);
+// Groups renamed in 1.88.0, so tabs and collapsed sections saved with the old name still match
+const GROUP_RENAMED = {"computers and servers": "servers and pcs"};
+const groupAlias = g => GROUP_RENAMED[g] || g;
 function fillGroupList() {
   document.getElementById("groupList").innerHTML = [...new Set([...(data ? data.hosts : []).map(x => x.group).filter(Boolean), ...ICON_GROUPS.map(g => g[0])])]
     .sort(collator.compare).map(g => `<option value="${esc(g)}">`).join("");
@@ -1236,7 +1266,7 @@ document.getElementById("iconGrid").addEventListener("click", async e => {
   const del = e.target.closest("[data-delicon]");
   if (del) {
     e.stopPropagation();
-    if (!confirm("Delete this image? Computers using it go back to an automatic icon.")) return;
+    if (!confirm("Delete this image? Devices using it go back to an automatic icon.")) return;
     await fetch("api/icons/" + encodeURIComponent(del.dataset.delicon), {method: "DELETE"});
     if (pickIcon === "u:" + del.dataset.delicon) pickIcon = "";
     await loadIcons(); renderIconGrid(); showPicked(editing); return;
@@ -1258,7 +1288,7 @@ for (const id of ["fName", "fModel"]) document.getElementById(id).addEventListen
 
 // ---- Overview: status at a glance, and every alert one click from its details ----
 const checkKey = s => s.key.replace(/^agent_/, "");
-// An off-schedule computer's agent checks that were red or amber in its last report (not "agent not reporting").
+// An off-schedule device's agent checks that were red or amber in its last report (not "agent not reporting").
 const offScheduleProblems = h => h.off_schedule && !h.maint_until
   ? h.services.filter(s => s.agent && s.key !== "agent_agent" && (s.status === "red" || s.status === "amber")) : [];
 function alerts() {
@@ -1319,7 +1349,7 @@ async function ackHide(items, undo) {
 document.addEventListener("toggle", e => { if (e.target.classList && e.target.classList.contains("ackd")) ackedOpen = e.target.open; }, true);
 // What Acknowledge does for an alert on the Overview (null: nothing to acknowledge, e.g. not responding)
 const TIME_ACK = ["events", "security", "secrets", "integrity", "domain"];
-const NO_ACK = ["defender"];  // e.g. a threat: cleared on the computer itself, then the next report shows it
+const NO_ACK = ["defender"];  // e.g. a threat: cleared on the device itself, then the next report shows it
 function ackFor(a) {
   const c = a.check;
   if (!c || a.h.off_schedule) return null;
@@ -1352,9 +1382,9 @@ function renderHome() {
   const tile = (cls, dot, label, value, sub, go) =>
     `<button type="button" class="tile ${cls}" data-hometab="${go}"><span class="lbl">${dot ? `<span class="dot ${dot}"></span>` : ""}${label}</span><b>${value}</b><small>${sub}</small></button>`;
   let html = `<div class="tiles">
-    ${tile("", "", "Computers", hosts.length, `${withAgent.length} with an agent`, "all")}
-    ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of computers`, "q:up")}
-    ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `computer${deg === 1 ? "" : "s"} with alerts` : "none", "q:attention")}
+    ${tile("", "", "Devices", hosts.length, `${withAgent.length} with an agent`, "all")}
+    ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of devices`, "q:up")}
+    ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `device${deg === 1 ? "" : "s"} with alerts` : "none", "q:attention")}
     ${tile(down ? "hot" : "", "red", "Down", down, (down ? "not responding" : "none") + (unreach ? ` · ${unreach} more unreachable behind ${down === 1 ? "it" : "them"}` : ""), "q:down")}
     ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "q:quiet") : ""}
     ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", agentBad ? "q:agentbad" : "q:agents") : ""}
@@ -1366,10 +1396,10 @@ function renderHome() {
       const ack = ackFor(a);
       return `${ack ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
-        <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this computer">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
+        <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this device">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
         <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
         <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" ${ack.sys ? `data-sysack="${esc(a.h.key)}"` : `data-ackalert="${i}"`} title="${esc(ack.tip)}">Acknowledge</button></div>` : ""}`;
-    }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} computers and their checks are OK.</div>`) + ackedList() + `</div>`;
+    }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} devices and their checks are OK.</div>`) + ackedList() + `</div>`;
   const gs = GLANCE_SORT[glanceSort] ? glanceSort : "status";
   const groupOpts = Object.fromEntries(Object.entries(GLANCE_GROUP).filter(([k]) => k !== "tab" || views.length));
   const gb = groupOpts[glanceGroup] ? glanceGroup : "group";
@@ -1385,7 +1415,7 @@ function renderHome() {
     return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip + (h.ip_range ? " (" + h.ip_range + ")" : "") : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub2)}</small></span></button>`;
   };
   const sel = (id, label, opts, cur) => `<label class="gsort">${label} <select id="${id}" aria-label="${label} at a glance">${Object.entries(opts).map(([k, [n]]) => `<option value="${k}"${k === cur ? " selected" : ""}>${n}</option>`).join("")}</select></label>`;
-  html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"} · ${sel("glanceGroup", "group by", groupOpts, gb)} ${sel("glanceSort", "sort by", GLANCE_SORT, gs)}</small></h2>`;
+  html += `<div class="panel"><h2>At a glance<small>${hosts.length} device${hosts.length === 1 ? "" : "s"} · ${sel("glanceGroup", "group by", groupOpts, gb)} ${sel("glanceSort", "sort by", GLANCE_SORT, gs)}</small></h2>`;
   if (gb === "none") html += `<div class="glance">${sorted.map(glTile).join("")}</div>`;
   else {
     const groups = new Map();
@@ -1436,11 +1466,11 @@ const GLANCE_SORT = {
 let glanceSort = "status", glanceGroup = "group", glanceShut = new Set();
 const GLANCE_GROUP = {
   group: ["Group", groupOf, g => { const i = ICON_GROUPS.findIndex(x => x[0] === g); return i < 0 ? (g === "Other" ? 99 : -1) : i; }],  // your own groups first, then types
-  tab: ["Your tabs", null, () => 0],  // one section per custom tab, in tab order; a computer can be in several
+  tab: ["Your tabs", null, () => 0],  // one section per custom tab, in tab order; a device can be in several
   schedule: ["Monitoring schedule", h => h.schedule_text ? h.schedule_text : "Always monitored", g => g === "Always monitored" ? 0 : 1],
   none: ["Nothing", () => "", () => 0],
 };
-try { glanceGroup = localStorage.getItem("pm_glance_group") || "group"; glanceShut = new Set(JSON.parse(localStorage.getItem("pm_glance_shut") || "[]")); } catch (e) {}
+try { glanceGroup = localStorage.getItem("pm_glance_group") || "group"; glanceShut = new Set(JSON.parse(localStorage.getItem("pm_glance_shut") || "[]").map(g => g === "Computers and servers" ? "Servers and PCs" : g)); } catch (e) {}
 try { glanceSort = localStorage.getItem("pm_glance_sort") || "status"; } catch (e) {}
 document.getElementById("home").addEventListener("change", e => {
   if (e.target.id === "glanceGroup") { glanceGroup = e.target.value; try { localStorage.setItem("pm_glance_group", glanceGroup); } catch (err) {} renderHome(); return; }
@@ -1457,7 +1487,7 @@ document.getElementById("home").addEventListener("click", e => {
 });
 document.getElementById("pauseTab").addEventListener("click", async e => {
   const list = shownHosts.slice(); if (!list.length) return;
-  const tab = currentTab(), name = document.getElementById("filter").value.trim() ? "the computers shown" : `everything in "${tab.name}"`;
+  const tab = currentTab(), name = document.getElementById("filter").value.trim() ? "the devices shown" : `everything in "${tab.name}"`;
   const names = list.slice(0, 8).map(h => h.name).join(", ") + (list.length > 8 ? ` and ${list.length - 8} more` : "");
   const ans = prompt(`Pause alerts for ${name} (${list.length}: ${names})?\n\nEach keeps being pinged and resumes by itself once it goes down and replies again. ` +
     `Any that aren't back by the time limit will alert.\n\nTime limit (minutes):`, data.maintenance_minutes);
@@ -1472,7 +1502,7 @@ document.getElementById("pauseTab").addEventListener("click", async e => {
 });
 document.getElementById("resumeTab").addEventListener("click", async e => {
   const list = shownHosts.filter(h => h.maint_until); if (!list.length) return;
-  if (!confirm(`Resume monitoring and alerts for ${list.length} paused computer${list.length === 1 ? "" : "s"} now?`)) return;
+  if (!confirm(`Resume monitoring and alerts for ${list.length} paused device${list.length === 1 ? "" : "s"} now?`)) return;
   e.target.disabled = true;
   try {
     const r = await fetch("api/resume-bulk", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({keys: list.map(h => h.key)})});
@@ -1605,11 +1635,11 @@ function userText(h) {
   return !u.length ? "Nobody signed in" : u.length === 1 ? a.users[0] : `${u[0]} + ${u.length - 1} other${u.length > 2 ? "s" : ""}`;
 }
 function addrText(h) { return h.ip && h.ip !== h.host ? `${h.host} · ${h.ip}` : (h.host || h.ip || ""); }
-// The line under a computer's name: [text, tooltip], from its own choice or the add-on's name_line default
+// The line under a device's name: [text, tooltip], from its own choice or the add-on's name_line default
 function subLine(h) {
   const mode = h.subtitle || (data && data.name_line) || "auto";
   const hw = hwText(h), model = h.model || hw;
-  const tip = hw + (h.agent && h.agent.hw_board ? " (motherboard: the computer has no make or model set)" : "");
+  const tip = hw + (h.agent && h.agent.hw_board ? " (motherboard: the device has no make or model set)" : "");
   if (mode === "none") return ["", ""];
   if (mode === "address") return [addrText(h), ""];
   if (mode === "user" && userText(h)) return [userText(h), h.agent.users.length > 1 ? "Signed in: " + h.agent.users.join(", ") : ""];
@@ -1684,17 +1714,17 @@ function ruleMatch(h, r) {
     case "hardware": return hwMatch(h, v) === (r.op === "is");
     case "user": { const us = ((h.agent && h.agent.users) || []).join(" | ").toLowerCase();
       const hit = v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).some(x => us.includes(x)); return r.op === "contains" ? hit : !hit; }
-    case "group": { const g = groupOf(h).toLowerCase(); return v.split(",").map(x => x.trim().toLowerCase()).filter(Boolean).includes(g) === (r.op === "is"); }
+    case "group": { const g = groupOf(h).toLowerCase(); return v.split(",").map(x => groupAlias(x.trim().toLowerCase())).filter(Boolean).includes(g) === (r.op === "is"); }
   }
   return true;
 }
 // Quick lists opened from the Overview's summary tiles: shown as a temporary tab with ×.
 const QUICK = {
   "q:up": {name: "Up", match: h => h.status === "green" && !h.off_schedule, describe: "Up and being monitored"},
-  "q:attention": {name: "Need attention", match: h => h.status !== "red" && alerts().some(a => a.h.key === h.key), describe: "Up, but with alerts (down computers are under Down)"},
+  "q:attention": {name: "Need attention", match: h => h.status !== "red" && alerts().some(a => a.h.key === h.key), describe: "Up, but with alerts (down devices are under Down)"},
   "q:down": {name: "Down", match: h => h.status === "red", describe: "Not responding"},
   "q:quiet": {name: "Paused or off", match: h => h.status === "maintenance" || !!h.off_schedule, describe: "Paused, or outside their monitoring schedule, so not being alerted"},
-  "q:agents": {name: "With an agent", match: h => !!h.agent, describe: "Computers with an agent"},
+  "q:agents": {name: "With an agent", match: h => !!h.agent, describe: "Devices with an agent"},
   "q:agentbad": {name: "Agents not reporting", match: h => !!h.agent && h.services.some(s => s.agent && s.key === "agent_agent" && s.status !== "green"), describe: "Agents that are late, not reporting or reporting errors"},
 };
 function tabMatch(h, t) {
@@ -1740,7 +1770,7 @@ function renderTabs() {
     `<button type="button" class="tab add edit-only" id="tabNew" title="Create a tab from your own filters">+ New tab</button>`;
 }
 function describe(t) {
-  if (!(t.rules || []).length) return "Every computer";
+  if (!(t.rules || []).length) return "Every device";
   return t.rules.map(r => {
     const f = FIELDS[r.field]; if (!f) return "";
     return `${f.label} ${f.ops[r.op] || r.op} ${f.values ? (f.values[r.value] || r.value) : r.value}`;
@@ -1791,13 +1821,13 @@ function readRules() {
 }
 function drawRules(rules) {
   document.getElementById("tRules").innerHTML = rules.map(ruleRow).join("") ||
-    `<p class="empty-note">No conditions: this tab would show every computer. Add one, or start from a template above.</p>`;
+    `<p class="empty-note">No conditions: this tab would show every device. Add one, or start from a template above.</p>`;
   preview();
 }
 function preview() {
   const t = {match: document.getElementById("tMatch").value, rules: readRules().filter(r => r.value)};
   const list = data.hosts.filter(h => tabMatch(h, t)).sort((a, b) => collator.compare(a.name, b.name));
-  document.getElementById("tPreview").innerHTML = `<b>${list.length} of ${data.hosts.length}</b> computers match` +
+  document.getElementById("tPreview").innerHTML = `<b>${list.length} of ${data.hosts.length}</b> devices match` +
     (list.length ? ": " + list.slice(0, 25).map(h => esc(h.name)).join(", ") + (list.length > 25 ? ` and ${list.length - 25} more` : "") : ".");
 }
 function openTab(v) {
@@ -1862,7 +1892,7 @@ document.getElementById("tabForm").addEventListener("submit", async e => {
   if (await saveViews(list, id)) tabDlg.close();
 });
 document.getElementById("tDelete").addEventListener("click", async () => {
-  if (!editingTab || !confirm(`Delete the "${editingTab.name}" tab? The computers in it aren't affected.`)) return;
+  if (!editingTab || !confirm(`Delete the "${editingTab.name}" tab? The devices in it aren't affected.`)) return;
   if (await saveViews(views.filter(v => v.id !== editingTab.id), "all")) tabDlg.close();
 });
 async function moveTab(d) {
@@ -1944,7 +1974,7 @@ function stNote(group) {
   }
   if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
   if (group === "agent_port") return `<p class="st-note">The agent port is using <b>${esc(ST.meta.agent_port)}</b> now. Switching it takes effect straight away; agents keep using the address they were installed with, so update the addresses under <b>Agents</b> to match (<code>https://</code> or <code>http://</code>).</p>`;
-  if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each computer's next check or agent report.</p>`;
+  if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each device's next check or agent report.</p>`;
   return "";
 }
 function stRenderTabs() {
@@ -2126,7 +2156,7 @@ document.getElementById("bkImport").addEventListener("click", async e => {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { st.textContent = d.error || `Import failed (${r.status})`; e.target.disabled = false; return; }
     const m = d.manifest || {};
-    st.textContent = `Accepted: ${m.hosts ?? "?"} computers, ${m.agents ?? "?"} agents` + (m.addon_version ? `, exported from version ${m.addon_version}` : "") +
+    st.textContent = `Accepted: ${m.hosts ?? "?"} devices, ${m.agents ?? "?"} agents` + (m.addon_version ? `, exported from version ${m.addon_version}` : "") +
       (d.options ? `. Settings ${d.options}` : "") + (d.restarting ? ". Restarting the add-on; this page reloads when it's back…" : ". Now restart the add-on to finish.");
     if (d.restarting) {
       await new Promise(res => setTimeout(res, 5000));
@@ -2189,7 +2219,7 @@ async function resetUptime(key, name) {
     if (!confirm(`Clear uptime history for ${name}? This can't be undone.`)) return;
   } else {
     const code = String(1000 + Math.floor(Math.random() * 9000));  // a new 4-digit code each time
-    const typed = prompt(`This clears the uptime history of all ${data ? data.hosts.length : ""} computers, and can't be undone.\n\nTo confirm, type this number: ${code}`);
+    const typed = prompt(`This clears the uptime history of all ${data ? data.hosts.length : ""} devices, and can't be undone.\n\nTo confirm, type this number: ${code}`);
     if (typed === null) return;
     if (typed.trim() !== code) return alert("That number didn't match, so nothing was reset.");
   }
@@ -2404,7 +2434,7 @@ function renderDetails(d) {
     })()}</div>` : !d.security_visible && r.agent_version ? `<div><span>Signed in</span><span class="muted">Visible to Home Assistant admins</span></div>` : ""}
     <div><span>Up for</span>${dur(r.uptime_s)} (since ${when(r.boot_time)})</div>
     <div><span>CPU</span>${r.cpu_pct == null ? "—" : r.cpu_pct + "%"}${(r.load || []).length ? ` <small class="muted">load ${r.load.map(x => x.toFixed(2)).join(" / ")}</small>` : ""} ${mBtn("sys", mSys())}</div>
-    <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${Math.round(r.mem_total_mb / 1024)} GB`}</div>
+    <div><span>Memory used</span>${mem == null ? "—" : `${mem}% of ${mbText(r.mem_total_mb)}`}</div>
     ${sh ? "" : `<div><span>Last update installed</span>${r.last_patch_title ? esc(r.last_patch_title) + (r.last_patch_kb && !r.last_patch_title.includes(r.last_patch_kb) ? ` (${esc(r.last_patch_kb)})` : "") : esc(r.last_patch_kb || "—")}${r.last_patch ? (r.last_patch_title || r.last_patch_kb ? "<br>" : " ") + "on " + when(r.last_patch) : ""}${r.last_patch_source ? `<br><small class="muted">from ${esc(r.last_patch_source)}</small>` : ""}</div>`}
     <div><span>${linux ? "Kernel" : "OS build"}</span>${esc(r.os_build || "—")}</div>
     ${r.updates_pending != null ? `<div><span>Updates available</span>${r.updates_pending}${r.security_updates ? ` <b class='old'>(${r.security_updates} security)</b>` : ""}</div>` : ""}
@@ -2437,7 +2467,7 @@ function renderDetails(d) {
     const cls = ignored ? "" : free < crit ? "red" : free < warn ? "amber" : "";
     const editing = diskEditing === k;
     return `<div class="diskrow"><b>${esc(v.name)}</b><div class="bar" title="${pctUsed}% used"><i class="${cls}" style="width:${pctUsed}%"></i></div>
-      <span>${v.free_gb} GB free of ${v.size_gb} GB <small class="muted">(${free.toFixed(1)}%)</small></span></div>
+      <span>${gbText(v.free_gb)} free of ${gbText(v.size_gb)} <small class="muted">(${free.toFixed(1)}%)</small></span></div>
       <div class="diskset">${editing
         ? `<label>Amber below <input type="number" min="0" max="95" step="0.5" id="dWarn" value="${o.warn != null ? o.warn : ""}" placeholder="${def.warn}">%</label>
            <label>Red below <input type="number" min="0" max="95" step="0.5" id="dCrit" value="${o.crit != null ? o.crit : ""}" placeholder="${def.crit}">%</label>
@@ -2455,7 +2485,7 @@ function renderDetails(d) {
     const S = c.storage, rows = [];
     const badPhys = d => /unhealthy|warning/i.test(d.health) || /lost|fail|predictive|error|missing/i.test(d.status || "");
     (S.physical || []).forEach(d => rows.push(`<tr class="${rowCls(badPhys(d), "storage", d.name)}"><td>Disk</td><td>${esc(d.name)}${d.serial ? `<br><small class="muted">${esc(d.serial)}</small>` : ""}</td>
-      <td>${esc([d.media, d.bus, d.size_gb ? d.size_gb + " GB" : ""].filter(x => x && x !== "Unspecified").join(" · "))}</td><td>${esc(d.health)}${d.status && d.status !== "OK" ? ` <small>(${esc(d.status)})</small>` : ""}</td>
+      <td>${esc([d.media, d.bus, d.size_gb ? gbText(d.size_gb) : ""].filter(x => x && x !== "Unspecified").join(" · "))}</td><td>${esc(d.health)}${d.status && d.status !== "OK" ? ` <small>(${esc(d.status)})</small>` : ""}</td>
       <td>${badPhys(d) || findIgnore("storage", d.name) ? ignBtn("storage", d.name, d.name) : ""}</td></tr>`));
     (S.virtual || []).forEach(v => { const bad = !/^healthy$/i.test(v.health) || /degraded/i.test(v.status || "");
       rows.push(`<tr class="${rowCls(bad, "storage", v.name)}"><td>${linux ? "Array" : "Storage space"}</td><td>${esc(v.name)}</td><td>${esc(v.layout || "")}</td><td>${esc(v.health)}${v.status && v.status !== "OK" ? ` <small>(${esc(v.status)})</small>` : ""}</td>
@@ -2507,11 +2537,11 @@ function renderDetails(d) {
   const sv = r.services || {};
   flush("services");
   html += sect(linux ? "Watched services and containers" : "Role services", tbl(["Service", "Role", "State", ""], (sv.watched || []).filter(x => !(c.containers && c.containers.some(k => k.name === x.name))).map(x =>
-    `<tr class="${rowCls(x.state !== "Running", "service", x.name)}"><td>${esc(x.display)}<br><small class="muted">${esc(x.name)}</small></td><td>${esc(x.role)}</td><td>${esc(x.state)}</td>
+    `<tr class="${rowCls(x.state !== "Running", "service", x.name)}"><td>${esc(x.display)}<br><small class="muted">${esc(x.name)}${x.delayed ? " · delayed start" : ""}</small></td><td>${esc(x.role)}</td><td>${esc(x.state)}</td>
      <td>${x.state !== "Running" || findIgnore("service", x.name) ? ignBtn("service", x.name, x.display) : ""}</td></tr>`)) ||
     `<p class="empty-note">No role services found.</p>`);
   if ((sv.stopped_auto || []).length) html += sect(linux ? "Failed systemd units" : "Other automatic services not running",
-    tbl(["Service", "State", ""], sv.stopped_auto.map(x => `<tr class="${rowCls(true, "service", x.name)}"><td>${esc(x.display)} <small class="muted">${esc(x.name)}</small></td><td>${esc(x.state)}</td><td>${ignBtn("service", x.name, x.display)}</td></tr>`)));
+    tbl(["Service", "State", ""], sv.stopped_auto.map(x => `<tr class="${rowCls(true, "service", x.name)}"><td>${esc(x.display)} <small class="muted">${esc(x.name)}${x.delayed ? " · delayed start" : ""}</small></td><td>${esc(x.state)}</td><td>${ignBtn("service", x.name, x.display)}</td></tr>`)));
   if (c.iis) html += sect("IIS", tbl(["App pool / site", "State", ""],
     [...(c.iis.app_pools || []).map(p => `<tr class="${rowCls(p.state !== "Started", "apppool", p.name)}"><td>App pool: ${esc(p.name)}</td><td>${esc(p.state)}</td><td>${p.state !== "Started" ? ignBtn("apppool", p.name) : ""}</td></tr>`),
      ...(c.iis.sites || []).map(p => {
@@ -2616,11 +2646,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const when = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
     const head = key => { const ck = (d.checks || []).find(x => x.key === key); return ck ? `<p class="${ck.status !== "green" ? "old" : ""}" style="margin:0 0 8px">${ck.status === "green" ? "✓ " : ""}${esc(ck.detail || "")}</p>` : ""; };
     const GP = {1006: "Couldn't bind to a domain controller", 1030: "Couldn't get the list of policies", 1053: "Couldn't find the user or computer", 1054: "Couldn't find a domain controller",
-      1055: "Couldn't resolve the computer name", 1058: "Couldn't read a policy from SYSVOL", 1085: "A settings extension failed", 1096: "Couldn't process a policy file", 1129: "No network connection to a domain controller"};
+      1055: "Couldn't resolve the device name", 1058: "Couldn't read a policy from SYSVOL", 1085: "A settings extension failed", 1096: "Couldn't process a policy file", 1129: "No network connection to a domain controller"};
     if (c.gpo) html += sect("Group Policy", head("gpo") + `<div class="kv"><div><span>Last applied</span>${esc(when(c.gpo.last_success)) || "not in the last 24 h"}</div><div><span>Failures (24 h)</span>${c.gpo.failures_24h || 0}</div></div>` +
       ((c.gpo.failures || []).length ? tbl(["Time", "Problem", "Details"], c.gpo.failures.map(f =>
         `<tr><td>${esc(when(f.time))}</td><td>${esc(GP[f.id] || "Event " + f.id)} <small class="muted">${f.id}</small></td><td><small>${esc(f.message)}</small></td></tr>`)) : "") +
-      `<p class="hint">From Group Policy's results in the System log. Amber when it's failing and hasn't applied for 3 hours (it refreshes every 90 minutes or so), so a failure at start-up that the next refresh fixes doesn't alert. ${(d.checks || []).some(x => x.key === "gpo") ? ignBtn("gpo", "gpo", "Group Policy") + " this check on this computer." : ""}</p>`);
+      `<p class="hint">From Group Policy's results in the System log. Amber when it's failing and hasn't applied for 3 hours (it refreshes every 90 minutes or so), so a failure at start-up that the next refresh fixes doesn't alert. ${(d.checks || []).some(x => x.key === "gpo") ? ignBtn("gpo", "gpo", "Group Policy") + " this check on this device." : ""}</p>`);
     if (c.wan && (c.wan.interfaces || []).length) {
       const on = (d.checks || []).some(x => x.key === "wan");
       const dur = s => !s ? "" : s >= 86400 ? Math.floor(s / 86400) + " d" : s >= 3600 ? Math.floor(s / 3600) + " h" : Math.max(1, Math.floor(s / 60)) + " min";
@@ -2638,7 +2668,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         (t.role === "pdc" ? `<div><span>Role</span>PDC emulator (the domain's time source)</div>`
           : `<div><span>Compared with</span>${esc(t.target || "—")}${t.role === "dc" ? " <small class=\"muted\">(PDC emulator)</small>" : ""}</div><div><span>Difference</span>${off == null ? `<small class="muted">${esc(t.error || "not measured")}</small>` : `${ago} ${off > 0 ? "ahead" : off < 0 ? "behind" : ""}`}</div>`) +
         `<div><span>Syncing from</span>${esc(t.source || "—")}${t.type ? ` <small class="muted">(${esc(t.type)})</small>` : ""}</div></div>` +
-        `<p class="hint">Measured by the agent with <code>w32tm /stripchart</code> against the domain controller this computer uses (or, on another DC, the PDC emulator). Amber at ${(data && data.time_warn) || 60} s out or when Windows Time isn't syncing from anything, red at ${(data && data.time_crit) || 240} s: Kerberos sign-ins fail at 5 minutes. On the PDC emulator, amber if it runs on its own clock. ${(d.checks || []).some(x => x.key === "time") ? ignBtn("time", "time", "Time") + " this check on this computer." : ""}</p>`);
+        `<p class="hint">Measured by the agent with <code>w32tm /stripchart</code> against the domain controller this device uses (or, on another DC, the PDC emulator). Amber at ${(data && data.time_warn) || 60} s out or when Windows Time isn't syncing from anything, red at ${(data && data.time_crit) || 240} s: Kerberos sign-ins fail at 5 minutes. On the PDC emulator, amber if it runs on its own clock. ${(d.checks || []).some(x => x.key === "time") ? ignBtn("time", "time", "Time") + " this check on this device." : ""}</p>`);
     }
     if (c.sysvol) {
       const S = {0: "Uninitialised", 1: "Initialised", 2: "Initial sync", 3: "Auto recovery", 4: "Normal", 5: "In error"};
@@ -2734,7 +2764,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     inner += review("Enabled accounts that don't require a password", dm.no_password, "alerts", "aduser");
     inner += review("Accounts whose password never expires", dm.never_expires, "for review; doesn't alert");
     inner += review("Users with no logon for 90 days", dm.stale_users, "for review; doesn't alert");
-    inner += review("Computers with no logon for 90 days", dm.stale_computers, "for review; doesn't alert");
+    inner += review("Computer accounts with no logon for 90 days", dm.stale_computers, "for review; doesn't alert");
     html += sect("Domain security", inner + `<p class="hint">Amber for 24 hours after someone is added to a privileged group, when the KRBTGT password is over 180 days old (reset it twice, some hours apart), or when an enabled account doesn't require a password. The other lists are for review. Last logon is AD's replicated value, which can be up to 14 days behind. ${chk ? ignBtn("domain", "domain", "Domain security") + " this check." : ""}</p>`);
   }
   if (c.laps) html += lapsSection(c.laps, (d.checks || []).find(x => x.key === "laps"));
@@ -2747,8 +2777,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const tpm = c.bitlocker.tpm || {};
     const req = (data && data.bitlocker_require) || "workstations";
     const why = r.virtual ? `This is a virtual machine (${esc(r.virtual)}), so BitLocker isn't checked.`
-      : used ? "" : !(req === "all" || req === "workstations" && r.workstation) ? `BitLocker isn't in use here, and it's only expected on ${req === "off" ? "no computers" : "Windows 10/11"} (the <code>agent_bitlocker_require</code> option), so there's no check.`
-      : tpm.present !== true ? `BitLocker isn't in use here. ${tpm.present === false ? "This computer has no TPM" : "The agent didn't report a TPM"}, so it isn't expected, and there's no check.` : "";
+      : used ? "" : !(req === "all" || req === "workstations" && r.workstation) ? `BitLocker isn't in use here, and it's only expected on ${req === "off" ? "no devices" : "Windows 10/11"} (the <code>agent_bitlocker_require</code> option), so there's no check.`
+      : tpm.present !== true ? `BitLocker isn't in use here. ${tpm.present === false ? "This device has no TPM" : "The agent didn't report a TPM"}, so it isn't expected, and there's no check.` : "";
     const head = chk ? `<p class="${chk.status === "amber" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>`
       : whole ? `<p class="hint" style="margin:0 0 8px">The BitLocker check is ignored ${whole.scope === "host" ? "on this server" : "on all servers"}.</p>`
       : `<p class="hint" style="margin:0 0 8px">${why || "All drives that would be checked are ignored."}</p>`;
@@ -2760,10 +2790,10 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const prot = v.locked ? "Locked" : v.status === "decrypted" ? "" : v.protection === "on" ? "On" : v.protection === "off" ? "<b>Suspended</b>" : "Unknown";
       return `<tr class="${rowCls(bad, "bitlocker", v.drive)}"><td>${esc(v.drive)} <small class="muted">${v.kind === "os" ? "Windows" : "data"}</small></td><td>${esc(state)}</td><td>${prot}</td>
         <td>${esc(v.method || "")}</td><td>${esc((v.protectors || []).join(", "))}</td><td>${bad || findIgnore("bitlocker", v.drive) ? ignBtn("bitlocker", v.drive, "BitLocker on " + v.drive) : ""}</td></tr>`;
-    })) + `<p class="hint">Amber when a fixed drive isn't encrypted, protection is suspended, encryption is paused or being removed, a drive is locked, or the Windows drive has no recovery password. A computer that doesn't use BitLocker is only flagged if it has a TPM; virtual machines aren't checked. Rollcall never reads the keys or recovery passwords. ${chk && !whole ? ignBtn("bitlocker", "bitlocker", "BitLocker") + " the whole check on this server." : ""}</p>`);
+    })) + `<p class="hint">Amber when a fixed drive isn't encrypted, protection is suspended, encryption is paused or being removed, a drive is locked, or the Windows drive has no recovery password. A device that doesn't use BitLocker is only flagged if it has a TPM; virtual machines aren't checked. Rollcall never reads the keys or recovery passwords. ${chk && !whole ? ignBtn("bitlocker", "bitlocker", "BitLocker") + " the whole check on this server." : ""}</p>`);
   }
   if (c.certs && (c.certs.certs || []).length) {
-    // Certificates in the computer's own stores (Personal, Remote Desktop, Web Hosting). Keys are never read.
+    // Certificates in the device's own stores (Personal, Remote Desktop, Web Hosting). Keys are never read.
     const chk = (d.checks || []).find(x => x.key === "certs");
     const whole = findIgnore("cert", "certs");
     const LBL = {ok: "Valid", warn: "Expiring soon", crit: "Expiring", replaced: "Replaced", old: "Old, not in use", ignored: "Ignored"};
@@ -2787,9 +2817,9 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const sx = d.secrets, ss = sx.status || null, cf = sx.config || {mode: "default", paths: [], hours: 24};
     const chk = (d.checks || []).find(x => x.key === "secrets");
     const fdate = s => s ? when(s) : "";
-    const DEF = {off: "no computers", servers: "servers", workstations: "workstations (Windows 10 and 11)", all: "all computers"};
-    let inner = `<div class="secpromise"><b>&#128274; Passwords never leave this computer.</b><span>The agent reads files on the computer itself and sends Rollcall only where each password is: the file, the line, the name of the setting and how many characters it has. Never the password, any part of it, or a fingerprint (hash) of it. Rollcall keeps only those details, and only admins and editors can see them.</span></div>`;
-    if (!sx.on) inner += `<p class="empty-note">Off for this computer. ${cf.mode === "off" ? "It's turned off below." : `The <code>agent_secret_scan</code> option scans ${esc(DEF[sx.default] || sx.default)} by default; turn it on below for this computer alone.`}</p>`;
+    const DEF = {off: "no devices", servers: "servers", workstations: "workstations (Windows 10 and 11)", all: "all devices"};
+    let inner = `<div class="secpromise"><b>&#128274; Passwords never leave this device.</b><span>The agent reads files on the device itself and sends Rollcall only where each password is: the file, the line, the name of the setting and how many characters it has. Never the password, any part of it, or a fingerprint (hash) of it. Rollcall keeps only those details, and only admins and editors can see them.</span></div>`;
+    if (!sx.on) inner += `<p class="empty-note">Off for this device. ${cf.mode === "off" ? "It's turned off below." : `The <code>agent_secret_scan</code> option scans ${esc(DEF[sx.default] || sx.default)} by default; turn it on below for this device alone.`}</p>`;
     else if (!ss || !ss.on) inner += `<p class="empty-note">Turned on. The agent starts scanning after its next report, a few minutes at a time${r.agent_version ? `; it needs ${sx.linux ? "Linux agent 1.0.17" : "Windows agent 1.0.36"} or later` : ""}.</p>`;
     else {
       inner += chk ? `<p class="${chk.status !== "green" ? "old" : ""}" style="margin:0 0 6px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>` : "";
@@ -2802,7 +2832,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const live = rows.filter(f => !findIgnore("secret", ikey(f)) && !accepted(f));
       const nAcc = rows.filter(f => !findIgnore("secret", ikey(f)) && accepted(f)).length;
       if (live.length) inner += `<div class="ackbar"><span><b>${live.length}</b> ${ackAt ? "new " : ""}finding${live.length === 1 ? "" : "s"}${ackAt ? " since " + when(new Date(ackAt * 1000).toISOString()) : ""}. Checked them and they're fine?</span>
-        <button type="button" class="mini primary edit-only" data-ack="secrets" title="Accept everything found so far. Anything found later turns this computer amber again.">Ignore all</button></div>`;
+        <button type="button" class="mini primary edit-only" data-ack="secrets" title="Accept everything found so far. Anything found later turns this device amber again.">Ignore all</button></div>`;
       if (ackAt) inner += `<div class="ackbar ok"><span>Ignored all found up to ${when(new Date(ackAt * 1000).toISOString())}${ack.by ? " by " + esc(ack.by) : ""}${nAcc ? ` (${nAcc} still there)` : ""}. Anything found later turns it amber again.</span>
         <button type="button" class="mini edit-only" data-unack="secrets">Undo</button></div>`;
       if (rows.length) inner += tbl(["File", "Line", "What was found", "Length", "Found", ""], rows.map(f =>
@@ -2811,8 +2841,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
           <td>${f.len != null ? `${f.len} character${f.len === 1 ? "" : "s"}` : ""}</td><td>${f.first ? ago(f.first, Date.now() / 1000) : ""}</td>
           <td>${accepted(f) && !findIgnore("secret", ikey(f)) ? `<span class="ignored" title="Ignored with Ignore all">Ignored (all)</span>` : ignBtn("secret", ikey(f), f.path)}</td></tr>`));
     }
-    if (data && data.can_edit) inner += `<details class="secsetup"${!sx.on ? " open" : ""}><summary><b>Scan settings for this computer</b></summary><div class="secset">
-      <label><span>Scan this computer</span><select class="secmode">
+    if (data && data.can_edit) inner += `<details class="secsetup"${!sx.on ? " open" : ""}><summary><b>Scan settings for this device</b></summary><div class="secset">
+      <label><span>Scan this device</span><select class="secmode">
         <option value="default"${cf.mode === "default" ? " selected" : ""}>As the add-on option says (${sx.default === "all" || (sx.default === "servers" && r.workstation !== true) || (sx.default === "workstations" && r.workstation === true) ? "on" : "off"} here)</option>
         <option value="on"${cf.mode === "on" ? " selected" : ""}>On</option><option value="off"${cf.mode === "off" ? " selected" : ""}>Off</option></select></label>
       <label><span>Full scan every</span><select class="sechours">${[6, 12, 24, 48, 168].map(h => `<option value="${h}"${+cf.hours === h ? " selected" : ""}>${h === 168 ? "week" : h + " hours"}</option>`).join("")}</select></label>
@@ -2905,7 +2935,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
             `<tr><td>${cveLink(f.cve)}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
              <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`));
       html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
-        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this computer's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
+        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
     }
     if (!sw || !sw.apps) html += sect("Installed software", `<p class="empty-note">${r.agent_version ? `Not reported yet. It needs ${linux ? "Linux agent 1.0.14" : "Windows agent 1.0.33"} or later, and arrives with the next report after the agent updates.` : ""}</p>`);
     else {
@@ -2971,7 +3001,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   body.scrollTop = top;
   fillMetrics();
 }
-// Metrics graphs (disk space, network traffic, CPU and memory) in a computer's details.
+// Metrics graphs (disk space, network traffic, CPU and memory) in a device's details.
 // mCfg: what each graph shows, filled while the details are built; mOpen: which are open, and their range.
 const mCfg = {}, mOpen = {}, mCache = {}, mDraw = {};
 const M_RANGES = [["24h", "24 h"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["1y", "1 year"]];
@@ -3214,7 +3244,7 @@ function secFiltersSection(st) {
 function secFilterForm(i) {
   const x = detSec.events[i];
   let acct = prettyAcct(x.account);
-  // A local account on this computer (PC01\name): suggest the same account on any computer
+  // A local account on this device (PC01\name): suggest the same account on any device
   if (detSec.host && acct.toUpperCase().startsWith(detSec.host + "\\")) acct = "*" + acct.slice(detSec.host.length);
   const by = String(x.by || "");
   const bySuggest = /^SYSTEM\b/i.test(by) ? "SYSTEM*" : by;
@@ -3233,7 +3263,7 @@ function secFilterForm(i) {
     </div>
     <p class="hint" data-secflt-preview style="margin:6px 0"></p>
     <div class="actions"><button type="button" class="mini primary" data-secflt-save="${i}">Save filter</button><button type="button" class="mini" data-secflt-cancel="1">Cancel</button></div>
-    <p class="hint" style="margin:6px 0 0"><code>*</code> stands for anything, e.g. <code>*\\LAPSAdmin</code> is that account on any computer, and <code>svc_*</code> any account starting svc_. Leave a box empty to match anything. Keep filters narrow: matching events are still listed, but nobody is told about them.</p>
+    <p class="hint" style="margin:6px 0 0"><code>*</code> stands for anything, e.g. <code>*\\LAPSAdmin</code> is that account on any device, and <code>svc_*</code> any account starting svc_. Leave a box empty to match anything. Keep filters narrow: matching events are still listed, but nobody is told about them.</p>
   </div></td></tr>`;
 }
 function logonFilterForm(key) {
@@ -3682,7 +3712,7 @@ function renderOverview(h, sn, lg, ha) {
   for (const r of ((lg && lg.rows) || []).filter(r => r.alert).slice(0, 5)) att.push({lvl: r.alert === "red" ? "red" : "amber", what: "Log", detail: (r.app ? r.app + ": " : "") + r.msg, jump: "logs", ts: r.ts});
   const order = {red: 0, amber: 1};
   att.sort((a, b) => order[a.lvl] - order[b.lvl]);
-  let html = h.same_as && !h.agent ? `<div class="mergebox"><p style="margin:0 0 8px">This looks like the same computer as <b>${esc(h.same_as.name)}</b>, which has the agent.
+  let html = h.same_as && !h.agent ? `<div class="mergebox"><p style="margin:0 0 8px">This looks like the same device as <b>${esc(h.same_as.name)}</b>, which has the agent.
       <b>Merge</b> moves the agent, its checks, settings and graphs onto this entry and removes ${esc(h.same_as.name)}. This entry keeps its name, address, history and Home Assistant sensors.</p>
     <div class="actions"><button type="button" class="mini primary edit-only" data-merge="${esc(h.same_as.key)}" data-mergename="${esc(h.same_as.name)}">Merge into this entry</button>
       <button type="button" class="mini" data-mergeopen="${esc(h.same_as.key)}">Open ${esc(h.same_as.name)}</button></div></div>` : "";
@@ -4305,6 +4335,15 @@ function viaTag(x) {
 }
 // Which agent's instructions the Agents window shows (remembered in this browser)
 let agOsTab = (() => { try { const t = localStorage.getItem("rollcall.agOsTab"); return ["windows", "linux", "openwrt"].includes(t) ? t : "windows"; } catch (e) { return "windows"; } })();
+// Sizes: in MB under 1 GB (a router's few MB of memory or flash), otherwise GB as the agent gave it
+function gbText(gb) {
+  const n = Number(gb);
+  return !isFinite(n) ? "" : n > 0 && n < 1 ? `${Math.max(1, Math.round(n * 1024))} MB` : `${+n.toFixed(2)} GB`;
+}
+function mbText(mb) {
+  const n = Number(mb);
+  return !isFinite(n) ? "" : n < 1024 ? `${Math.round(n)} MB` : `${Math.round(n / 1024)} GB`;
+}
 function renderAgents() {
   const a = agInfo, now = Date.now() / 1000;
   const staleSec = (a.stale_minutes || 15) * 60;
@@ -4336,7 +4375,7 @@ function renderAgents() {
       ${o.options ? `<h5>Options</h5><p>${o.options}</p>` : ""}
       <h5>Update</h5><p>${o.update}</p>
       ${o.noAuto ? "" : `<label class="row-inline" style="margin-top:6px"><input type="checkbox" data-autoupdate="${o.os}" ${a.auto_update && a.auto_update[o.os] ? "checked" : ""}> Update ${o.title} agents automatically</label>
-      <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades. A new version goes to one computer first; the rest only get it once that one has reported on the new version.</p>
+      <p class="hint">At their next report, agents older than version ${esc(o.version || "?")} fetch it from Home Assistant, check its signature and replace themselves. Never downgrades. A new version goes to one device first; the rest only get it once that one has reported on the new version.</p>
       ${a.auto_update && a.auto_update[o.os] ? rolloutHtml(o.os, (a.rollout || {})[o.os]) : ""}`}
       <h5>Remove</h5><p>${o.remove}</p>
       <h5>Troubleshoot</h5><p>${o.trouble}</p>
@@ -4351,7 +4390,7 @@ function renderAgents() {
   html += sect("2. Download and install", updWarn + `<div class="tabs ostabs" role="tablist" aria-label="Agent type">${osTab("windows", "Windows")}${osTab("linux", "Linux")}${osTab("openwrt", "OpenWrt")}</div>
     <div>${card({
       title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
-      msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the computer appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
+      msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the device appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
       req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
       install: [
         `Copy the file to <code>${share}</code> or another share the servers can read.`,
@@ -4420,21 +4459,21 @@ function renderAgents() {
   agExtNote();
 }
 
-// Staged agent updates: one computer first, then the rest
+// Staged agent updates: one device first, then the rest
 function rolloutHtml(os, r) {
   if (!r) return "";
   const t = s => s ? new Date(s * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
-  const who = `<b>${esc(r.pilot_name || "a computer")}</b>`;
-  if (r.state === "waiting") return `<p class="hint">Version ${esc(r.version)}: waiting for a computer to report, to try it there first.</p>`;
+  const who = `<b>${esc(r.pilot_name || "a device")}</b>`;
+  if (r.state === "waiting") return `<p class="hint">Version ${esc(r.version)}: waiting for a device to report, to try it there first.</p>`;
   if (r.state === "testing") return `<p class="hint">Version ${esc(r.version)}: trying it on ${who} first${r.sent ? ` (fetched at ${t(r.sent)})` : ""}. The others update once it reports on the new version.</p>`;
   if (r.state === "ok") return `<p class="hint">✓ Version ${esc(r.version)} worked on ${who}${r.done ? ` at ${t(r.done)}` : ""}, so the other agents are updating at their next report.</p>`;
   return `<div class="ackbar"><span>⚠ ${who} hasn't reported since fetching version ${esc(r.version)}${r.sent ? ` at ${t(r.sent)}` : ""}, so the update has been stopped for the other agents. Check its agent log first.</span>
-    <span class="edit-only"><button type="button" class="mini" data-rollout="${os}" data-act="retry" title="Try it on a different computer first">Retry</button>
+    <span class="edit-only"><button type="button" class="mini" data-rollout="${os}" data-act="retry" title="Try it on a different device first">Retry</button>
     <button type="button" class="mini" data-rollout="${os}" data-act="go" title="Send it to every agent anyway">Update the rest</button></span></div>`;
 }
 document.getElementById("agBody").addEventListener("click", async e => {
   const b = e.target.closest("[data-rollout]"); if (!b) return;
-  if (b.dataset.act === "go" && !confirm("Send this version to every agent, even though the first computer hasn't reported on it?")) return;
+  if (b.dataset.act === "go" && !confirm("Send this version to every agent, even though the first device hasn't reported on it?")) return;
   b.disabled = true;
   const r = await fetch("api/agents/rollout", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({os: b.dataset.rollout, action: b.dataset.act})});
@@ -4536,7 +4575,7 @@ function renderDiscovery(first) {
     <label class="field" style="flex:3;min-width:240px"><span>Addresses to scan</span><input id="discRanges" value="${esc(ranges)}" placeholder="e.g. 192.168.1.0/24, 10.0.1.1-200" spellcheck="false" ${disc.running ? "disabled" : ""}></label>
     <label class="field" style="flex:1;min-width:120px"><span>SNMP community</span><input id="discComm" value="${esc(keep && keep.comm != null ? keep.comm : "public")}" maxlength="64" spellcheck="false" autocomplete="off" ${disc.running ? "disabled" : ""}></label>
     <div style="align-self:flex-end">${disc.running ? `<button type="button" id="discCancel">Stop</button>` : `<button type="button" class="primary" id="discGo">Scan</button>`}</div></div>
-    <p class="hint" style="margin:4px 0 10px">Private addresses only, up to 1,024 per range (a /22). ${(disc.suggested || []).length ? `Suggested: ${disc.suggested.map(r => `<a href="#" data-discrange="${esc(r)}">${esc(r)}</a>`).join(", ")} (Home Assistant's network and the ones your computers are on). ` : ""}A /24 usually takes under a minute. Each address gets a ping and a quick look at common ports, so security tools on your network may notice the scan.</p>`;
+    <p class="hint" style="margin:4px 0 10px">Private addresses only, up to 1,024 per range (a /22). ${(disc.suggested || []).length ? `Suggested: ${disc.suggested.map(r => `<a href="#" data-discrange="${esc(r)}">${esc(r)}</a>`).join(", ")} (Home Assistant's network and the ones your devices are on). ` : ""}A /24 usually takes under a minute. Each address gets a ping and a quick look at common ports, so security tools on your network may notice the scan.</p>`;
   if (disc.running) html += `<div class="discprog"><div style="width:${pct}%"></div></div><p class="empty-note">Scanning: ${sm.done} of ${sm.total} addresses, ${sm.found} device(s) found so far…</p>`;
   else if (sm.finished) html += `<p class="empty-note">Last scan ${esc(when(sm.finished))}${sm.by ? " by " + esc(sm.by) : ""}: ${sm.found} device(s) in ${sm.done} addresses${sm.cancelled ? " (stopped early)" : ""}.</p>`;
   if (res.length) {
@@ -4550,7 +4589,7 @@ function renderDiscovery(first) {
       const svc = (d.ports || []).map(p => PORT_NAMES[p] || String(p)).concat(sn.descr ? ["SNMP"] : [], sip.code ? ["SIP"] : []);
       const act = d.known ? `<button type="button" class="mini" data-discopen="${esc(d.known)}" title="Open it in Rollcall">In Rollcall: ${esc(d.known_name || d.known)}</button>`
         : `<button type="button" class="mini primary" data-discadd="${esc(d.ip)}">Add</button> <button type="button" class="mini" data-dischide="${esc(d.ip)}" data-hide="${d.hidden ? 0 : 1}">${d.hidden ? "Unhide" : "Hide"}</button>`;
-      return `<tr class="${d.known || d.hidden ? "dim" : ""}"><td><b>${esc(d.name || d.ip)}</b>${d.name ? `<br><small class="mono">${esc(d.ip)}</small>` : ""}${d.dns && d.dns.split(".")[0].toLowerCase() !== (d.name || "").toLowerCase() ? `<br><small class="muted">${esc(d.dns)}</small>` : ""}${d.ping ? "" : `<br><small class="old" title="Rollcall checks by ping, so it would show this as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent: a computer counts as up while its agent reports.">doesn't answer ping</small>`}</td>
+      return `<tr class="${d.known || d.hidden ? "dim" : ""}"><td><b>${esc(d.name || d.ip)}</b>${d.name ? `<br><small class="mono">${esc(d.ip)}</small>` : ""}${d.dns && d.dns.split(".")[0].toLowerCase() !== (d.name || "").toLowerCase() ? `<br><small class="muted">${esc(d.dns)}</small>` : ""}${d.ping ? "" : `<br><small class="old" title="Rollcall checks by ping, so it would show this as down. Allow ping (ICMP echo) in its firewall, or install the Windows agent: a device counts as up while its agent reports.">doesn't answer ping</small>`}</td>
         <td>${esc(d.kind || "Device")}${d.model ? `<br><small class="muted">${esc(d.model)}</small>` : ""}${d.agent ? `<br><small class="muted">${d.agent === "windows" ? "Windows agent recommended" : "Linux agent available"}</small>` : ""}</td>
         <td><small>${esc(svc.join(", ")) || "—"}</small></td><td><small>${esc(det.join(" · "))}</small></td><td style="white-space:nowrap">${act}</td></tr>`;
     })) : `<p class="empty-note">Everything found is already in Rollcall${nHidden ? " or hidden" : ""}.</p>`;
@@ -4613,10 +4652,10 @@ async function findSoftware() {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { out.innerHTML = `<p class="empty-note">${esc(j.error || "That didn't work")}</p>`; return; }
   const res = j.results || [], withAgents = data.hosts.filter(h => h.agent).length;
-  if (!res.length) { out.innerHTML = `<p class="empty-note">No computer with an agent has anything matching "${esc(q)}".</p>`; return; }
-  out.innerHTML = `<p class="hint">${res.length} of ${withAgents} computer${withAgents === 1 ? "" : "s"} with an agent.</p>` +
-    tbl(["Computer", "Program", "Version"], res.flatMap(c => c.apps.map((a, i) =>
-      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}${a.newer ? ` <span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}${a.cves ? ` <span class="vuln" title="Known vulnerabilities an update fixes: see the computer's Software tab">${a.cves} CVE${a.cves === 1 ? "" : "s"}</span>` : ""}</td></tr>`)));
+  if (!res.length) { out.innerHTML = `<p class="empty-note">No device with an agent has anything matching "${esc(q)}".</p>`; return; }
+  out.innerHTML = `<p class="hint">${res.length} of ${withAgents} device${withAgents === 1 ? "" : "s"} with an agent.</p>` +
+    tbl(["Device", "Program", "Version"], res.flatMap(c => c.apps.map((a, i) =>
+      `<tr>${i ? "<td></td>" : `<td><button type="button" class="linkish" data-swhost="${esc(c.key)}">${esc(c.name)}</button></td>`}<td>${esc(a.name)}</td><td>${esc(a.version)}${a.newer ? ` <span class="newer" title="A newer version is available">Newer: ${esc(a.newer)}</span>` : ""}${a.cves ? ` <span class="vuln" title="Known vulnerabilities an update fixes: see the device's Software tab">${a.cves} CVE${a.cves === 1 ? "" : "s"}</span>` : ""}</td></tr>`)));
 }
 document.getElementById("swGo").addEventListener("click", findSoftware);
 document.getElementById("swQ").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findSoftware(); } });
@@ -4667,7 +4706,7 @@ document.getElementById("discBody").addEventListener("change", e => {
 });
 document.getElementById("dlg").addEventListener("close", () => { if (discDlg.open) loadDiscovery(false); });  // after adding a device, show it as in Rollcall
 
-// ---- Add / Edit computer dialog ----
+// ---- Add / Edit device dialog ----
 const dlg = document.getElementById("dlg");
 const form = document.getElementById("hostForm");
 const fName = document.getElementById("fName"), fHost = document.getElementById("fHost");

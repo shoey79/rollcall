@@ -8,12 +8,12 @@ body:
       value: |
         Thanks for taking the time to report this.
 
-        **Before posting, please remove anything that identifies your network** from logs, screenshots and text: domain names, computer and account names, public IP addresses, serial numbers and phone or SIP providers. Stand-ins like `CONTOSO`, `SRV01`, `jsmith` or `192.168.1.10` are fine. This repository is public.
+        **Before posting, please remove anything that identifies your network** from logs, screenshots and text: domain names, device and account names, public IP addresses, serial numbers and phone or SIP providers. Stand-ins like `CONTOSO`, `SRV01`, `jsmith` or `192.168.1.10` are fine. This repository is public.
   - type: textarea
     id: what
     attributes:
       label: What happened?
-      description: What you saw, and where (Overview, a computer's Details, a notification…).
+      description: What you saw, and where (Overview, a device's Details, a notification…).
       placeholder: e.g. SRV01's Backups check stays amber after a successful Veeam run.
     validations:
       required: true
@@ -29,7 +29,7 @@ body:
       label: How can it be reproduced?
       description: Steps, settings or the kind of device involved, if you know them.
       placeholder: |
-        1. Add a computer with the … preset
+        1. Add a device with the … preset
         2. …
   - type: input
     id: addon-version
@@ -60,7 +60,7 @@ body:
     id: agent
     attributes:
       label: Agent version and operating system (if an agent is involved)
-      description: Shown in the computer's Details under Agent.
+      description: Shown in the device's Details under Agent.
       placeholder: e.g. Windows agent 1.0.32 on Windows Server 2022
   - type: input
     id: device

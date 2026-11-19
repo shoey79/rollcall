@@ -3,7 +3,7 @@
 Kept apart from the up/down history (and history_days), so it can be kept for a year for capacity
 planning. Every report is kept for two days; after that they're rolled up into hourly figures, and
 after a month into daily ones (average, lowest and highest), kept for metrics_days. About 10 series
-per computer: roughly 30,000 rows, a few MB, per computer for a year.
+per device: roughly 30,000 rows, a few MB, per device for a year.
 
 Series names: "cpu" and "mem" (percent), "disk|<volume>|used" and "disk|<volume>|size" (GB),
 "nic|<adapter>|rx" and "nic|<adapter>|tx" (bits per second, averaged since the previous report).

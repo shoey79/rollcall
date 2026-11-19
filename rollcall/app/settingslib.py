@@ -2,7 +2,7 @@
 
 Each field mirrors its entry in config.yaml's `schema:` (types and ranges) and its name and
 description in translations/en.yaml; tests/test_settings.py checks they stay in step. `hosts` is
-left out on purpose: computers are managed on the dashboard.
+left out on purpose: devices are managed on the dashboard.
 """
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ _SPEC: dict[str, tuple] = {
 
 # Names and descriptions, as in translations/en.yaml (the Configuration tab).
 LABELS: dict[str, tuple[str, str]] = {
-    "interval": ("Check interval (seconds)", "How often each computer and service is checked, from 30 to 3600 seconds."),
+    "interval": ("Check interval (seconds)", "How often each device and service is checked, from 30 to 3600 seconds."),
     "retry_interval": ("Re-check after a miss (seconds)", "How soon something that didn't answer is checked again before it goes red. Lower it (e.g. 60) to find out sooner."),
     "ping_count": ("Ping packets per check", "How many pings to send each check. Any reply counts as up."),
     "ping_timeout": ("Ping timeout (seconds)", "How long to wait for each ping reply."),
@@ -121,7 +121,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "email_warnings": ("Amber warnings and events", "As they happen: late backups, log and security events, threats Defender removed. Untick to get them in the daily summary instead."),
     "email_digest": ("Daily summary", "Once a day: everything that's amber or red, plus warnings and events not already emailed."),
     "email_digest_time": ("Daily summary at", "HH:MM in Home Assistant's time zone, e.g. 08:00."),
-    "email_about_devices": ("Devices not responding", "A computer or device that stops replying, and when it's back."),
+    "email_about_devices": ("Devices not responding", "A device that stops replying, and when it's back."),
     "email_about_services": ("Service checks", "Ports, websites, certificates, SIP and Home Assistant sensors."),
     "email_about_network": ("SNMP and syslog", "Firewalls, VPNs, switches, iDRACs and syslog alerts."),
     "email_about_agents": ("Agent checks and log events", "Disks, services, Windows updates and the other agent checks, and Windows or Linux log events."),
@@ -138,7 +138,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "m365_client_id": ("Microsoft 365 application (client) ID", "From the app registration that has the Mail.Send application permission (with admin consent)."),
     "m365_client_secret": ("Microsoft 365 client secret", "The app registration's client secret. Stored with the add-on's settings and never shown again."),
     "log_level": ("Log level", "How much the add-on writes to its Log tab. \"info\" is right for everyday use; \"debug\" helps when troubleshooting."),
-    "maintenance_minutes": ("Default pause length (minutes)", "The time limit offered when you pause a computer for a reboot or maintenance."),
+    "maintenance_minutes": ("Default pause length (minutes)", "The time limit offered when you pause a device for a reboot or maintenance."),
     "notification_url": ("Notification link", "Where tapping a notification goes. Leave blank to open the Rollcall dashboard."),
     "admin_only_changes": ("Only admins can make changes", "Only Home Assistant administrators (and the people listed under Editors) can add, change, pause or delete things. Everyone else can look."),
     "editors": ("Editors", "Home Assistant usernames of people who aren't administrators but may make changes."),
@@ -149,21 +149,21 @@ LABELS: dict[str, tuple[str, str]] = {
     "ups_load_warn": ("UPS load warning (%)", "A UPS goes amber at this load or more. 95% or more is always red."),
     "agent_stale_minutes": ("Agent not reporting after (minutes)", "An agent goes red when it hasn't reported for this long."),
     "agent_slow_seconds": ("Slow agent run (seconds)", "An agent goes amber when one run takes longer than this. 0 turns it off."),
-    "agent_disk_warn": ("Disk space warning (% free)", "Disks go amber at or below this much free space. Each disk can have its own limits in the computer's details."),
+    "agent_disk_warn": ("Disk space warning (% free)", "Disks go amber at or below this much free space. Each disk can have its own limits in the device's details."),
     "agent_disk_crit": ("Disk space alert (% free)", "Disks go red at or below this much free space."),
     "agent_failed_logons": ("Failed logons that count as an attack", "This many failed logons in one agent report turns the Security check red."),
     "agent_laps_overdue_days": ("LAPS overdue (days)", "The LAPS check goes red once a password rotation is this many days overdue."),
-    "agent_bitlocker_require": ("Require BitLocker on", "Which physical computers with a TPM must use BitLocker. \"workstations\" means Windows 10 and 11. Computers that already use BitLocker are always checked; virtual machines never are."),
+    "agent_bitlocker_require": ("Require BitLocker on", "Which physical devices with a TPM must use BitLocker. \"workstations\" means Windows 10 and 11. Devices that already use BitLocker are always checked; virtual machines never are."),
     "agent_sql_backup_hours": ("SQL Server backup age (hours)", "A database goes amber when it has had no full or differential backup for this long."),
     "printer_supply_warn": ("Printer supplies warning (%)", "A printer goes amber when a toner, ink or other supply is at or below this level."),
     "software_updates": ("Highlight newer software versions", "Mark installed programs that have a newer version. Windows uses the winget catalogue, downloaded once a day; Linux uses the package manager. Never alerts."),
     "vuln_checks": ('Vulnerability alerts', "Check Windows builds and Linux packages against public lists of known vulnerabilities (CVEs), downloaded daily: Microsoft's security updates, OSV.dev for Linux, and CISA's list of exploited vulnerabilities. Amber when one scores at or above the level below; red when one is known to be exploited."),
     "vuln_min_score": ('Vulnerability score to alert on (CVSS)', 'Vulnerabilities scoring this much or more out of 10 go amber. 9 means "critical"; 7 includes "high" too. Known-exploited ones always count.'),
-    "vuln_linux_source": ('Linux vulnerability data', '"local": download each distro\'s data from OSV.dev daily and match it here, so nothing about your computers is sent anywhere (larger downloads). "online": send OSV.dev one combined list of package names and versions and let it match (small downloads; no computer names or addresses). "off": don\'t check Linux.'),
-    "agent_secret_scan": ("Scan for passwords left in files", "Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details."),
+    "vuln_linux_source": ('Linux vulnerability data', '"local": download each distro\'s data from OSV.dev daily and match it here, so nothing about your devices is sent anywhere (larger downloads). "online": send OSV.dev one combined list of package names and versions and let it match (small downloads; no device names or addresses). "off": don\'t check Linux.'),
+    "agent_secret_scan": ("Scan for passwords left in files", "Which devices' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each device can be turned on or off in its details."),
     "ip_ranges": ("Named IP ranges", "Names for parts of your network, shown next to each device's address, e.g. Servers=10.0.1.0/24 or IoT=192.168.20.10-200. A range can be a subnet, a span (10.0.1.10-50) or end in a wildcard (10.0.1.*); separate several with commas. Where ranges overlap, the smallest one wins."),
-    "name_line": ("Line under each name", "What the dashboard shows under each computer's name, unless the computer has its own choice. \"auto\" shows the make and model, or else the operating system."),
-    "agent_time_warn_seconds": ("Clock out by (amber, seconds)", "A domain computer's Time check goes amber when its clock is this far from its domain controller's."),
+    "name_line": ("Line under each name", "What the dashboard shows under each device's name, unless the device has its own choice. \"auto\" shows the make and model, or else the operating system."),
+    "agent_time_warn_seconds": ("Clock out by (amber, seconds)", "A domain device's Time check goes amber when its clock is this far from its domain controller's."),
     "agent_time_crit_seconds": ("Clock out by (red, seconds)", "The Time check goes red at this. Kerberos sign-ins fail at 300 seconds (5 minutes)."),
     "agent_exchange_queue_warn": ("Exchange queue warning (messages)", "The Exchange check goes amber when this many messages are waiting to be delivered."),
     "agent_patch_days": ("Windows updates overdue (days)", "The Updates check goes amber when nothing has been installed for this long. 0 turns it off."),
@@ -173,7 +173,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "agent_security_alert_ids": ("Watched Security log event IDs", "Security log event IDs that alert, e.g. 4740 for an account lockout."),
     "agent_watch_services": ("Extra services to watch", "Windows or Linux services to watch on every server, as well as the ones Rollcall picks automatically."),
     "agent_ignore": ("Ignore everywhere", "Things to ignore on every server, e.g. a service, event or disk. Most ignores are easier to add with the Ignore buttons in the dashboard."),
-    "agent_auto_add": ("Add approved servers automatically", "When you approve an agent, add its computer to the dashboard straight away."),
+    "agent_auto_add": ("Add approved servers automatically", "When you approve an agent, add its device to the dashboard straight away."),
     "agent_ssl": ("Agent port uses HTTPS", "Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder."),
     "agent_certfile": ("Agent HTTPS certificate", "The certificate file in Home Assistant's /ssl folder."),
     "agent_keyfile": ("Agent HTTPS private key", "The certificate's private key file in Home Assistant's /ssl folder."),

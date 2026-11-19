@@ -19,7 +19,7 @@ This repository is public. Before posting logs, screenshots or examples, replace
 | Instead of your real… | Use |
 |---|---|
 | Domain | `CONTOSO`, `contoso.local`, `example.local` |
-| Computer names | `PC01`, `SRV01`, `DC01` |
+| Device names | `PC01`, `SRV01`, `DC01` |
 | Accounts | `jsmith`, `svc_backup`, `admin` |
 | Addresses | `192.168.1.x`, `10.0.1.x`, `server.example.local` |
 | Phone or SIP provider | `sip.provider.example` |

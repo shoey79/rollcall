@@ -103,7 +103,7 @@ ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
 AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
-SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a computer yet
+SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a device yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 SH_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.sh"  # OpenWrt / BusyBox: no Python needed
@@ -565,7 +565,7 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
 
 
 # --------------------------------------------------------------------------
-# Monitoring schedules: some computers are only meant to be on at certain times
+# Monitoring schedules: some devices are only meant to be on at certain times
 # --------------------------------------------------------------------------
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$|^24:00$")
@@ -617,7 +617,7 @@ def _grace_minutes(value, default: int = 15) -> int:
 
 
 def startup_until(h, now: float) -> float | None:
-    """While a scheduled or "whenever it's on" computer is starting up, the time its start-up
+    """While a scheduled or "whenever it's on" device is starting up, the time its start-up
     allowance ends (services and agent checks don't alert until then); otherwise None."""
     if h.maint_until or h.off_schedule or not h.sched_started:
         return None
@@ -1529,7 +1529,7 @@ class HomeAssistant:
 # --------------------------------------------------------------------------
 SECURITY_CHECKS = ("security", "defender", "secrets", "integrity", "domain", "vulns")  # emailed under "Security"
 TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
-NO_ACK = ("defender",)  # cleared on the computer itself (a threat removed), then the next report shows it
+NO_ACK = ("defender",)  # cleared on the device itself (a threat removed), then the next report shows it
 TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
                  "secrets": "passwords found up to then", "integrity": "changes to the agent's files up to then",
                  "domain": "privileged group changes up to then"}
@@ -1993,15 +1993,15 @@ class Monitor:
                 self.syslog_unknown.pop(min(self.syslog_unknown, key=lambda k: self.syslog_unknown[k]["last"]))
             u = self.syslog_unknown[ip] = {"ip": ip, "first": now, "count": 0, "held": []}
             log.info("Syslog from %s, which %s", ip, f"is {h.name} but Syslog isn't ticked for it" if h
-                     else "isn't a computer in Rollcall (yet)")
-        # Kept in memory for a while: a computer added by name isn't matched until its name has been
+                     else "isn't a device in Rollcall (yet)")
+        # Kept in memory for a while: a device added by name isn't matched until its name has been
         # looked up (just after a restart, or after its address changes), and these are filed then.
         u["held"] = (u["held"] + [(now, m)])[-SYSLOG_HELD:]
         u.update(count=u["count"] + 1, last=now, msg=m["msg"][:200], app=m["app"], sev=m["sev"], name=m["host"],
                  host_key=h.key if h else None)
 
     def _syslog_claim(self, ip: str, h: Host) -> None:
-        """This sender turned out to be a known computer: file what was held and stop listing it as unknown."""
+        """This sender turned out to be a known device: file what was held and stop listing it as unknown."""
         u = self.syslog_unknown.pop(ip, None)
         if not u:
             return
@@ -2273,7 +2273,7 @@ class Monitor:
             self.interval = int(self.opts["interval"])
             self.retry_interval = int(self.opts["retry_interval"])
             self.max_gap = max(self.interval, self.retry_interval) * 2 + 60
-            # Shorter intervals start now, rather than after each computer's current wait.
+            # Shorter intervals start now, rather than after each device's current wait.
             moved = 0
             for i, h in enumerate(list(self.hosts.values())):
                 if h.checking or not h.last_check:
@@ -2283,7 +2283,7 @@ class Monitor:
                 if due < h.next_due:
                     h.next_due, moved = due, moved + 1
             if moved:
-                notes.append(f"{moved} computer(s) will be checked sooner to match the new interval")
+                notes.append(f"{moved} device(s) will be checked sooner to match the new interval")
         if "service_timeout" in changed:
             self.svc_timeout = float(self.opts.get("service_timeout") or 5)
         if "log_level" in changed:
@@ -2295,7 +2295,7 @@ class Monitor:
         if {"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys():
             self._vf.clear()
             task = getattr(self, "_vulns_task", None)
-            if task:  # fetch what the new settings need now, then work every computer out again
+            if task:  # fetch what the new settings need now, then work every device out again
                 task.cancel()
                 self._vulns_task = asyncio.create_task(self.vulns_loop(first_wait=1, reeval=True))
         if "software_updates" in changed and bool(changed["software_updates"]) != bool(old.get("software_updates", True)):
@@ -2309,7 +2309,7 @@ class Monitor:
                       "agent_watch_services", "agent_ignore", "ups_runtime_warn_minutes", "ups_runtime_crit_minutes",
                       "ups_load_warn", "printer_supply_warn", "agent_secret_scan"}
         if thresholds & changed.keys():
-            notes.append("new limits apply from each computer's next check or agent report")
+            notes.append("new limits apply from each device's next check or agent report")
         return notes
 
     # -- scheduling -------------------------------------------------------
@@ -2356,7 +2356,7 @@ class Monitor:
     async def check(self, h: Host) -> None:
         try:
             if h.check_by == "agent":
-                # Up while its agent reports on time: for computers that report over the internet
+                # Up while its agent reports on time: for devices that report over the internet
                 # and can't be pinged. Late (more than 2 runs) is amber; past agent_stale_minutes, down.
                 now = time.time()
                 age = now - h.agent_seen if h.agent_seen else None
@@ -2390,7 +2390,7 @@ class Monitor:
                 pinged = ok
                 if pinged:
                     h.ping_seen = now
-                # Automatic: a computer whose agent reported in the last 10 minutes is up even if it
+                # Automatic: a device whose agent reported in the last 10 minutes is up even if it
                 # doesn't answer ping (e.g. a laptop reporting over the internet, or ICMP blocked).
                 h.via_agent = bool(not ok and h.check_by == "auto" and h.agent_id and h.agent_seen
                                    and now - h.agent_seen <= AGENT_FRESH)
@@ -2997,7 +2997,7 @@ class Monitor:
                                   f"{s.label} ({s.desc}) on {h.name} is responding again.", tag, cat=cat)
 
     def _quiet(self, tag: str | None) -> bool:
-        """Notifications for a computer set to never alert are dropped here, in one place.
+        """Notifications for a device set to never alert are dropped here, in one place.
         Every per-computer tag is ping_monitor_<key> or ping_monitor_<key>__<what>."""
         if not tag or not tag.startswith("ping_monitor_"):
             return False
@@ -3015,7 +3015,7 @@ class Monitor:
     async def notify(self, title: str, message: str, tag: str | None = None, critical: bool = False,
                      level: str | None = None, cat: str | None = None) -> None:
         """critical: sent to the Home Assistant app as a critical alert, which gets through a silenced
-        phone (a computer marked Critical, for problems only, never "back up").
+        phone (a device marked Critical, for problems only, never "back up").
         level, for email: red (emailed now), ok (back up), amber or event (in the daily summary), info.
         Left out, it's ok for a 🟢 title, info for ⬆️, else red."""
         if self._quiet(tag):
@@ -3160,7 +3160,7 @@ class Monitor:
                            f"wants to {what}. Approve or reject it in Rollcall, under Agents.")
 
     def same_computer(self, h: Host) -> Host | None:
-        """For an entry without an agent: another entry whose agent is on the same computer
+        """For an entry without an agent: another entry whose agent is on the same device
         (by name or address), e.g. one added for ping before the agent was installed."""
         if h.agent_id or not self.agents:
             return None
@@ -3349,7 +3349,7 @@ class Monitor:
 
     def secret_scan_config(self, agent: dict) -> dict:
         """What the agent is told: scan or not, extra folders, how often. The add-on option picks
-        which computers scan by default; each computer's details can turn it on or off."""
+        which devices scan by default; each device's details can turn it on or off."""
         h = self.hosts.get(agent.get("host_key") or "")
         hs = (self.agent_settings["hosts"].get(h.key) or {}).get("secret_scan") or {} if h else {}
         mode = hs.get("mode") or "default"
@@ -3515,7 +3515,7 @@ class Monitor:
         return vulnlib.os_key(r.get("os_id"), r.get("os_version_id")) if r.get("os_family") == "linux" else None
 
     def vuln_findings(self, h: Host) -> list | None:
-        """This computer's known vulnerabilities at or above the score (or known to be exploited), or
+        """This device's known vulnerabilities at or above the score (or known to be exploited), or
         None when it can't be checked (turned off, an older agent, a distro that isn't covered, no data)."""
         r = h.agent_report or {}
         if not self.opts.get("vuln_checks", True) or not h.agent_id or not r:
@@ -3545,7 +3545,7 @@ class Monitor:
         return vulnlib.msrc_family(str((h.agent_report or {}).get("os") or "")) == "server"
 
     def _vuln_why_not(self, h: Host) -> str:
-        """Why a computer isn't checked, for the check's detail."""
+        """Why a device isn't checked, for the check's detail."""
         r, f = h.agent_report or {}, self.vulnfeeds
         if r.get("os_family") == "linux":
             k = self._vuln_key(h)
@@ -3631,7 +3631,7 @@ class Monitor:
 
     async def vulns_loop(self, first_wait: float = 40, reeval: bool = False) -> None:
         """Keep the vulnerability data about a day old (each source is only fetched when it's due),
-        and work every computer out again when it changes."""
+        and work every device out again when it changes."""
         await asyncio.sleep(first_wait)
         while True:
             try:
@@ -3658,7 +3658,7 @@ class Monitor:
             await asyncio.sleep(3600)
 
     def software_search(self, q: str, include_security: bool = True) -> list:
-        """Every computer with software whose name or publisher contains q."""
+        """Every device with software whose name or publisher contains q."""
         q, out = q.strip().lower(), []
         for h in self.hosts.values():
             sw = self.software(h.agent_id) if h.agent_id else {}
@@ -3742,11 +3742,11 @@ class Monitor:
         return None
 
     # -- staged agent updates ---------------------------------------------
-    # A new agent version goes to one computer first (the pilot). Everyone else only gets it once
+    # A new agent version goes to one device first (the pilot). Everyone else only gets it once
     # the pilot has reported on the new version. If the pilot goes quiet after updating, the
     # rollout stops and admins are told, so a bad version can't silence every agent at once.
     ROLLOUT_WAIT = 20 * 60         # the pilot must report on the new version within this long of fetching it
-    ROLLOUT_REPICK = 60 * 60       # a pilot that never fetched it is swapped for another computer after this
+    ROLLOUT_REPICK = 60 * 60       # a pilot that never fetched it is swapped for another device after this
 
     def rollout(self, os_name: str, latest: str) -> dict:
         ro = self.agent_settings.setdefault("rollout", {})
@@ -3769,11 +3769,11 @@ class Monitor:
                 return False
             if not r.get("sent") and now - (r.get("chosen") or now) > self.ROLLOUT_REPICK:
                 r["skip"] = (r.get("skip") or []) + [r["pilot"]]
-                r["state"] = "waiting"  # the pilot never fetched it (switched off?): try another computer
+                r["state"] = "waiting"  # the pilot never fetched it (switched off?): try another device
         if r["state"] == "waiting":
             if agent["id"] in (r.get("skip") or []):
                 return False
-            # Prefer a server as the pilot; take any computer if no server has asked within 30 minutes
+            # Prefer a server as the pilot; take any device if no server has asked within 30 minutes
             ws = report.get("workstation") is True or agent.get("workstation") is True
             r.setdefault("waiting_since", now)
             if ws and now - r["waiting_since"] < 1800:
@@ -3798,7 +3798,7 @@ class Monitor:
     def _rollout_failed(self, os_name: str, r: dict) -> None:
         r["state"] = "failed"
         self._save_agent_settings()
-        msg = (f"{r.get('pilot_name') or 'The first computer'} hasn't reported since updating to {os_name.capitalize()} agent "
+        msg = (f"{r.get('pilot_name') or 'The first device'} hasn't reported since updating to {os_name.capitalize()} agent "
                f"{r['version']}, so the update has been stopped for the other agents. Check its agent log, then choose "
                f"Retry or Update the rest under Manage > Agents.")
         log.warning("%s agent %s update stopped: %s", os_name.capitalize(), r["version"], msg)
@@ -3859,7 +3859,7 @@ class Monitor:
         return sections, summary
 
     def rollout_watch(self, now: float) -> None:
-        """Once a minute: stop a rollout whose first computer went quiet after updating, even when
+        """Once a minute: stop a rollout whose first device went quiet after updating, even when
         no other agent of that kind is left to ask for the update (e.g. only one agent)."""
         for os_name, r in list((self.agent_settings.get("rollout") or {}).items()):
             if r.get("state") == "testing" and r.get("sent") and now - r["sent"] > self.ROLLOUT_WAIT:
@@ -3983,7 +3983,7 @@ class Monitor:
             log.warning("Couldn't save the network scan: %s", err)
 
     def known_addresses(self) -> dict[str, str]:
-        """Every address a computer in Rollcall uses, mapped to its key."""
+        """Every address a device in Rollcall uses, mapped to its key."""
         out: dict[str, str] = {}
         for h in self.hosts.values():
             for a in [h.ip, h.host] + [x for s in h.services for x in (s.resolved, s.target) if x]:
@@ -4065,7 +4065,7 @@ class Monitor:
             del seen[:-100]
             changed = True
             # A backup result is a fact about a run that happened, so it's sent even outside the
-            # computer's schedule (a backup server that's only on overnight); only a pause holds it back.
+            # device's schedule (a backup server that's only on overnight); only a pause holds it back.
             if h.maint_until:
                 continue
             kind = "Microsoft 365 " if j.get("source") == "Microsoft 365" else ""
@@ -4167,7 +4167,7 @@ class Monitor:
         else:
             sv = next((s for s in h.agent_checks if s.key == f"agent_{check}"), None)
             if check in NO_ACK:
-                raise ValueError("that's cleared on the computer itself, e.g. a threat Defender has to remove")
+                raise ValueError("that's cleared on the device itself, e.g. a threat Defender has to remove")
             if check in TIME_ACK_KINDS or check == "agent" or not sv or sv.status not in (AMBER, RED):
                 raise ValueError("that check has nothing to acknowledge")
             acks[check] = {"status": sv.status, "at": time.time(), "by": who or "", "detail": sv.detail[:300]}
@@ -4305,7 +4305,7 @@ class Monitor:
         return True
 
     async def _agent_host_ip(self, h: Host) -> str:
-        """The IP column for a computer checked by its agent (it isn't pinged): the address if
+        """The IP column for a device checked by its agent (it isn't pinged): the address if
         it's already an IP, else a DNS lookup of it, else the first address the agent reports."""
         try:
             return str(ipaddress.ip_address(h.host))
@@ -4668,7 +4668,7 @@ class Monitor:
                 size, free = float(d.get("size_gb") or 0), float(d.get("free_gb") or 0)
             except (TypeError, ValueError):
                 continue
-            if size < 0.5:
+            if size <= 0 or (size < 0.5 and r.get("agent_kind") != "sh"):  # small ones only from routers (their flash)
                 continue
             name = str(d.get("name") or "disk")
             letter = "root" if name == "/" else slugify(name)
@@ -5249,7 +5249,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return web.json_response({"name": h.name, "device_id": h.ha_device, "device_name": h.ha_device_name, "data": h.ha_data})
 
     async def host_ha_action(req):
-        """Press a button or turn a switch on or off on the device linked to this computer. Only its
+        """Press a button or turn a switch on or off on the device linked to this device. Only its
         own buttons and switches, as Rollcall last read them, can be used."""
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -5304,7 +5304,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return web.json_response({"ok": True, "item": item, "scope": scope})
 
     async def host_merge(req):
-        """Move the agent from another entry for the same computer onto this one, and remove that entry."""
+        """Move the agent from another entry for the same device onto this one, and remove that entry."""
         h = monitor.hosts.get(req.match_info["key"])
         try:
             body = await req.json()
@@ -5314,7 +5314,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not h or not other or other is h:
             raise web.HTTPNotFound()
         if monitor.same_computer(h) is not other:
-            return web.json_response({"error": f"{other.name} doesn't look like the same computer as {h.name}"}, status=400)
+            return web.json_response({"error": f"{other.name} doesn't look like the same device as {h.name}"}, status=400)
         user = await access.who(req)
         try:
             await monitor.merge_agent_into(h, other, user.get("display"))
@@ -5627,7 +5627,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         r = monitor.rollout(os_name, latest)
         if action == "go":
             r.update(state="ok", done=time.time())
-        else:  # try again, on a different computer
+        else:  # try again, on a different device
             r.update(state="waiting", skip=(r.get("skip") or []) + ([r["pilot"]] if r.get("pilot") else []),
                      pilot=None, pilot_name=None, chosen=None, sent=None, waiting_since=time.time())
         monitor._save_agent_settings()
@@ -5720,12 +5720,12 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             raise web.HTTPBadRequest(text="expected JSON")
         keys = body.get("keys") if isinstance(body, dict) else None
         if not isinstance(keys, list) or not keys or len(keys) > 1000:
-            raise web.HTTPBadRequest(text="keys must be a list of computers")
+            raise web.HTTPBadRequest(text="keys must be a list of devices")
         hosts = [monitor.hosts[k] for k in dict.fromkeys(str(k) for k in keys) if str(k) in monitor.hosts]
         return hosts, body
 
     async def maintenance_bulk(req):
-        """Pause several computers at once, e.g. everything in a tab."""
+        """Pause several devices at once, e.g. everything in a tab."""
         hosts, body = await _bulk_hosts(req)
         try:
             minutes = int(body.get("minutes") if body.get("minutes") is not None else monitor.opts["maintenance_minutes"])
@@ -5735,7 +5735,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             raise web.HTTPBadRequest(text="minutes must be between 1 and 1440")
         for h in hosts:
             await monitor.start_maintenance(h, minutes)
-        log.info("Paused %d computer(s) together for %d min", len(hosts), minutes)
+        log.info("Paused %d device(s) together for %d min", len(hosts), minutes)
         return web.json_response({"paused": [h.key for h in hosts]})
 
     async def resume_bulk(req):

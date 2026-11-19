@@ -1,4 +1,4 @@
-"""A Home Assistant device linked to a Rollcall computer: its entities as they are now, and what
+"""A Home Assistant device linked to a Rollcall device: its entities as they are now, and what
 Rollcall makes of them. Integrations Rollcall knows (Pi-hole so far) get headline tiles and
 alerts; any other device gets its entities listed, an alert if Home Assistant has lost touch with
 it, and any "problem" binary sensors that are on."""

@@ -258,6 +258,9 @@ def normalize_report(r) -> dict:
     svc = r["services"] = _as_dict(r.get("services"))
     for k in ("watched", "stopped_auto"):
         svc[k] = [x for x in _as_list(svc.get(k)) if isinstance(x, dict)]
+        for x in svc[k]:  # Windows agent 1.0.48+: Automatic (Delayed Start)
+            if "delayed" in x:
+                x["delayed"] = x.get("delayed") is True
     ev = r["events"] = _as_dict(r.get("events"))
     ev["counts"] = {k: _as_dict(v) for k, v in _as_dict(ev.get("counts")).items()}
     ev["recent"] = [x for x in _as_list(ev.get("recent")) if isinstance(x, dict)]
@@ -815,7 +818,7 @@ def laps_state(laps: dict, now: float, overdue_days: float = 3) -> tuple[str, st
     if laps.get("account_found") is False:
         problems.append((WARN, f"managed account '{laps.get('account') or 'built-in Administrator'}' not found"))
     if laps.get("expires") == "" and laps.get("backup") == "Active Directory":
-        problems.append((WARN, "no LAPS password in Active Directory yet (not backed up, or the computer can't write it)"))
+        problems.append((WARN, "no LAPS password in Active Directory yet (not backed up, or the device can't write it)"))
     if laps.get("last_error"):
         problems.append((WARN, "last LAPS run failed: " + str(laps["last_error"]).split("\n")[0][:160]))
     level, detail = OK, ""
@@ -840,7 +843,7 @@ BITLOCKER_REQUIRE = ("off", "workstations", "all")
 
 
 def bitlocker_skip(bl: dict, workstation: bool, require: str = "workstations", virtual: str = "") -> str:
-    """Why a computer gets no BitLocker check ('' if it does, or might): virtual machines never do,
+    """Why a device gets no BitLocker check ('' if it does, or might): virtual machines never do,
     and one that doesn't use BitLocker is only expected to when require covers it and it has a TPM."""
     if virtual:
         return "virtual"
@@ -857,7 +860,7 @@ def bitlocker_state(bl: dict, workstation: bool, require: str = "workstations", 
                     pending_reboot: bool = False, virtual: str = "") -> tuple[str, str] | None:
     """(level, detail) for BitLocker on the fixed drives, or None when there's nothing to check.
 
-    Virtual machines aren't checked. A physical computer that doesn't use BitLocker only gets the
+    Virtual machines aren't checked. A physical device that doesn't use BitLocker only gets the
     check when encryption is expected of it (require = "workstations", the default, for Windows 10/11;
     "all" for servers too; or "off") and it has a TPM to use. One that does use BitLocker is always
     checked: every fixed drive encrypted with protection on, and a recovery password on the Windows
@@ -871,7 +874,7 @@ def bitlocker_state(bl: dict, workstation: bool, require: str = "workstations", 
         drives = ", ".join(v["drive"] for v in vols)
         tpm = bl.get("tpm") or {}
         has = "TPM" + (f" {tpm['version']}" if tpm.get("version") else "") + (" (turned off)" if tpm.get("enabled") is False else "")
-        return WARN, f"Not encrypted: {drives} (BitLocker is off, though this computer has a {has})"
+        return WARN, f"Not encrypted: {drives} (BitLocker is off, though this device has a {has})"
     problems, notes = [], []
     for v in vols:
         d, st = v["drive"], v["status"]
@@ -905,7 +908,7 @@ def _cap(s: str) -> str:
 
 def cert_store_state(certs: list[dict], now: float, warn_days: int = 30, crit_days: int = 7,
                      ign: "Ignore | None" = None) -> tuple[str, str, dict] | None:
-    """(level, detail, info) for the certificates in the computer's own stores, or None if there are none.
+    """(level, detail, info) for the certificates in the device's own stores, or None if there are none.
 
     info["states"] maps each thumbprint to (state, text) for the Details table. A certificate that a newer,
     valid one with the same name has replaced doesn't count (renewal leaves the old one behind), and nor
@@ -1066,6 +1069,7 @@ def _dur(s: int | None) -> str:
     return f"{s // 86400} d" if s >= 86400 else f"{s // 3600} h" if s >= 3600 else f"{max(1, s // 60)} min"
 
 
+DELAYED_START_GRACE = 300  # seconds after Windows starts before a delayed-start service counts as stopped
 IPV6_ONLY = ("dhcpv6", "6in4", "6to4", "6rd")
 
 
@@ -1487,21 +1491,28 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     linux = report.get("os_family") == "linux"
     svc = report.get("services") or {}
     watched = [s for s in svc.get("watched") or [] if not ign.has("service", s.get("name"))]
-    down = [s for s in watched if s.get("state") != "Running"]
-    other = [s for s in svc.get("stopped_auto") or [] if not ign.has("service", s.get("name"))]
+    # Windows starts Automatic (Delayed Start) services a couple of minutes after it starts, so they
+    # don't count as stopped until it's been up for DELAYED_START_GRACE.
+    up = report.get("uptime_s")
+    starting = (lambda s: s.get("delayed") is True and isinstance(up, (int, float)) and 0 <= up < DELAYED_START_GRACE)
+    down = [s for s in watched if s.get("state") != "Running" and not starting(s)]
+    other = [s for s in svc.get("stopped_auto") or [] if not ign.has("service", s.get("name")) and not starting(s)]
+    waiting = [s for s in watched if s.get("state") != "Running" and starting(s)]
+    running = (f"{len(watched) - len(waiting)} of {len(watched)} watched services running; still starting after a restart "
+               "(delayed start): " + ", ".join(s.get("display") or s.get("name") for s in waiting)) if waiting else \
+              f"All {len(watched)} watched services running"
     if down:
         checks.append(_check("services", "Services", CRIT,
                              "Stopped: " + ", ".join(s.get("display") or s.get("name") for s in down),
                              confirm=True))
     elif other:
-        checks.append(_check("services", "Services", WARN,
-                             f"All {len(watched)} watched services running. "
+        checks.append(_check("services", "Services", WARN, running + ". "
                              + ("Failed systemd units: " if linux else "Other automatic services stopped: ")
                              + ", ".join(s.get("display") or s.get("name") for s in other[:8])
                              + (f" and {len(other) - 8} more" if len(other) > 8 else "")))
     else:
         checks.append(_check("services", "Services", OK,
-                             f"All {len(watched)} watched services running" if watched else
+                             running if watched else
                              ("No failed systemd units" if linux else "No stopped automatic services")))
 
     # Updates: reboot pending or not patched for a while.
