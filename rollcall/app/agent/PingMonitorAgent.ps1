@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.48'
+$AgentVersion = '1.0.49'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -102,8 +102,10 @@ function Add-CollectorError([string]$Collector, $Err) {
 }
 
 $script:Timings = [ordered]@{}
+$script:StepFile = $null  # set once a run has the lock: which step it's on, so a stuck run can be explained
 function Measure-Step([string]$Name, [scriptblock]$Block) {
     # Runs one part of the collection and records how long it took (ms).
+    if ($script:StepFile) { try { [IO.File]::WriteAllText($script:StepFile, "$Name`t$((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))") } catch { } }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try { return (& $Block) }
     finally { $script:Timings[$Name] = [int]$sw.ElapsedMilliseconds }
@@ -2927,6 +2929,64 @@ function Invoke-AgentUpdate($State, $Offer) {
     Write-AgentLog "Updated the agent from $AgentVersion to $($Offer.version); the new version runs from the next report"
 }
 
+function Get-RunLock([string]$Name = 'Global\RollcallAgentRun') {
+    # $true once this run holds the one-run-at-a-time lock; $false if another run has it.
+    # The scheduled task runs as SYSTEM, and a lock made with Windows' defaults would be SYSTEM's alone, so
+    # running the script by hand meanwhile failed with "Access to the path 'Global\RollcallAgentRun' is
+    # denied". So it's made for any signed-in user to wait on; one left by an older agent that still can't
+    # be opened means a run as SYSTEM is going.
+    $m = $null
+    try {
+        $sec = New-Object Security.AccessControl.MutexSecurity
+        foreach ($r in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-11', 'Synchronize, Modify'))) {
+            $sec.AddAccessRule((New-Object Security.AccessControl.MutexAccessRule((New-Object Security.Principal.SecurityIdentifier $r[0]), [Security.AccessControl.MutexRights]$r[1], 'Allow')))
+        }
+        $created = $false
+        $m = [Threading.Mutex]::new($false, $Name, [ref]$created, $sec)  # Windows PowerShell 5.1
+    } catch { $m = $null }
+    if (-not $m) { try { $m = [Threading.Mutex]::OpenExisting($Name, [Security.AccessControl.MutexRights]'Synchronize, Modify') } catch { $m = $null } }
+    if (-not $m) { try { $m = New-Object Threading.Mutex($false, $Name) } catch { return $false } }  # PowerShell 7: none yet
+    $got = $true
+    try { $got = $m.WaitOne(0) } catch { $got = $true }  # abandoned by an earlier run that ended without letting go: ours now
+    if (-not $got) { $m.Dispose(); return $false }
+    $script:RunLock = $m
+    return $true
+}
+
+$StuckMinutes = 20  # a run going longer than this is stuck (they normally take seconds, at most a few minutes)
+
+function Get-AgentProcess {
+    # Other PowerShell processes running this agent (the installed copy, or one run by hand from a console)
+    try {
+        @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction Stop |
+            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'PingMonitorAgent\.ps1' })
+    } catch { @() }
+}
+
+function Stop-AgentProcess($Processes) {
+    foreach ($p in @($Processes)) { try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { } }
+    if (@($Processes).Count) { Start-Sleep -Milliseconds 500 }
+}
+
+function Stop-StuckRun([int]$Minutes = $StuckMinutes) {
+    # A run that hangs (a check that never answers) would hold the lock, and Windows lets a scheduled
+    # task run for 72 hours, so every later run would skip and the device would stop reporting. Stop it,
+    # say which step it was stuck on, and carry on. $true if one was stopped.
+    $old = @(Get-AgentProcess | Where-Object { $_.CreationDate -and $_.CreationDate -lt (Get-Date).AddMinutes(-$Minutes) })
+    if (-not $old.Count) { return $false }
+    $since = ($old | Sort-Object CreationDate | Select-Object -First 1).CreationDate
+    $at = ''
+    try {
+        $step = (Get-Content -LiteralPath (Join-Path $DataPath 'run-step.txt') -Raw -ErrorAction Stop).Trim() -split "`t"
+        if ($step[0]) { $at = " at step '$($step[0])'" }
+    } catch { }
+    Stop-AgentProcess $old
+    $msg = "agent: stopped a run stuck$at since {0} ({1} min)" -f $since.ToString('yyyy-MM-dd HH:mm'), [int]((Get-Date) - $since).TotalMinutes
+    [void]$script:Errors.Add($msg)
+    Write-AgentLog "WARN $msg"
+    return $true
+}
+
 function Invoke-AgentRun([switch]$ReportOnly) {
     if ($Server -like '__PM_*' -or $EnrolKey -like '__PM_*') {
         throw 'This copy of the script has no add-on address or enrolment key. Download it from the Rollcall dashboard (Agents), or pass -Server and -EnrolKey.'
@@ -2949,10 +3009,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $extra = @($ExtraServices) + @($state.watch) | Where-Object { $_ } | Select-Object -Unique
     if (-not ($ReportOnly -or $ShowReport)) {
         # One run at a time (the start-up run and the regular one can meet just after a restart)
-        $script:RunLock = New-Object Threading.Mutex($false, 'Global\RollcallAgentRun')
-        $got = $true
-        try { $got = $script:RunLock.WaitOne(0) } catch { $got = $true }  # abandoned by an earlier run that ended: it's ours now
-        if (-not $got) { Write-AgentLog 'Another run is still going; skipped this one'; return }
+        if (-not (Get-RunLock) -and -not ((Stop-StuckRun) -and (Get-RunLock))) { Write-AgentLog 'Another run is still going; skipped this one'; return }
+        $script:StepFile = Join-Path $DataPath 'run-step.txt'
         Wait-Network
         if ($script:Route) { $script:RouteSide = Get-RouteSide $script:Route }  # the network may have changed while waiting
     }
@@ -3048,6 +3106,7 @@ function Install-Agent {
         [IO.File]::WriteAllText($dest, $SelfText, (New-Object Text.UTF8Encoding $true))
     }
     if (-not (Test-Path $dest)) { throw "Couldn't save the agent to $dest" }
+    $null = Stop-StuckRun  # a stuck earlier run would keep the new one waiting (a healthy one is left to finish)
     $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$dest`""
     if ($IgnoreCertificate) { $cmd += ' -IgnoreCertificate' }
     & schtasks.exe /Create /TN $TaskName /TR $cmd /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F | Out-Null
@@ -3079,6 +3138,7 @@ function Register-StartupTask {
 
 function Uninstall-Agent {
     & schtasks.exe /Delete /TN $TaskName /F 2>$null | Out-Null
+    Stop-AgentProcess (Get-AgentProcess)  # a run still going (or stuck) would otherwise carry on, holding the lock
     $ErrorActionPreference = 'Continue'
     $null = & schtasks.exe /Delete /TN "$TaskName (start-up)" /F 2>&1  # may not exist
     $ErrorActionPreference = 'Stop'
