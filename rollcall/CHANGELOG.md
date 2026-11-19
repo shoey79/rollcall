@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.92.0 - 2026-11-19
+
+### Added
+- **Resources check: memory and CPU on every agent** (Windows, Linux and the OpenWrt router agent). Memory is amber at 90% used and red, with an alert, at 95% (two reports in a row). CPU is amber when it's 90% or more in each of the last 3 reports, about 15 minutes, so one spike doesn't count; it's never red. Routers are also amber when the 15-minute load is above their number of CPU cores. Each device can have its own limits, or the check turned off, under **Change** in Details (System), and the defaults are in Settings (`agent_memory_warn`, `agent_memory_crit`, `agent_cpu_warn`, `agent_cpu_reports`). Memory isn't checked on SQL Server and Exchange servers, which keep most of the memory for themselves, unless the device has its own limits.
+- **Searching from the Overview** opens a temporary **Search** tab with every matching device; clear the search, or × on the tab, to go back. The search box now shows on the Overview too.
+- **Microsoft Defender's last quick and full scans** in Details (Windows agent 1.0.52).
+- **Icons in the Manage menu.**
+
+### Changed
+- **The device form is tidier.** The explanations next to the boxes are now an **i** that shows them on hover or tap. **Other addresses** comes straight after the address, then **Upstream device** and **Group** side by side, then the icon, make and model. Each section has a heading and a line above it. **Home Assistant** is one section with two tick boxes, **Link a Home Assistant device** and **Add Home Assistant sensors as checks**, that open their searches when ticked. The **Custom checks** help is an **i** too, reworded with an example of each kind.
+- **Details is easier to scan:** a heavier line between sections than between rows in a table, and bolder section headings. **Group Policy** and **Time** have moved from Roles to a new **Domain** tab. On the Agent tab, **Agent run** comes before **Ignored on this server**. The boxes in Details (e.g. the password scan settings) match the rest of the dashboard in dark mode.
+- **Agent files** now says it in one line: who changed the folder's permissions and when the agent reset them, e.g. *changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov*. The full list is under **What the agent found**.
+
+### Fixed
+- **A device that's off no longer shows people signed in.** While it's down, off schedule or its agent has stopped reporting, Details says nobody is signed in (or not known), and the **Signed-in user** line under the name says nobody, instead of showing who was signed in at its last report.
+- **"Up for 2 days (since —)"** when an agent doesn't send its start time: the time is worked out from the uptime.
+
+### Agents
+- **Windows agent 1.0.52:** reports Defender's last quick and full scan times. Installed agents update themselves if automatic updates are on.
+- **OpenWrt router agent 1.0.2:** reports its number of CPU cores, for the load check. The router agent doesn't update itself: download it again from **Manage → Agents** and run `--install` on the router.
+
 ## 1.91.1 - 2026-11-19
 
 ### Fixed
