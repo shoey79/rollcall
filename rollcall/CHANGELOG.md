@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.90.0 - 2026-11-19
+
+### Added
+- **Jellyfin tab in Details**, for any device with the Jellyfin check, with or without an agent (before, Jellyfin only showed on the Overview of a device without one). It shows what's playing: who, on which app and device, what, how far through and whether it's paused, and whether it's played directly or transcoded, and if so to what and why (e.g. *video codec not supported*). Also the server's version and health, users active in the last 15 minutes, plugins that aren't active, how many movies, series, episodes, albums, songs and books the library has, and failed scheduled tasks.
+- **Plex tab and check** (preset **Plex (token)**, `plex-api`), the same as Jellyfin's: what's playing and by whom (app and device, remote or at home, progress, paused), and whether it's played directly, direct streamed or transcoded, and what's being converted. Also the server's version, an update waiting (amber, no alert), what Plex is busy with (e.g. a library scan) and each library's size. Enter a Plex token under Edit; it's only ever sent to that Plex server.
+- **Jellyfin: why a restart is pending.** Jellyfin asks for a restart when a plugin is waiting to update, failed to load or isn't supported by its version, and a server restart doesn't clear that. The check now names it, e.g. *restart pending (LDAP Authentication: failed to load)*.
+
 ## 1.89.0 - 2026-11-19
 
 ### Added
