@@ -173,6 +173,9 @@ configuration:
   agent_secret_scan:
     name: Scan for passwords left in files
     description: Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details.
+  ip_ranges:
+    name: Named IP ranges
+    description: "Names for parts of your network, shown next to each device's address, e.g. Servers=10.0.1.0/24 or IoT=192.168.20.10-200. A range can be a subnet, a span (10.0.1.10-50) or end in a wildcard (10.0.1.*); separate several with commas. Where ranges overlap, the smallest one wins."
   name_line:
     name: Line under each name
     description: What the dashboard shows under each computer's name, unless the computer has its own choice. "auto" shows the make and model, or else the operating system.

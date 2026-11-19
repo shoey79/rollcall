@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Upstream devices** ([#13](https://github.com/shoey79/rollcall/issues/13), thanks to [tomvining](https://github.com/tomvining) for the request). Give a device the router, switch or VPN it's reached through (Edit, **Upstream device**). While that's down, the devices behind it show as **Unreachable** instead of Down and don't alert on their own: one alert for the upstream device lists what may also be affected. A device that goes red before its upstream device has been checked waits (up to 3 minutes) while that's checked straight away, so the order checks happen in doesn't matter. Works through several levels, and loops are refused.
+- **Jellyfin health (API key)** (`jellyfin-api`), read by the add-on: red when Jellyfin stops answering or is unhealthy; amber, without an alert, for a pending restart, an update, a failed scheduled task (e.g. a library scan) or a degraded server; and the version and number of active streams. The key is never shown again and only ever sent to that Jellyfin server.
+- **Named IP ranges** (Settings, Display, `ip_ranges`), e.g. `Servers=10.0.1.0/24` or `IoT=192.168.20.10-200`: the range's name shows under each device's address, in Details and as the sensor's `ip_range` attribute.
+
+### Changed
+- **Windows agent 1.0.47: the start-up run waits for the network.** Run a minute after Windows starts, it now waits up to 3 minutes for Rollcall to be reachable, so a restart is still reported straight away on computers whose network takes longer to come up.
+
 ## 1.87.0 - 2026-11-17
 
 ### Added

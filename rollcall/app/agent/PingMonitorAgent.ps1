@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.46'
+$AgentVersion = '1.0.47'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -2796,6 +2796,31 @@ function Get-ServerList {
     return $all
 }
 
+# Just after Windows starts (the start-up run, a minute after boot), the network can take a while longer:
+# DHCP, the domain network profile, a VPN. Rather than failing that run (and Rollcall only hearing about
+# the restart at the next one, up to 5 minutes later), wait up to 3 minutes for Rollcall to be reachable.
+# Any other time, and once it answers, this returns at once.
+function Wait-Network([int]$MaxSeconds = 180, [int]$BootWindow = 600) {
+    try { $upFor = ((Get-Date) - [DateTime](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime).TotalSeconds } catch { return }
+    if ($upFor -gt $BootWindow) { return }
+    $servers = @(Get-ServerList)
+    $started = Get-Date
+    while ($true) {
+        foreach ($srv in $servers) {
+            if (Test-Reachable $srv 2000) {
+                $waited = [int]((Get-Date) - $started).TotalSeconds
+                if ($waited -ge 5) { Write-AgentLog "Network ready $waited s into the start-up run" }
+                return
+            }
+        }
+        if (((Get-Date) - $started).TotalSeconds -ge $MaxSeconds) {
+            Write-AgentLog "WARN Still can't reach Rollcall $MaxSeconds s after starting ($([int]$upFor) s after Windows started); trying anyway"
+            return
+        }
+        Start-Sleep -Seconds 10
+    }
+}
+
 function Test-Reachable([string]$Url, [int]$Ms = 3000) {
     # Quick TCP check, so an address that can't be reached from here doesn't hold up the run.
     try {
@@ -2919,6 +2944,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         $got = $true
         try { $got = $script:RunLock.WaitOne(0) } catch { $got = $true }  # abandoned by an earlier run that ended: it's ours now
         if (-not $got) { Write-AgentLog 'Another run is still going; skipped this one'; return }
+        Wait-Network
+        if ($script:Route) { $script:RouteSide = Get-RouteSide $script:Route }  # the network may have changed while waiting
     }
     $report = Get-Report $state $extra
     if ($ReportOnly -or $ShowReport) { $report | ConvertTo-Json -Depth 10; return }

@@ -27,7 +27,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every computer a
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding computers, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, linked Home Assistant devices
+4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, linked Home Assistant devices, upstream devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
@@ -334,6 +334,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | **Media** | | |
 | `plex` | Plex | http:32400/identity |
 | `jellyfin` | Jellyfin | http:8096/health |
+| `jellyfin-api` | Jellyfin health (API key) | version, restart, updates, failed tasks and streams; see [Jellyfin](#jellyfin) |
 | `emby` | Emby | http:8096/emby/System/Info/Public |
 | `immich` | Immich | http:2283/api/server/ping |
 | `audiobookshelf` | Audiobookshelf | http:13378/ |
@@ -558,6 +559,29 @@ For HPE servers with **iLO 3** or **iLO 4**, Rollcall can log in to the iLO and 
 - If the iLO turns the user name or password down, the check goes amber and Rollcall waits 30 minutes before trying again, so the iLO's log doesn't fill with failed logins.
 - iLO 2 and earlier, and iLO 5 and later, aren't supported by this check. The `idrac` preset (or `ilo`) still checks that any management controller's web page answers.
 
+### Jellyfin
+
+The `jellyfin` preset only checks that Jellyfin's `/health` page answers. For more, tick **Jellyfin health (API key)** (`jellyfin-api`) and enter an API key, made in Jellyfin under **Dashboard → API Keys**. Rollcall itself reads Jellyfin at each check (no agent needed):
+
+- **Red, with an alert:** Jellyfin doesn't answer, says it's *Unhealthy*, or is shutting down. Like a port check, it's amber at the first miss and red if it's still failing at the next check.
+- **Amber, never an alert:** a **restart pending**, an **update available**, a **failed scheduled task** (e.g. *Scan Media Library*: its last run *Failed* or was *Aborted*), or health *Degraded*. Run the task again in Jellyfin to clear it.
+- It always shows the **version** and how many **streams** are playing (and how many are being transcoded), e.g. *Jellyfin 10.10.7; 2 streams (1 transcoding)*. Transcoding never alerts. The **Jellyfin** section of Details lists failed tasks with when they ended and their error.
+- **Updates:** Jellyfin 10.9 and later no longer check for updates themselves, so Rollcall also looks up Jellyfin's latest release on GitHub every 12 hours. That request carries nothing about your server.
+- **The address** is `http://<the device's address>:8096` unless you set another, e.g. `https://media.example.local` behind a reverse proxy.
+- **The key** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Jellyfin's `Authorization: MediaBrowser Token="…"` header. Redirects aren't followed, so it can't be passed on. Change the address to a different server and the key is cleared, so it has to be entered again. If Jellyfin turns the key down, the check goes amber and says so.
+- Endpoints used: `/health`, `/System/Info`, `/ScheduledTasks` and `/Sessions` (all read-only).
+
+### Upstream devices
+
+A device can have an **Upstream device** (Edit, under Group): what it's reached through, such as the router at a branch office, a switch, or a VPN firewall. While the upstream device is down, the devices behind it show as **Unreachable** (a striped dot) rather than Down, and don't alert on their own: you get **one** alert, for the upstream device, that lists what's behind it, e.g. *Branch router is DOWN … Devices behind it may also be affected (3): PC01, PC02, Switch.*
+
+- It works through several levels, e.g. PC → switch → router: everything behind the router that's down counts as unreachable, and says which device is the cause.
+- The devices behind it don't have to be checked after the upstream device. If one goes red first, its alert waits (*Checking Branch router before alerting*) while Rollcall checks the upstream device straight away. If that's fine, the alert goes out, saying the upstream device is answering; if it's down too, the device becomes Unreachable. It never waits more than 3 minutes.
+- When the upstream device comes back, the devices behind it are checked again at once. Those that never alerted don't send a "back up" either. One that's still down then gets its own down alert.
+- An upstream device that's paused, or off schedule, and not answering counts as down for this.
+- Unreachable devices are listed last on the Overview, counted separately in the summary (**Unreachable**), and still count as down for uptime. Their sensors keep the state `red`, with `unreachable: true` and `upstream_device` attributes, and the `ping_monitor_status_changed` event has `unreachable` and `upstream`, so automations can tell them apart.
+- A device can't be upstream of something that's upstream of it. Deleting an upstream device clears it from the devices behind it.
+
 ### Linked Home Assistant devices
 
 If Home Assistant already has an integration for a device, link its Home Assistant device and Rollcall reads all of the integration's entities, with no extra passwords. In **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. To remove it, choose **Unlink**.
@@ -601,7 +625,7 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 
    If the same computer has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same computer as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
 
-**What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
+**What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. After its first report it adds a second task, **Ping Monitor Agent (start-up)**, that runs a minute after Windows starts, so a restart shows straight away. From agent 1.0.47 that start-up run waits up to 3 minutes for Rollcall to be reachable (DHCP, the domain network or a VPN can take longer than a minute), rather than giving up until the next 5-minute run. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
 
 | Switch | Does |
 |---|---|
@@ -1367,6 +1391,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
 | `agent_secret_scan` | off | Which computers look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
+| `ip_ranges` | `[]` | Names for parts of your network, shown next to each device's address and in Details, e.g. `Servers=10.0.1.0/24`, `IoT=192.168.20.10-200`, `Workstations=10.0.2.*`. Several ranges can share a name (`Servers=10.0.1.0/24, 10.0.3.0/24`); where they overlap, the smallest wins. The search box matches them too |
 | `name_line` | auto | What the list shows under each name, unless a computer has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
 | `agent_event_alerts` | true | Alert on watched System-log events |
@@ -1394,7 +1419,7 @@ The dashboard itself uses Home Assistant's ingress, with no port of its own.
 
 ### What it creates in Home Assistant
 
-**Computer sensors:** `sensor.ping_monitor_<name>`, with state `green` / `amber` / `degraded` / `red` / `maintenance`, and attributes `ip`, `host`, `uptime_24h`, `latency_ms`, `consecutive_failures`, `last_check`, `last_change`, `maintenance_until`, `services` (each check's status), `off_schedule` and `schedule`.
+**Computer sensors:** `sensor.ping_monitor_<name>`, with state `green` / `amber` / `degraded` / `red` / `maintenance`, and attributes `ip`, `ip_range`, `host`, `upstream_device`, `unreachable`, `uptime_24h`, `latency_ms`, `consecutive_failures`, `last_check`, `last_change`, `maintenance_until`, `services` (each check's status), `off_schedule` and `schedule`.
 
 **Check sensors:** `sensor.ping_monitor_<name>_<check>` (e.g. `sensor.ping_monitor_sql01_sql`), with state `green` / `amber` / `red` / `unknown`, and attributes `target`, `detail` (e.g. `HTTP 503`, `connection refused`), `uptime_24h`, `latency_ms`, `last_check` and `last_change`.
 
@@ -1402,7 +1427,7 @@ The dashboard itself uses Home Assistant's ingress, with no port of its own.
 
 All sensors are refreshed every 60 seconds, so they come back within a minute of a Home Assistant restart. They're pushed through the API, so they can't be renamed or given an area in the UI.
 
-**Events:** `ping_monitor_status_changed` on every computer status change (`name`, `host`, `ip`, `old_status`, `new_status`, `entity_id`), and `ping_monitor_service_changed` on every check change (adds `service`, `target`, `detail`, `host_entity_id`). For example:
+**Events:** `ping_monitor_status_changed` on every computer status change (`name`, `host`, `ip`, `old_status`, `new_status`, `entity_id`, `unreachable`, `upstream`), and `ping_monitor_service_changed` on every check change (adds `service`, `target`, `detail`, `host_entity_id`). For example:
 
 ```yaml
 automation:

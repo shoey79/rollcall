@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+import iprange
+
 GROUPS = [
     ("checks", "Checking"),
     ("alerts", "Notifications"),
@@ -90,6 +92,7 @@ _SPEC: dict[str, tuple] = {
     "agent_security_alert_ids": ("logs", "ints", (1, 65535)),
     "agent_failed_logons": ("logs", "int", (1, 100000)),
     "name_line": ("display", "choice", ("auto", "model", "os", "address", "user", "none")),
+    "ip_ranges": ("display", "strs", None),
     "log_level": ("display", "choice", ("debug", "info", "warning", "error")),
     "agent_ssl": ("agent_port", "bool", None),
     "agent_certfile": ("agent_port", "file", None),
@@ -158,6 +161,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "vuln_min_score": ('Vulnerability score to alert on (CVSS)', 'Vulnerabilities scoring this much or more out of 10 go amber. 9 means "critical"; 7 includes "high" too. Known-exploited ones always count.'),
     "vuln_linux_source": ('Linux vulnerability data', '"local": download each distro\'s data from OSV.dev daily and match it here, so nothing about your computers is sent anywhere (larger downloads). "online": send OSV.dev one combined list of package names and versions and let it match (small downloads; no computer names or addresses). "off": don\'t check Linux.'),
     "agent_secret_scan": ("Scan for passwords left in files", "Which computers' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each computer can be turned on or off in its details."),
+    "ip_ranges": ("Named IP ranges", "Names for parts of your network, shown next to each device's address, e.g. Servers=10.0.1.0/24 or IoT=192.168.20.10-200. A range can be a subnet, a span (10.0.1.10-50) or end in a wildcard (10.0.1.*); separate several with commas. Where ranges overlap, the smallest one wins."),
     "name_line": ("Line under each name", "What the dashboard shows under each computer's name, unless the computer has its own choice. \"auto\" shows the make and model, or else the operating system."),
     "agent_time_warn_seconds": ("Clock out by (amber, seconds)", "A domain computer's Time check goes amber when its clock is this far from its domain controller's."),
     "agent_time_crit_seconds": ("Clock out by (red, seconds)", "The Time check goes red at this. Kerberos sign-ins fail at 300 seconds (5 minutes)."),
@@ -291,6 +295,9 @@ def clean(changes: dict) -> tuple[dict, dict]:
                             raise ValueError(f"Entries must be up to {MAX_ITEM_LEN} ordinary characters")
                         if key == "email_to" and not EMAIL_RE.match(item):
                             raise ValueError(f"{item[:60]} isn't an email address")
+                        if key == "ip_ranges":
+                            name, _spans = iprange.parse_entry(item)  # raises with what's wrong
+                            item = f"{name}={item.partition('=')[2].strip()}"
                     if item not in seen:
                         seen.add(item)
                         items.append(item)

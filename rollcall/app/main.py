@@ -56,6 +56,8 @@ import addonlog
 import discovery
 import hadevice
 import ilo as ilolib
+import iprange
+import jellyfin as jflib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
@@ -197,6 +199,7 @@ DEFAULTS = {
     "vuln_linux_source": "local",
     "agent_secret_scan": "off",
     "name_line": "auto",
+    "ip_ranges": [],
     "agent_exchange_queue_warn": 250,
     "agent_time_warn_seconds": 60,
     "agent_time_crit_seconds": 240,
@@ -317,6 +320,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     # Media
     ("plex", "Plex", _MEDIA, [("Plex", "http:32400/identity")]),
     ("jellyfin", "Jellyfin", _MEDIA, [("Jellyfin", "http:8096/health")]),
+    ("jellyfin-api", "Jellyfin health (API key)", _MEDIA, [("Jellyfin", "jellyfin:device")]),
     ("emby", "Emby", _MEDIA, [("Emby", "http:8096/emby/System/Info/Public")]),
     ("immich", "Immich", _MEDIA, [("Immich", "http:2283/api/server/ping")]),
     ("audiobookshelf", "Audiobookshelf", _MEDIA, [("Audiobookshelf", "http:13378/")]),
@@ -355,6 +359,7 @@ PRESET_NOTES = {
     "unifi-os": "UniFi OS console, e.g. Cloud Key or UDM", "unifi-os-server": "UniFi OS Server, self-hosted",
     "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
+    "jellyfin-api": "Version, pending restart, updates, failed scheduled tasks and active streams (needs a Jellyfin API key)",
     "printer": "Network printer (raw printing on 9100)",
     "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
     "cert": "Warns before the HTTPS certificate on 443 expires",
@@ -374,6 +379,7 @@ ALIASES = {
     "tapo": "onvif", "heatmiser": "neohub", "neostat": "neohub", "zigbee": "zigbee2mqtt", "zwave": "zwavejs",
     "xmpp": "openfire", "jabber": "openfire", "winbox": "mikrotik", "rdgw": "rdgateway",
     "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
+    "jellyfin-health": "jellyfin-api", "jellyfinapi": "jellyfin-api",
     "ilo3": "hpilo", "ilo4": "hpilo", "hp-ilo": "hpilo", "hpe-ilo": "hpilo", "ilo-health": "hpilo",
     "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
     "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
@@ -398,6 +404,8 @@ def preset_summary(name: str) -> str:
             return "log messages"
         if spec == "ilo:device":
             return "health, with an iLO login"
+        if spec == "jellyfin:device":
+            return "health and tasks, with an API key"
         if kind == "tcp":
             return f"TCP {rest}"
         if kind == "cert":
@@ -535,6 +543,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "SNMP", "kind": "snmp", "port": 161, "url": None, "desc": "snmp"}]
     if low == "ilo:device":
         return [{"label": label or "iLO", "kind": "ilo", "port": 443, "url": None, "desc": "ilo"}]
+    if low == "jellyfin:device":
+        return [{"label": label or "Jellyfin", "kind": "jellyfin", "port": None, "url": None, "desc": "jellyfin api"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -799,6 +809,11 @@ def validate_entry(raw: dict) -> dict:
         if len(group) > 40 or not group.isprintable():
             raise ValueError("Group must be up to 40 ordinary characters")
         entry["group"] = group
+    if "parent" in raw:
+        parent = str(raw.get("parent") or "").strip()
+        if parent and not re.fullmatch(r"[a-z0-9_]{1,80}", parent):
+            raise ValueError("Unknown upstream device")
+        entry["parent"] = parent
     if "subtitle" in raw:
         sub = str(raw.get("subtitle") or "")
         if sub not in SUBTITLES:
@@ -820,6 +835,14 @@ def validate_entry(raw: dict) -> dict:
             if len(pw) > 63 or not pw.isprintable():
                 raise ValueError("The iLO password must be up to 63 ordinary characters")
             entry["ilo_pass"] = pw
+    if "jellyfin_url" in raw:
+        url = str(raw.get("jellyfin_url") or "").strip()
+        entry["jellyfin_url"] = jflib.clean_url(url) if url else ""
+        key = str(raw.get("jellyfin_key") or "").strip()
+        if key:
+            if not jflib.KEY_RE.match(key):
+                raise ValueError("That doesn't look like a Jellyfin API key (letters and numbers, usually 32)")
+            entry["jellyfin_key"] = key
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1597,9 +1620,17 @@ class Host:
     ilo_recheck: bool = False          # something new failed: read it again at the next check
     ilo_acks: dict = field(default_factory=dict)  # acknowledged problems: what -> its level (warn / crit) then
     ilo_ignore: list[str] = field(default_factory=list)  # problems that never alert here, e.g. "Power redundancy"
+    jf_url: str = ""                   # Jellyfin's address ("" = http://<host>:8096)
+    jf_key: str = ""                   # Jellyfin API key: only ever sent to jf_url, never shown again
+    jf_data: dict | None = None        # its latest reading
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
+    parent: str = ""                   # the upstream device it's reached through (its key), e.g. a router; "" = none
+    unreachable: bool = False          # not answering while a device upstream of it is down: shown, not alerted
+    upstream_down: str = ""            # while unreachable: the key of that upstream device
+    alert_held: tuple | None = None    # (reason, since): its down alert waits for its upstream device's next check
+    down_quiet: bool = False           # its down alert wasn't sent (unreachable), so no "back up" either
     syslog_alert: int = 3              # alert on this severity and worse (-1 = never)
     syslog_keywords: list[str] = field(default_factory=list)  # always alert (red)
     syslog_ignore: list[str] = field(default_factory=list)    # never alert
@@ -1777,6 +1808,7 @@ class Monitor:
                 **({"model": h.model} if h.model else {}),
                 **({"subtitle": h.subtitle} if h.subtitle else {}),
                 **({"group": h.group} if h.group else {}),
+                **({"parent": h.parent} if h.parent else {}),
                 **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
                 **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                 **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
@@ -1790,6 +1822,8 @@ class Monitor:
                 **({"ilo_user": h.ilo_user, "ilo_pass": h.ilo_pass} if h.ilo_user or h.ilo_pass else {}),
                 **({"ilo_acks": h.ilo_acks} if h.ilo_acks else {}),
                 **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
+                **({"jellyfin_url": h.jf_url} if h.jf_url else {}),
+                **({"jellyfin_key": h.jf_key} if h.jf_key else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1808,6 +1842,7 @@ class Monitor:
         h.model = str(entry.get("model") or "")[:64]
         h.subtitle = entry.get("subtitle") if entry.get("subtitle") in SUBTITLES else ""
         h.group = str(entry.get("group") or "")[:40]
+        h.parent = str(entry.get("parent") or "")[:80]
         h.ha_device = str(entry.get("ha_device") or "")[:64]
         h.ha_device_name = str(entry.get("ha_device_name") or "")[:100]
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
@@ -1821,6 +1856,8 @@ class Monitor:
         h.ilo_acks = ({str(k)[:100]: v for k, v in entry["ilo_acks"].items() if v in ("warn", "crit")}
                       if isinstance(entry.get("ilo_acks"), dict) else {})
         h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
+        h.jf_url = str(entry.get("jellyfin_url") or "")[:300]
+        h.jf_key = str(entry.get("jellyfin_key") or "")[:128]
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
             h.snmp_acks = ({str(k)[:200]: v for k, v in entry["snmp_acks"].items() if v in ("warn", "crit")}
@@ -1848,6 +1885,7 @@ class Monitor:
         return h
 
     async def update_host(self, h: Host, entry: dict) -> None:
+        old_jf_base = h.jf_url or jflib.default_url(h.host)
         if entry["host"] != h.host:
             h.host, h.ip, h.failures = entry["host"], None, 0
         h.name = entry["name"]
@@ -1863,6 +1901,16 @@ class Monitor:
             if (entry["ilo_user"], pw) != (h.ilo_user, h.ilo_pass):
                 h.ilo_user, h.ilo_pass = entry["ilo_user"], pw
                 h.ilo_polled = h.ilo_result = None  # read it again with the new login
+        if h.jf_key or "jellyfin_url" in entry:
+            old_base = old_jf_base
+            new_url = entry.get("jellyfin_url", h.jf_url)
+            new_base = new_url or jflib.default_url(entry["host"])
+            if entry.get("jellyfin_key"):
+                h.jf_key = entry["jellyfin_key"]
+            elif h.jf_key and not jflib.same_server(old_base, new_base):
+                h.jf_key = ""  # a key only goes to the server it was given for: enter it again for a new one
+                log.info("%s: Jellyfin address changed, so its API key was cleared", h.name)
+            h.jf_url, h.jf_data = new_url, None
         if "check_by" in entry:
             h.check_by = entry["check_by"]
             h.next_due = 0
@@ -1874,6 +1922,11 @@ class Monitor:
             h.subtitle = entry["subtitle"]
         if "group" in entry:
             h.group = entry["group"]
+        if "parent" in entry and entry["parent"] != h.parent:
+            h.parent = entry["parent"]
+            if not h.parent:
+                h.unreachable, h.upstream_down = False, ""
+            h.next_due = 0
         if "ha_device" in entry:
             if entry["ha_device"] != h.ha_device:
                 h.ha_data = None
@@ -2005,6 +2058,9 @@ class Monitor:
         if self.agent_settings["hosts"].pop(h.key, None) is not None:
             self._save_agent_settings()
         self.hosts.pop(h.key, None)
+        for c in self.hosts.values():  # devices that were behind it: no upstream device any more
+            if c.parent == h.key:
+                c.parent, c.unreachable, c.upstream_down, c.next_due = "", False, "", 0
         self._save_hosts()
         if h.maint_until:
             self._save_maint()
@@ -2022,6 +2078,77 @@ class Monitor:
             a = self.agents.revoke(h.agent_id)
             log.info("Revoked the agent on %s along with it", a["hostname"])
         log.info("Deleted %s (%s)", h.name, h.host)
+
+    # -- upstream devices: a device reached through another (e.g. a router) ---------------
+    PARENT_WAIT = 180  # longest a device's down alert waits to hear whether its upstream device is down too
+
+    def ancestors(self, h: Host) -> list[Host]:
+        """Its upstream device, that device's upstream device, and so on (nearest first)."""
+        out, seen, key = [], {h.key}, h.parent
+        while key and key not in seen and len(out) < 20:
+            p = self.hosts.get(key)
+            if not p:
+                break
+            out.append(p)
+            seen.add(key)
+            key = p.parent
+        return out
+
+    def children(self, h: Host) -> list[Host]:
+        return [c for c in self.hosts.values() if c.parent == h.key and c is not h]
+
+    def descendants(self, h: Host) -> list[Host]:
+        """Every device behind it, however many levels down."""
+        out, seen, todo = [], {h.key}, [h]
+        while todo:
+            for c in self.children(todo.pop()):
+                if c.key not in seen:
+                    seen.add(c.key)
+                    out.append(c)
+                    todo.append(c)
+        return out
+
+    def check_parent(self, key: str | None, parent: str) -> None:
+        """Raises ValueError if `parent` can't be the upstream device of the device `key` (None: a new one)."""
+        if not parent:
+            return
+        p = self.hosts.get(parent)
+        if not p:
+            raise ValueError("The upstream device doesn't exist any more")
+        if key and (parent == key or any(a.key == key for a in self.ancestors(p))):
+            raise ValueError(f"{p.name} is behind this device, so it can't be its upstream device too")
+
+    def upstream(self, h: Host) -> tuple[Host | None, bool]:
+        """The device upstream of it that's down, furthest up (the cause), with True; else the nearest
+        one that has just missed a check, with False."""
+        anc = self.ancestors(h)
+        down = [p for p in anc if p.status == RED or ((p.maint_until or p.off_schedule) and p.reachable is False)]
+        if down:
+            return down[-1], True
+        return next((p for p in anc if p.status == AMBER), None), False
+
+    async def settle_held(self, h: Host, now: float) -> None:
+        """A device whose down alert is waiting on its upstream device: unreachable once that's down
+        too (no alert of its own: the upstream device's alert lists it), or alerted as usual once that
+        has answered a check since, or after PARENT_WAIT whatever happens."""
+        if not h.alert_held:
+            return
+        reason, since = h.alert_held
+        if h.status != RED or h.removed or h.maint_until or h.off_schedule:
+            h.alert_held = None
+            return
+        blocker, sure = self.upstream(h)
+        if sure:
+            h.alert_held, h.unreachable, h.upstream_down, h.down_quiet = None, True, blocker.key, True
+            log.info("%s: unreachable, behind %s which is down; no alert of its own", h.name, blocker.name)
+            self.publish_soon(h)
+            return
+        p = self.hosts.get(h.parent)
+        waiting = blocker is not None or (p is not None and (p.checking or (p.last_check or 0) < since))
+        if waiting and now - since < self.PARENT_WAIT:
+            return
+        h.alert_held = None
+        await self._alert_down(h, reason)
 
     @staticmethod
     def _build_services(host_name: str, checks) -> list[Service]:
@@ -2131,7 +2258,8 @@ class Monitor:
 
     def _event(self, h: Host, old: str, new: str) -> dict:
         return {"name": h.name, "host": h.host, "ip": h.ip, "old_status": old,
-                "new_status": new, "entity_id": h.entity_id}
+                "new_status": new, "entity_id": h.entity_id, "unreachable": h.unreachable,
+                "upstream": (self.hosts[h.upstream_down].name if h.upstream_down in self.hosts else None)}
 
     # -- settings changed while running ------------------------------------
     def apply_options(self, changed: dict) -> list[str]:
@@ -2218,6 +2346,9 @@ class Monitor:
                     self.metrics.rollup(now, int(self.opts.get("metrics_days") or 365))
                 except sqlite3.Error as e:
                     log.warning("Couldn't tidy the metrics history: %s", e)
+            for h in list(self.hosts.values()):
+                if h.alert_held and now - h.alert_held[1] >= self.PARENT_WAIT:
+                    await self.settle_held(h, now)
             if self.agents:
                 await self.check_stale_agents(now)
         return last_publish, last_prune
@@ -2339,6 +2470,11 @@ class Monitor:
 
             if h.removed:
                 return
+            was_unreachable = h.unreachable
+            blocker, sure = self.upstream(h) if new in (AMBER, RED) and h.parent else (None, False)
+            h.unreachable, h.upstream_down = bool(sure), blocker.key if sure else ""
+            if h.unreachable and new == RED:
+                h.alert_held = None
             h.status = new
             prev_end, starting = h.startup_end, startup_until(h, now)
             retry = (new == AMBER or (new == MAINT and not h.off_schedule)
@@ -2357,11 +2493,26 @@ class Monitor:
                 h.next_due = nxt + 1  # check as soon as its window opens or closes
             if new != old:
                 h.last_change = now
-                log.info("%s (%s): %s -> %s", h.name, h.ip or h.host, old, new)
+                log.info("%s (%s): %s -> %s%s", h.name, h.ip or h.host, old, new,
+                         f" (unreachable: {blocker.name} is down)" if h.unreachable else "")
                 await self.on_change(h, old, new, reason)
             else:
                 log.debug("%s (%s): %s, %s ms", h.name, h.ip or h.host, new, latency)
+                if new == RED and was_unreachable and not h.unreachable and not h.alert_held:
+                    # Its upstream device is back, but it isn't: now it gets its own down alert
+                    # (or, if that device has only just missed a check again, after its next one).
+                    if blocker:
+                        h.alert_held = (reason, now)
+                    else:
+                        await self._alert_down(h, reason)
             await self.publish(h)
+            if old == RED and new in (GREEN, DEGRADED):
+                for d in self.descendants(h):  # back up: see straight away which devices behind it are too
+                    if d.unreachable and not d.checking:
+                        d.next_due = min(d.next_due, now + 1)
+            for c in self.children(h):
+                if c.alert_held:
+                    await self.settle_held(c, now)
         except Exception:  # noqa: BLE001
             log.exception("Check failed for %s", h.name)
             h.next_due = time.time() + self.interval
@@ -2380,6 +2531,8 @@ class Monitor:
                 return await self.hadev_check(h, now)
             if s.kind == "ilo":
                 return await self.ilo_check(h, now)
+            if s.kind == "jellyfin":
+                return await self.jellyfin_check(h)
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -2652,6 +2805,20 @@ class Monitor:
         h.ilo_recheck = not h.ilo_result[0] and len(h.ilo_result) == 3 and not was_red
         return h.ilo_result
 
+    async def jellyfin_check(self, h: Host) -> tuple:
+        """Jellyfin's health (jellyfin.py), read with its API key at each check."""
+        if not h.jf_key:
+            h.jf_data = None
+            return False, None, "enter a Jellyfin API key under Edit", "warn"
+        base = h.jf_url or jflib.default_url(h.host)
+        try:
+            d = await jflib.poll(base, h.jf_key, health_tls_context(), timeout=max(self.svc_timeout, 10))
+        except jflib.JellyfinError as err:
+            h.jf_data = None
+            return (False, None, str(err), "warn") if err.login else (False, None, str(err))
+        h.jf_data = d
+        return jflib.evaluate(d, await jflib.latest_release())
+
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
 
@@ -2710,18 +2877,26 @@ class Monitor:
             return
         if new == RED and old != RED:
             h.down_since = h.last_check
-            why = {
-                "unresolved": "Hostname could not be resolved.",
-                "maint_timeout": "It did not reply before the maintenance window ended.",
-                "sched_timeout": "It didn't come up after its monitoring window started.",
-                "down_agent": "No reply to ping, and its agent hasn't reported for over 10 minutes.",
-                "agent_late": f"Its agent hasn't reported for over {max(int(self.opts['agent_stale_minutes']), 12)} minutes.",
-                "agent_never": "Its agent hasn't reported yet.",
-            }.get(reason, "No reply to ping on two consecutive checks.")
-            msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
-            await self.notify(f"🔴 {h.name} is down", msg, tag, critical=h.critical, cat="devices")
-            await self.persist(tag, f"Rollcall: {h.name} is down", msg)
+            if h.unreachable:
+                h.down_quiet = True  # the upstream device's alert covers it
+                return
+            p = self.hosts.get(h.parent) if h.parent else None
+            if p and not h.alert_held and (self.upstream(h)[0] or p.checking or p.status == UNKNOWN
+                                           or (p.last_check or 0) < (h.last_check or 0) - 30):
+                # Its upstream device hasn't been checked just now: hear from it first, so a router
+                # going down sends one alert rather than one for every device behind it.
+                h.alert_held, h.down_quiet = (reason, h.last_check or time.time()), True
+                if not p.checking:
+                    p.next_due = 0
+                log.info("%s: holding its down alert until %s has been checked", h.name, p.name)
+                return
+            await self._alert_down(h, reason)
         elif old == RED and new in (GREEN, DEGRADED):
+            h.alert_held = None
+            quiet, h.down_quiet = h.down_quiet, False
+            if quiet:  # never alerted as down (it was behind a device that was down)
+                h.down_since = None
+                return
             await self.dismiss(tag)
             if self.opts["notify_recovery"]:
                 dur = f" after {fmt_duration(h.last_check - h.down_since)}" if h.down_since else ""
@@ -2731,6 +2906,30 @@ class Monitor:
                     tag, cat="devices",
                 )
             h.down_since = None
+
+    async def _alert_down(self, h: Host, reason: str) -> None:
+        """The down alert for a device, listing the devices behind it."""
+        tag = f"ping_monitor_{h.key}"
+        h.down_quiet = False
+        why = {
+            "unresolved": "Hostname could not be resolved.",
+            "maint_timeout": "It did not reply before the maintenance window ended.",
+            "sched_timeout": "It didn't come up after its monitoring window started.",
+            "down_agent": "No reply to ping, and its agent hasn't reported for over 10 minutes.",
+            "agent_late": f"Its agent hasn't reported for over {max(int(self.opts['agent_stale_minutes']), 12)} minutes.",
+            "agent_never": "Its agent hasn't reported yet.",
+        }.get(reason, "No reply to ping on two consecutive checks.")
+        p = self.hosts.get(h.parent) if h.parent else None
+        if p and p.status in (GREEN, DEGRADED) and reason in ("down", "down_agent", "sched_timeout"):
+            why += f" {p.name}, which it's reached through, is answering."
+        msg = f"{h.name} ({h.ip or h.host}) is DOWN. {why}"
+        behind = [d for d in self.descendants(h) if not d.maint_until and not d.off_schedule]
+        if behind:
+            names = [d.name for d in sorted(behind, key=lambda d: d.name.lower())]
+            shown = ", ".join(names[:10]) + (f" and {len(names) - 10} more" if len(names) > 10 else "")
+            msg += f" Devices behind it may also be affected ({len(names)}): {shown}."
+        await self.notify(f"🔴 {h.name} is down", msg, tag, critical=h.critical, cat="devices")
+        await self.persist(tag, f"Rollcall: {h.name} is down", msg)
 
     async def _vpn_more_down(self, h: Host, s: Service) -> None:
         """A firewall already alerting: another of its VPN connections has gone down (seen on two polls
@@ -4603,6 +4802,7 @@ class Monitor:
                 "icon": ICONS[h.status],
                 "host": h.host,
                 "ip": h.ip,
+                "ip_range": self.ip_ranges().name_of(h.ip),
                 "uptime_24h": self.uptime_24h(h.key),
                 "latency_ms": h.latency,
                 "consecutive_failures": h.failures,
@@ -4613,6 +4813,8 @@ class Monitor:
                 "schedule": "whenever it's on" if h.expect_off else describe_schedule(h.schedule),
                 "alerts": not h.no_alerts,
                 "critical": h.critical,
+                "upstream_device": self.hosts[h.parent].name if h.parent in self.hosts else None,
+                "unreachable": h.unreachable,
                 "services": {s.label: s.status for s in h.services + h.agent_checks},
             },
         )]
@@ -4657,9 +4859,17 @@ class Monitor:
             if h.status != UNKNOWN and not h.removed:
                 await self.publish(h)
 
+    def ip_ranges(self) -> "iprange.Ranges":
+        """The named IP ranges (Settings, Display), worked out again only when they change."""
+        raw = tuple(self.opts.get("ip_ranges") or [])
+        if getattr(self, "_ranges", (None, None))[0] != raw:
+            self._ranges = (raw, iprange.Ranges(raw))
+        return self._ranges[1]
+
     def snapshot(self) -> dict:
         hosts = []
         vmh = self.vm_hosts()
+        ranges = self.ip_ranges()
         for h in list(self.hosts.values()):
             short = h.name.strip().lower().split(".")[0]
             on = vmh.get(short) or vmh.get(str(h.host).lower().split(".")[0])
@@ -4683,7 +4893,11 @@ class Monitor:
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
+                "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
+                "ip_range": ranges.name_of(h.ip), "parent": h.parent if h.parent in self.hosts else "", "unreachable": h.unreachable,
+                "upstream_down": self.hosts[h.upstream_down].name if h.upstream_down in self.hosts else None,
+                "alert_held": bool(h.alert_held),
                 "snmp_v3": {"user": h.snmp_v3.get("user", ""), "auth": h.snmp_v3.get("auth"), "priv": h.snmp_v3.get("priv"),
                             "auth_set": bool(h.snmp_v3.get("auth_pass")), "priv_set": bool(h.snmp_v3.get("priv_pass"))}
                 if h.snmp_version == "3" else None,
@@ -5567,9 +5781,16 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 raise web.HTTPBadRequest(text=json.dumps({"error": f"Enter the SNMP v3 {what} password"}),
                                          content_type="application/json")
 
+    def check_parent(entry: dict, h: Host | None) -> None:
+        try:
+            monitor.check_parent(h.key if h else None, entry.get("parent") or "")
+        except ValueError as err:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}), content_type="application/json")
+
     async def add_host(req):
         entry = await read_entry(req)
         check_v3(entry, None)
+        check_parent(entry, None)
         h = await monitor.add_host(entry)
         return web.json_response({"added": h.key}, status=201)
 
@@ -5579,6 +5800,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             raise web.HTTPNotFound()
         entry = await read_entry(req)
         check_v3(entry, h)
+        check_parent(entry, h)
         await monitor.update_host(h, entry)
         return web.json_response({"updated": h.key})
 

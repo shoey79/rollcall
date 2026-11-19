@@ -50,12 +50,15 @@ Remove each line once it's released.
 
 Features the owner has asked for, to build when they say. Remove each once it's released.
 
-- Dependent devices ([#13](https://github.com/shoey79/rollcall/issues/13), thanks to
-  [tomvining](https://github.com/tomvining)): let a device have an upstream/parent (e.g. a router).
-  When the parent is down, show the devices behind it as unreachable rather than down and send one
-  notification for the parent listing what may also be affected, instead of one per device.
-- Jellyfin check: a service check run by the add-on (not the agent) using a Jellyfin API key, stored as
-  a secret setting that's never shown again and only sent to that Jellyfin server. Up/down (/health),
-  version, restart pending and update available (/System/Info), failed scheduled tasks (e.g. library
-  scan) shown amber only (no alert), and a count of active streams (no transcoding alert). Confirm
-  endpoints against the Jellyfin API docs when building.
+(none)
+
+## Built, waiting for release
+
+Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
+releasing; remove each line once it's released.
+
+- Dependent devices ([#13](https://github.com/shoey79/rollcall/issues/13)): "Upstream device" on each device
+  (`parent` in hosts.json); devices behind a down one show as Unreachable, one grouped alert.
+- Jellyfin check (`jellyfin-api` preset, `jellyfin.py`): API key per device, only sent to that server.
+- Named IP ranges (`ip_ranges` setting, `iprange.py`): the range name shows next to each address.
+- Windows agent 1.0.47: the start-up run waits up to 3 minutes for the network.

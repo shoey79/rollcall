@@ -322,6 +322,9 @@ table.small tr.acked td:first-child{box-shadow:inset 3px 0 0 var(--grey)}
 .quiet{font-size:12px;opacity:.75}
 .dot.offsched{background:var(--grey)}
 .dot.offsched.on{background:linear-gradient(90deg,var(--green) 50%,var(--grey) 50%)}
+.dot.unreach{background:repeating-linear-gradient(135deg,var(--red) 0 2px,var(--grey) 2px 4px)}
+tr.unreach td{background:color-mix(in srgb,var(--grey) 9%,transparent)}
+.iprange{display:block;font-family:inherit;font-size:11px;color:var(--muted)}
 .haresults{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .harow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13px}
 .harow small{display:block;color:var(--muted);font-size:11px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
@@ -661,6 +664,10 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <label class="field">Group<input id="fGroup" maxlength="40" list="groupList" autocomplete="off" placeholder="Automatic"></label>
         <p class="hint" style="margin:0;align-self:end">Groups the Overview, e.g. Servers, Network, Home automation. Leave blank to group by the icon's type.</p>
       </div>
+      <div class="fields" style="margin:12px 0 0">
+        <label class="field">Upstream device<select id="fParent"><option value="">None</option></select></label>
+        <p class="hint" style="margin:0;align-self:end">The device it's reached through, such as its router, switch or VPN. While that's down, this shows as <i>Unreachable</i> and doesn't alert on its own: you get one alert for the upstream device, listing what's behind it.</p>
+      </div>
       <datalist id="groupList"></datalist>
       <details class="addrs" id="addrBox">
         <summary>Other addresses <span id="addrCount" class="muted"></span></summary>
@@ -692,6 +699,13 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
             <label class="field">iLO password<input id="fIloPass" type="password" maxlength="63" autocomplete="new-password"></label>
           </div>
           <p class="hint">For HPE iLO 3 and iLO 4. Create an iLO user with only the <b>Login</b> privilege and enter it here; Rollcall only reads. The health is read every 5 minutes over HTTPS. Use the iLO's own address as this device's address. The password isn't shown on the dashboard.</p>
+        </div>
+        <div id="jellyfinBox" hidden class="snmpbox">
+          <div class="fields">
+            <label class="field">Jellyfin address<input id="fJfUrl" maxlength="300" autocomplete="off" spellcheck="false" placeholder="http://this device's address:8096"></label>
+            <label class="field">Jellyfin API key<input id="fJfKey" type="password" maxlength="128" autocomplete="new-password" spellcheck="false"></label>
+          </div>
+          <p class="hint">Create a key in Jellyfin under <b>Dashboard, API Keys</b>. Rollcall reads the version, a pending restart, updates, failed scheduled tasks (amber, no alert) and how many streams are playing; it goes red, with an alert, if Jellyfin stops answering. The key is only ever sent to this address, and isn't shown again; changing the address to another server means entering the key again. Leave the address blank for port 8096 on this device.</p>
         </div>
         <div id="snmpBox" hidden class="snmpbox">
           <div class="fields">
@@ -768,7 +782,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   </form>
 </dialog>
 <script>
-const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off / off schedule"};
+const LABEL = {green: "Up", amber: "Unresponsive", red: "Down", unknown: "Pending", maintenance: "Paused", degraded: "Degraded", offsched: "Off / off schedule", unreach: "Unreachable"};
 const ORDER = {red: 0, degraded: 1, amber: 2, maintenance: 3, unknown: 4, green: 5};
 const SVC_LABEL = {green: "up", amber: "missed one check", red: "down", unknown: "not checked", maintenance: "starting up"};
 let data = null;
@@ -846,15 +860,18 @@ function cmpVer(a, b) {
 // Off schedule but answering: half green, half grey.
 function dotClass(h) {
   if (h.off_schedule && !h.maint_until) return h.reachable ? "offsched on" : "offsched";
+  if (h.unreachable && !h.maint_until) return "unreach";
   return h.status;
 }
 function dotTip(h) {
+  if (h.unreachable && !h.maint_until) return `Can't be reached: ${h.upstream_down || "a device it's reached through"} is down. It doesn't alert on its own while that's down.`;
   return h.off_schedule && !h.maint_until ? (h.reachable ? "On, but outside its monitoring schedule (not alerted)" : "Off, outside its monitoring schedule") : "";
 }
 function statusLabel(h) {
   if (h.maint_until) return LABEL[h.status];
   if (h.off_schedule) return h.expect_off ? "Off" : h.reachable ? "On · off schedule" : "Off schedule";
   if (h.starting_up) return "Starting up";
+  if (h.unreachable) return "Unreachable";
   if (h.check_by === "agent" && h.status === "amber") return "Report late";
   if (h.check_by === "agent" && h.status === "red") return "Not reporting";
   if (h.via_agent && h.status === "green") return "Up (agent)";
@@ -870,6 +887,13 @@ function schedNote(h) {
   if (h.starting_up && h.starting_until && (h.status === "green" || h.status === "degraded"))
     return `<div class="note">${h.expect_off ? "Just switched on" : "Window opened"}: starting up until ${new Date(h.starting_until * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}, no alerts before then</div>`;
   if (h.starting_up) return `<div class="note">Window opened; waiting for it to reply</div>`;
+  return "";
+}
+function hostName(key) { const p = data && data.hosts.find(x => x.key === key); return p ? p.name : ""; }
+function upstreamNote(h) {
+  if (h.maint_until || h.off_schedule) return "";
+  if (h.unreachable) return `<div class="note">Behind ${esc(h.upstream_down || "")}, which is down</div>`;
+  if (h.alert_held && h.parent) return `<div class="note">Checking ${esc(hostName(h.parent))} before alerting</div>`;
   return "";
 }
 function degradedNote(h) {
@@ -914,12 +938,12 @@ function render() {
   if (!data) return;
   const now = data.now;
   const q = document.getElementById("filter").value.trim().toLowerCase();
-  const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0, offsched: 0};
-  data.hosts.forEach(h => counts[h.off_schedule && !h.maint_until ? "offsched" : h.status]++);
+  const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0, offsched: 0, unreach: 0};
+  data.hosts.forEach(h => counts[h.off_schedule && !h.maint_until ? "offsched" : h.unreachable && !h.maint_until ? "unreach" : h.status]++);
 
   const hasServices = data.hosts.some(h => h.services.length);
   const chips = ["green", "amber"].concat(hasServices || counts.degraded ? ["degraded"] : [], ["red"],
-    counts.maintenance ? ["maintenance"] : [], counts.offsched ? ["offsched"] : []);
+    counts.unreach ? ["unreach"] : [], counts.maintenance ? ["maintenance"] : [], counts.offsched ? ["offsched"] : []);
   document.getElementById("summary").innerHTML = chips.map(s =>
     `<span class="chip"><span class="dot ${s}"></span>${counts[s]} <small>${LABEL[s]}</small></span>`).join("");
   document.getElementById("meta").textContent =
@@ -932,7 +956,7 @@ function render() {
   if (tab.home) { renderHome(); return; }
   const hosts = data.hosts
     .filter(h => tabMatch(h, tab))
-    .filter(h => !q || [h.name, h.host, h.ip || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
+    .filter(h => !q || [h.name, h.host, h.ip || "", h.ip_range || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
     .sort(compare);
   shownHosts = hosts;
   const pauseBtn = document.getElementById("pauseTab"), resumeBtn = document.getElementById("resumeTab");
@@ -951,10 +975,10 @@ function render() {
     const up = h.uptime_24h;
     const strip = stripSegs(h.history, h.history_start);
     const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
-    return `<tr class="${h.status}">
-      <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${degradedNote(h)}</div></td>
+    return `<tr class="${h.unreachable && !h.maint_until ? "unreach" : h.status}">
+      <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${upstreamNote(h)}${degradedNote(h)}</div></td>
       <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this computer">🔕</span>` : h.critical ? ` <span class="quiet" title="Critical: its alerts sound even when the phone is on silent">🚨</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
-      <td data-label="IP address" class="mono">${esc(h.ip || "—")}</td>
+      <td data-label="IP address" class="mono">${esc(h.ip || "—")}${h.ip_range ? `<small class="iprange" title="Named IP range (Settings, Display)">${esc(h.ip_range)}</small>` : ""}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
       <td data-label="Latency" class="num">${h.check_by === "agent" || h.via_agent ? `<span class="muted" title="${h.check_by === "agent" ? "Checked by its agent reporting in, not by ping" : "Not answering ping, but up because its agent is reporting"}">${h.agent && h.agent.last_seen ? "report " + ago(h.agent.last_seen, data.now) : "agent"}</span>` : h.latency_ms == null ? "—" : h.latency_ms + " ms"}</td>
@@ -1250,6 +1274,11 @@ function alerts() {
           title: s.label, detail: (s.detail || "") + ` (off schedule; from the report ${h.agent && h.agent.last_seen ? ago(h.agent.last_seen, data.now) : "before it"})`, since: s.last_change});
       continue;
     }
+    if (h.unreachable) {  // behind a device that's down: listed under it, after the real problems
+      out.push({h, sev: 4, dot: "unreach", check: null, title: "Unreachable",
+        detail: `Behind ${h.upstream_down || "a device"}, which is down`, since: h.last_change});
+      continue;
+    }
     if (h.status === "red" || h.status === "amber") {
       out.push({h, sev: h.status === "red" ? 0 : 2, dot: h.status, check: null,
         title: h.check_by === "agent" ? (h.status === "red" ? "Agent not reporting" : "Agent report late") : h.status === "red" ? "Not responding" : "Missed a check",
@@ -1316,7 +1345,7 @@ function renderHome() {
     return;
   }
   const n = st => hosts.filter(st).length;
-  const down = n(h => h.status === "red"), deg = new Set(list.filter(a => a.h.status !== "red").map(a => a.h.key)).size;
+  const down = n(h => h.status === "red" && !h.unreachable), unreach = n(h => h.unreachable && !h.maint_until), deg = new Set(list.filter(a => a.h.status !== "red" && !a.h.unreachable).map(a => a.h.key)).size;
   const quiet = n(h => h.status === "maintenance" || h.off_schedule);
   const up = n(h => h.status === "green" && !h.off_schedule);
   const withAgent = hosts.filter(h => h.agent), agentBad = withAgent.filter(h => h.services.some(s => s.agent && s.key === "agent_agent" && s.status !== "green")).length;
@@ -1326,7 +1355,7 @@ function renderHome() {
     ${tile("", "", "Computers", hosts.length, `${withAgent.length} with an agent`, "all")}
     ${tile("", "green", "Up", up, up === hosts.length ? "everything" : `${Math.round(up / hosts.length * 100)}% of computers`, "q:up")}
     ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `computer${deg === 1 ? "" : "s"} with alerts` : "none", "q:attention")}
-    ${tile(down ? "hot" : "", "red", "Down", down, down ? "not responding" : "none", "q:down")}
+    ${tile(down ? "hot" : "", "red", "Down", down, (down ? "not responding" : "none") + (unreach ? ` · ${unreach} more unreachable behind ${down === 1 ? "it" : "them"}` : ""), "q:down")}
     ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "q:quiet") : ""}
     ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", agentBad ? "q:agentbad" : "q:agents") : ""}
   </div>`;
@@ -1351,9 +1380,9 @@ function renderHome() {
       : h.status === "degraded" ? `${bad} check${bad === 1 ? "" : "s"} need attention`
       : h.status === "green" ? (h.latency_ms != null ? `Up · ${h.latency_ms} ms` : "Up") : statusLabel(h);
     const offBad = offScheduleProblems(h).length;
-    const dot = offBad ? "amber" : h.off_schedule && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
+    const dot = offBad ? "amber" : (h.off_schedule || h.unreachable) && !h.maint_until ? dotClass(h) : h.status === "green" && bad ? "amber" : h.status;
     const sub2 = offBad ? `${statusLabel(h)} · ${offBad} check${offBad === 1 ? "" : "s"} need${offBad === 1 ? "s" : ""} attention` : sub;
-    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub2)}</small></span></button>`;
+    return `<button type="button" class="gl ${h.status}" data-glance="${esc(h.key)}" title="${esc(h.name + (subLine(h)[0] && subLine(h)[0] !== h.ip ? " · " + subLine(h)[0] : "") + (h.ip ? " · " + h.ip + (h.ip_range ? " (" + h.ip_range + ")" : "") : "") + (h.agent ? " · click for details" : ""))}"><span class="dot ${dot}"></span>${iconHtml(h)}<span><b>${esc(h.name)}</b><small>${esc(sub2)}</small></span></button>`;
   };
   const sel = (id, label, opts, cur) => `<label class="gsort">${label} <select id="${id}" aria-label="${label} at a glance">${Object.entries(opts).map(([k, [n]]) => `<option value="${k}"${k === cur ? " selected" : ""}>${n}</option>`).join("")}</select></label>`;
   html += `<div class="panel"><h2>At a glance<small>${hosts.length} computer${hosts.length === 1 ? "" : "s"} · ${sel("glanceGroup", "group by", groupOpts, gb)} ${sel("glanceSort", "sort by", GLANCE_SORT, gs)}</small></h2>`;
@@ -1369,10 +1398,10 @@ function renderHome() {
     const order = GLANCE_GROUP[gb][2];
     html += (gb === "tab" ? [...groups.entries()] : [...groups.entries()].sort(([a], [b]) => order(a) - order(b) || collator.compare(a, b))).map(([g, list]) => {
       const c = st => list.filter(st).length;
-      const down = c(h => h.status === "red"), att = c(h => offScheduleProblems(h).length > 0 || !h.off_schedule && (h.status === "degraded" || h.status === "amber" || (h.status === "green" && h.services.some(s => s.status === "red" || s.status === "amber"))));
+      const down = c(h => h.status === "red" && !h.unreachable), unr = c(h => h.unreachable && !h.maint_until), att = c(h => offScheduleProblems(h).length > 0 || !h.off_schedule && !h.unreachable && (h.status === "degraded" || h.status === "amber" || (h.status === "green" && h.services.some(s => s.status === "red" || s.status === "amber"))));
       const up = c(h => h.status === "green" && !h.off_schedule && !h.services.some(s => s.status === "red" || s.status === "amber")), quiet = c(h => (h.status === "maintenance" || h.off_schedule) && !offScheduleProblems(h).length);
       const shut = glanceShut.has(gb + ":" + g);
-      const sum = [down && `<span class="gs red"><span class="dot red"></span>${down} down</span>`, att && `<span class="gs amber"><span class="dot degraded"></span>${att} need${att === 1 ? "s" : ""} attention</span>`,
+      const sum = [down && `<span class="gs red"><span class="dot red"></span>${down} down</span>`, unr && `<span class="gs"><span class="dot unreach"></span>${unr} unreachable</span>`, att && `<span class="gs amber"><span class="dot degraded"></span>${att} need${att === 1 ? "s" : ""} attention</span>`,
         quiet && `<span class="gs"><span class="dot maintenance"></span>${quiet} paused or off</span>`, up && `<span class="gs"><span class="dot green"></span>${up === list.length ? "all up" : up + " up"}</span>`].filter(Boolean).join("");
       return `<section class="ggroup${down ? " hot" : att ? " warm" : ""}"><button type="button" class="ghead" data-gtoggle="${esc(gb + ":" + g)}" aria-expanded="${!shut}">
         <span class="caret">${shut ? "▸" : "▾"}</span><b>${esc(g)}</b><span class="gcount">${list.length}</span><span class="gsum">${sum}</span></button>
@@ -1696,7 +1725,7 @@ function renderTabs() {
       return `<button type="button" class="tab${t.id === cur.id ? " on" : ""}" data-tab="home" title="Status at a glance and everything that needs attention">Overview${n ? `<span class="bad${red ? " red" : ""}" title="${n} alert(s)">${n}</span>` : ""}</button>`;
     }
     const list = hosts.filter(h => tabMatch(h, t));
-    const red = list.filter(h => h.status === "red").length, bad = list.filter(h => PROBLEM.has(h.status)).length;
+    const red = list.filter(h => h.status === "red" && !h.unreachable).length, bad = list.filter(h => PROBLEM.has(h.status)).length;
     const custom = !t.builtin && t.id !== "all" && !t.quick;
     if (t.quick) return `<button type="button" class="tab on quicktab" data-tab="${esc(t.id)}" title="${esc(t.desc)} (from the Overview)">${esc(t.name)}
       <span class="n">${list.length}</span><span class="x" data-tab="all" title="Show all" aria-label="Show all">×</span></button>`;
@@ -3591,7 +3620,7 @@ function renderOverview(h, sn, lg, ha) {
   const d = sn && sn.data, u = d && d.ups && !d.ups.error ? d.ups : null, nas = d && d.nas, rd = lg && lg.readings;
   showSourceTabs(h.key, "overview");
   document.getElementById("detTitle").textContent = h.name;
-  document.getElementById("detSub").textContent = [h.model || (u && u.model) || (d && d.descr && d.descr.slice(0, 60)), h.ip || h.host,
+  document.getElementById("detSub").textContent = [h.model || (u && u.model) || (d && d.descr && d.descr.slice(0, 60)), (h.ip || h.host) + (h.ip_range ? ` (${h.ip_range})` : ""),
     d && d.uptime_s != null ? "up " + fmtUp(d.uptime_s) : ""].filter(Boolean).join(" · ");
   // Words get a smaller size than numbers, so "On battery" fits a tile.
   const tile = (label, value, sub, cls = "", jump = "") =>
@@ -3667,6 +3696,13 @@ function renderOverview(h, sn, lg, ha) {
      <td><span class="dot ${s.status}"></span> ${esc(s.detail || LABEL[s.status] || s.status)}</td>
      <td class="num">${s.uptime_24h == null ? "—" : s.uptime_24h.toFixed(s.uptime_24h === 100 ? 0 : 1) + "%"}</td><td>${s.last_change ? ago(s.last_change, now) : "—"}</td></tr>`)));
   if (rd && ((rd.status || []).length || (rd.sensors || []).length > 4)) html += logReadings(rd, now);
+  const jf = h.jellyfin, jkv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+  if (jf) html += sect("Jellyfin", `<div class="kv">${[jkv("Server", esc(jf.name || "")), jkv("Version", esc(jf.version || "")), jkv("Health", esc(jf.health || "")),
+      jkv("Streams", jf.streams == null ? "" : esc(String(jf.streams) + (jf.transcodes ? ` (${jf.transcodes} transcoding)` : ""))),
+      jkv("Restart pending", jf.restart ? "Yes" : ""), jkv("Update", jf.update ? "Available" : "")].join("")}</div>`
+    + (jf.failed_tasks && jf.failed_tasks.length ? tbl(["Failed task", "Result", "Ended", "Error"], jf.failed_tasks.map(t =>
+      `<tr class="hl"><td><b>${esc(t.name)}</b></td><td>${esc(t.status)}</td><td>${t.ended ? esc(new Date(t.ended).toLocaleString()) : "—"}</td><td class="msg">${esc(t.error || "")}</td></tr>`))
+      + `<p class="hint">Failed tasks show amber and don't alert. Run the task again in Jellyfin (Dashboard, Scheduled Tasks) to clear it.</p>` : jf.tasks_read ? `<p class="empty-note">✓ No failed scheduled tasks.</p>` : ""));
   if (hd) {
     html += `<div id="ovHa">` + haEntities(hd, ha, now) + `</div>`;
   } else if (h.ha_device) {
@@ -3677,10 +3713,12 @@ function renderOverview(h, sn, lg, ha) {
     `<tr class="${r.alert ? "hl" : ""}"><td>${esc(new Date(r.ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}))}</td><td><span class="dot ${SEV_DOT(r.sev)}"></span> ${SEV[r.sev]}</td><td class="msg">${esc((r.app ? r.app + ": " : "") + r.msg)}</td></tr>`))
     + `<p class="hint"><a data-ovjump="logs" style="cursor:pointer">All messages ›</a></p>`);
   const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
-  const info = [kv("Address", esc(h.host + (h.ip && h.ip !== h.host ? ` (${h.ip})` : ""))), kv("Reached through", viaHtml(h.ip || h.host)), kv("Make and model", esc(h.model || (u && u.model) || "")),
+  const info = [kv("Address", esc(h.host + (h.ip && h.ip !== h.host ? ` (${h.ip})` : ""))), kv("IP range", esc(h.ip_range || "")), kv("Reached through", viaHtml(h.ip || h.host)), kv("Make and model", esc(h.model || (u && u.model) || "")),
     kv("Name on the device", esc(d && d.name || "")), kv("Location", esc(d && d.location || "")),
     kv("Up for", d && d.uptime_s != null ? fmtUp(d.uptime_s) : ""), kv("Serial", esc(u && u.serial || "")), kv("Firmware", esc(u && u.firmware || "")),
-    kv("Description", esc(d && d.descr || "")), kv("In Home Assistant", esc(hd ? [hd.device.name, hd.device.integration].filter(Boolean).join(" · ") : h.ha_device_name || "")), kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always"))), kv("Alerts", h.critical ? "🚨 Critical: sounds even when the phone is on silent" : "")].join("");
+    kv("Description", esc(d && d.descr || "")), kv("In Home Assistant", esc(hd ? [hd.device.name, hd.device.integration].filter(Boolean).join(" · ") : h.ha_device_name || "")), kv("Upstream device", h.parent ? esc(hostName(h.parent)) + (h.unreachable ? ` <small class="muted">(unreachable: ${esc(h.upstream_down || "")} is down)</small>` : "") : ""),
+    kv("Behind it", esc(data.hosts.filter(x => x.parent === h.key).map(x => x.name).sort(collator.compare).join(", "))),
+    kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always"))), kv("Alerts", h.critical ? "🚨 Critical: sounds even when the phone is on silent" : "")].join("");
   html += sect("Device", `<div class="kv">${info}</div>`);
   if (!h.snmp && !h.syslog && !h.ha_device) html += `<p class="hint">Tick <b>SNMP</b> or <b>Syslog</b>, or link its <b>Home Assistant device</b>, under Edit to see more about this device here, such as its ports, disks, UPS battery, log messages or integration readings.</p>`;
   body.innerHTML = html;
@@ -4693,6 +4731,7 @@ function updatePicked() {
   document.getElementById("snmpBox").hidden = !snmpOn;
   document.getElementById("syslogBox").hidden = !form.querySelector('.preset input[value="syslog"]:checked');
   document.getElementById("iloBox").hidden = !form.querySelector('.preset input[value="hpilo"]:checked');
+  document.getElementById("jellyfinBox").hidden = !form.querySelector('.preset input[value="jellyfin-api"]:checked');
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -4849,6 +4888,15 @@ function addCustomRow(value = "") {
   return row.querySelector("input");
 }
 
+// Upstream device choices: any other device, except ones behind this one (that would be a loop).
+function fillParents(h) {
+  const sel = document.getElementById("fParent"), hosts = (data && data.hosts) || [];
+  const behind = new Set(h ? [h.key] : []);
+  for (let grew = true; grew;) { grew = false; for (const x of hosts) if (x.parent && behind.has(x.parent) && !behind.has(x.key)) { behind.add(x.key); grew = true; } }
+  const opts = hosts.filter(x => !behind.has(x.key)).sort((a, b) => collator.compare(a.name, b.name));
+  sel.innerHTML = `<option value="">None</option>` + opts.map(x => `<option value="${esc(x.key)}">${esc(x.name)}${x.ip && x.ip !== x.name ? " · " + esc(x.ip) : ""}</option>`).join("");
+  sel.value = h && h.parent && opts.some(x => x.key === h.parent) ? h.parent : "";
+}
 async function openDialog(h) {
   try { await loadPresets(); } catch (e) { return alert("Couldn't load the list of checks. Is the add-on running?"); }
   editing = h || null;
@@ -4860,6 +4908,7 @@ async function openDialog(h) {
   document.getElementById("fSubtitle").value = h ? (h.subtitle || "") : "";
   document.getElementById("fGroup").value = h ? (h.group || "") : "";
   fillGroupList();
+  fillParents(h);
   pickIcon = h ? (h.icon || "") : ""; iconQuery = "";
   document.getElementById("iconGrid").hidden = true;
   document.getElementById("fIconBtn").setAttribute("aria-expanded", "false");
@@ -4907,6 +4956,8 @@ async function openDialog(h) {
   snmpShow();
   document.getElementById("fIloUser").value = h ? (h.ilo_user || "") : "";
   const iloPw = document.getElementById("fIloPass"); iloPw.value = ""; iloPw.placeholder = h && h.ilo_pass_set ? "Unchanged (type to replace)" : "";
+  document.getElementById("fJfUrl").value = h ? (h.jellyfin_url || "") : "";
+  const jfKey = document.getElementById("fJfKey"); jfKey.value = ""; jfKey.placeholder = h && h.jellyfin_key_set ? "Unchanged (type to replace)" : "";
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -4929,6 +4980,7 @@ form.addEventListener("submit", async e => {
     .concat([...form.querySelectorAll(".custom input")].map(i => i.value.trim()).filter(Boolean), addrChecks);
   const body = {name: fName.value.trim(), host: fHost.value.trim(), checks, schedule: readSchedule(),
     icon: pickIcon, model: document.getElementById("fModel").value.trim(), subtitle: document.getElementById("fSubtitle").value, group: document.getElementById("fGroup").value.trim(),
+    parent: document.getElementById("fParent").value,
     check_by: (form.querySelector('input[name="checkBy"]:checked') || {}).value || "auto",
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     grace: +document.getElementById("schedGrace").value || 0,
@@ -4954,6 +5006,12 @@ form.addEventListener("submit", async e => {
     if (ip) body.ilo_pass = ip;
     if (!body.ilo_user) { err.textContent = "Enter the iLO user name, or untick HPE iLO health."; return document.getElementById("fIloUser").focus(); }
     if (!ip && !(editing && editing.ilo_pass_set)) { err.textContent = "Enter the iLO password."; return document.getElementById("fIloPass").focus(); }
+  }
+  if (!document.getElementById("jellyfinBox").hidden) {
+    body.jellyfin_url = document.getElementById("fJfUrl").value.trim();
+    const k = document.getElementById("fJfKey").value.trim();
+    if (k) body.jellyfin_key = k;
+    if (!k && !(editing && editing.jellyfin_key_set)) { err.textContent = "Enter the Jellyfin API key, or untick Jellyfin health (API key)."; return document.getElementById("fJfKey").focus(); }
   }
   if (!document.getElementById("syslogBox").hidden) {
     body.syslog_alert = +document.getElementById("fSysAlert").value;
