@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.92.1 - 2026-11-19
+
+### Security
+- **Agent updates are now signed with a key only Rollcall has.** Before, an update was signed with the agent's own token, and the token goes with every report. Over plain HTTP, someone able to read and change the traffic between an agent and Home Assistant could have captured it, offered an agent a "newer version" and signed it, and the agent would have run it as SYSTEM or root. Now the add-on makes its own RSA key the first time it starts (it never leaves the add-on), each agent script carries the public half, and agents only install updates signed with it. Found by an outside security review.
+- **The addresses agents report to are signed the same way**, so a changed reply can't send an agent somewhere else. An agent that gets addresses without a good signature keeps the ones it has.
+- **Agents already installed move across once, the old way**: update them while they report over your own network or a VPN (agents reporting over the internet through a reverse proxy with a real certificate, such as Let's Encrypt, are already protected). A failed check never stops an agent reporting, and agents still refuse older versions.
+- **Dashboard editing fails closed.** If Rollcall couldn't read Home Assistant's user list and `editors` was empty, anyone who could open the panel could make changes, including approving agents; the panel is open to every Home Assistant user. Now nobody can until the list can be read, apart from names in `editors`, and the dashboard shows **View only for now** with the reason.
+- **The add-on is built on Home Assistant's Alpine 3.24 base image** (from 3.20, which no longer gets security updates).
+- **The export now includes the key that signs agent updates**, so a restored install keeps updating its agents. Keep exports as safe as a password.
+- Docs: turn the syslog port off if you don't use it, and allow TCP 8100 and UDP 514 at your firewall only from the devices that use them.
+
+### Agents
+- **Windows agent 1.0.53 and Linux agent 1.0.21:** check Rollcall's signature on updates and addresses. Installed agents get them through the normal update (automatic, or **Update** next to an agent); the router agent doesn't self-update and isn't affected.
+
 ## 1.92.0 - 2026-11-19
 
 ### Added
