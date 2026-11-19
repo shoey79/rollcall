@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.91.0 - 2026-11-19
+
+### Added
+- **Upstream devices in bulk.** In a router's, switch's or VPN firewall's **Edit**, **Devices behind it** lists your other devices with tick boxes: tick the ones reached through it and they all get it as their upstream device in one save; untick to clear. A device already behind something else says so (ticking moves it), devices it's behind aren't offered (no loops), and the list can be filtered. The Upstream device setting on each device stays.
+
+### Changed
+- **Windows agent 1.0.51: its scheduled tasks stop a run after 30 minutes.** They were created with Windows' default of 72 hours, and Windows doesn't start a task again while it's still running, so one stuck run stopped a device reporting for up to 3 days. Each run checks its tasks and sets this if it's missing, so agents already installed fix themselves; no reinstall needed. The agent's own clearing of a stuck run (1.0.49) stays, for runs started any other way.
+- **Details no longer says "Up for 2 h" about a device that's been off since yesterday.** That came from the agent's last report. Now, while a device is down it says **Down since** (or **Unreachable since**, **Off since** off schedule), with when it last reported; when it answers but its agent has stopped reporting, **No report since**; and while it's up, the uptime keeps counting between reports.
+
 ## 1.90.1 - 2026-11-19
 
 ### Fixed
