@@ -41,6 +41,10 @@ Remove each line once it's released.
   Windows term (Group Policy's "Computer Configuration", computer accounts, `$env:COMPUTERNAME`,
   "This computer" on the installer), and don't rename setting keys, API fields or entity IDs, so
   existing setups keep working. Leave past CHANGELOG entries as they are; note the rename in the new one.
+- Overview table layout: on a narrower window the rows grow very tall with mostly empty space, and the
+  actions column (Check now / Details / Pause / Edit) runs off the right edge with "Edit" cut off.
+  Find which column wraps and makes rows tall, keep rows compact, and keep all the buttons visible
+  (wrap them or let the table scroll sideways). Check at a few window widths.
 
 ## Requested features (not started)
 
