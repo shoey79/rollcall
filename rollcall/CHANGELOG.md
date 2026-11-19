@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.89.0 - 2026-11-19
+
+### Added
+- **Veeam: why a job warned or failed** (Windows agent 1.0.50). In Details → Backups, **Why?** on a job that warned or failed shows what went wrong in its latest run: each VM or item with its result and Veeam's reason (e.g. changed block tracking disabled, transaction logs not truncated), and the run's warning and error lines. On the backup server it comes from Veeam's own record of the run (its PowerShell module); otherwise, and for Veeam Agent jobs, from the warnings and errors in the Veeam event log during the run. Each run is looked up once.
+
+### Fixed
+- **Jellyfin check: "not Jellyfin? /System/Info didn't answer with JSON" now and then**, which made it miss checks and show a low uptime. It took a single read of Jellyfin's answer, which only gives what has arrived so far, so an answer that came in more than one piece was read half. It now reads the whole answer.
+
 ## 1.88.1 - 2026-11-19
 
 ### Fixed
