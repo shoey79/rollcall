@@ -101,22 +101,6 @@ together). Remove each once it's released.
   One Starlink check, two sources (local default, or account), same Starlink tab. Build once the owner's dish
   arrives, to test the local side against it.
 
-## Being built now: 1.92.1 security fixes (owner asked 19 Nov, from an outside security review)
-
-- Agent updates signed with an RSA key only Rollcall holds (generated in /data, public key built into downloaded
-  scripts), replacing the HMAC keyed by the agent's token (an attacker on a plain-HTTP path could capture the token
-  and sign a forged update). Also sign the servers/route list in the report reply. Agents refuse older or equal
-  versions (no downgrade replay). Old agents get the new version once the old way. Signature in the reply body, not a
-  new header (owner's external agents go through a Sophos reverse proxy). Key included in Export/import. A failed
-  check never stops reporting.
-- Dashboard editing fails closed when HA's user list can't be read (only 'editors' can change things; dashboard says
-  why). Panel is open to all HA users (panel_admin false), so this mattered.
-- Base image from Alpine 3.20 (unsupported) to a current HA base; a CI job that builds and starts the container.
-- Docs: clear the syslog port if unused; firewall TCP 8100 / UDP 514 to known senders.
-Owner wants full testing that no agent loses connectivity: Windows (PS 5.1 + 7) and Linux end to end against the real
-add-on, forged/tampered/downgrade updates refused while reporting carries on; router unaffected but run; container
-built and an agent reporting into it. Show results before releasing.
-
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
