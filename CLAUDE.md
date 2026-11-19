@@ -35,7 +35,9 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   per-device Upstream pulldown too. Same loop/level rules as now.
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
-  route to it in bypass mode). Up/connected, outage reason, obstruction, ping/latency and drop rate,
+  route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default
+  192.168.100.1:9200) for routers that map it elsewhere, and say in the docs that a LAN/VLAN on 192.168.100.0/24
+  clashes with it (renumber it, or a /32 host route out of the Starlink WAN with NAT if .1 isn't the gateway). Up/connected, outage reason, obstruction, ping/latency and drop rate,
   throughput, alerts (thermal throttle, motors stuck, heating, slow ethernet, mast not vertical), update
   available, last restart, in a Starlink tab. Check how to talk to it from the add-on (grpcio vs gRPC-web, or
   reading HA's Starlink entities through a linked HA device). The owner mentioned a token-from-browser HA plugin
