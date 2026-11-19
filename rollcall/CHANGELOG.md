@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.88.1 - 2026-11-19
+
+### Fixed
+- **Windows agent 1.0.49: a stuck run could stop a device reporting for days.** To keep to one run at a time, the agent holds a lock while it runs. If a run hung (a check that never answered), it kept the lock, and Windows lets a scheduled task run for 72 hours, so every later run logged "Another run is still going; skipped this one" and nothing was reported. Uninstalling and installing again didn't help, as that left the stuck run going. Now:
+  - a run that finds the lock held by an agent run going for over 20 minutes stops it and carries on, and says in the log and in the device's Details which step it was stuck on (e.g. `hyper-v`), to help find the cause;
+  - uninstalling stops any agent run still going, and installing clears a stuck one;
+  - running the script by hand meanwhile no longer fails with "Access to the path 'Global\RollcallAgentRun' is denied": the lock was made by the scheduled task, which runs as SYSTEM, so only SYSTEM could open it. Any signed-in user can now wait on it.
+
 ## 1.88.0 - 2026-11-19
 
 ### Added
