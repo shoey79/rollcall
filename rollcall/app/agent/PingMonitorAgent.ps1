@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.51'
+$AgentVersion = '1.0.52'
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -1753,7 +1753,12 @@ function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
                 mode = $mode; antivirus_enabled = [bool]$mp.AntivirusEnabled
                 realtime = [bool]$mp.RealTimeProtectionEnabled
                 signature_age_days = [int]$mp.AntivirusSignatureAge
+                quick_scan_end = $null; full_scan_end = $null
                 detections = @()
+            }
+            # When the last quick and full scans finished (never: empty, or year 1601 on some builds)
+            foreach ($p in @(@('quick_scan_end', 'QuickScanEndTime'), @('full_scan_end', 'FullScanEndTime'))) {
+                try { $t = $mp.($p[1]); if ($t -and ([DateTime]$t).Year -gt 2000) { $def[$p[0]] = ConvertTo-UtcString $t } } catch { }
             }
             try {
                 $names = @{}

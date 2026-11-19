@@ -143,6 +143,18 @@ configuration:
   agent_disk_crit:
     name: Disk space alert (% free)
     description: Disks go red at or below this much free space.
+  agent_memory_warn:
+    name: Memory warning (% used)
+    description: The Resources check goes amber at or above this much memory in use. Each device can have its own limits in its details. 0 turns it off.
+  agent_memory_crit:
+    name: Memory alert (% used)
+    description: The Resources check goes red, and alerts, at or above this much memory in use (two reports in a row). 0 turns it off.
+  agent_cpu_warn:
+    name: CPU warning (% busy)
+    description: "The Resources check goes amber when the CPU is at or above this in several reports in a row (below). Amber only: busy isn't broken. 0 turns it off."
+  agent_cpu_reports:
+    name: CPU warning after (reports in a row)
+    description: How many reports in a row the CPU must be that busy. Agents report every 5 minutes, and each reading is a moment, so one spike doesn't count.
   agent_failed_logons:
     name: Failed logons that count as an attack
     description: This many failed logons in one agent report turns the Security check red.

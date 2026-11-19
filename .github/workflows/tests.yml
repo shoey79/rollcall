@@ -96,7 +96,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pytest
-      - run: python -m pytest -q tests/test_agent_strict.py tests/test_secret_scan.py tests/test_agent_route.py tests/test_agent_startup_network.py tests/test_agent_run_lock.py tests/test_veeam_issue.py tests/test_agent_task_limit.py
+      - run: python -m pytest -q tests/test_agent_strict.py tests/test_secret_scan.py tests/test_agent_route.py tests/test_agent_startup_network.py tests/test_agent_run_lock.py tests/test_veeam_issue.py tests/test_agent_task_limit.py tests/test_resources_and_tidy.py::test_agent_reads_defender_scan_times
 
   msi-build:
     name: Build a test agent installer

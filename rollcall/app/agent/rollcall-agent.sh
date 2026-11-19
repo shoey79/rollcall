@@ -14,7 +14,7 @@
 # The first report asks to join; approve it in the Rollcall dashboard (Manage > Agents).
 # Downloaded from the dashboard, the add-on's address and enrolment key are already filled in.
 
-AGENT_VERSION="1.0.1"
+AGENT_VERSION="1.0.2"
 SERVER="__PM_SERVER__"
 ENROL_KEY="__PM_ENROL_KEY__"
 IGNORE_CERT=0
@@ -82,6 +82,7 @@ system_info() {
     mf=$(awk '/^MemAvailable:/{a=$2} /^MemFree:/{f=$2} /^Buffers:/{b=$2} /^Cached:/{c=$2} END{print int((a?a:f+b+c)/1024)}' /proc/meminfo)
     set -- $(cat /proc/loadavg)
     load="[$(num "$1"),$(num "$2"),$(num "$3")]"
+    cores=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
     # CPU use over a second, from /proc/stat
     s1=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8, $5+$6}' /proc/stat); sleep 1
     s2=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8, $5+$6}' /proc/stat)
@@ -91,8 +92,8 @@ system_info() {
     ipj=$(for i in $ips; do jl "$i"; done | head -8 | join)
     printf '"hostname":%s,"fqdn":%s,"os":%s,"os_build":%s,"os_id":%s,"os_version_id":%s,"hw_model":%s,"hw_vendor":"","virtual":null,' \
         "$(js "$HOSTNAME" 60)" "$(js "$HOSTNAME" 120)" "$(js "$os (kernel $kernel)" 120)" "$(js "$kernel" 60)" "$(js "$os_id" 30)" "$(js "$os_ver" 20)" "$(js "$model" 80)"
-    printf '"boot_time":"%s","uptime_s":%s,"mem_total_mb":%s,"mem_free_mb":%s,"load":%s,"cpu_pct":%s,"ips":[%s],' \
-        "$boot" "$(num "$up")" "$(num "$mt")" "$(num "$mf")" "$load" "$cpu" "$ipj"
+    printf '"boot_time":"%s","uptime_s":%s,"mem_total_mb":%s,"mem_free_mb":%s,"load":%s,"cpu_cores":%s,"cpu_pct":%s,"ips":[%s],' \
+        "$boot" "$(num "$up")" "$(num "$mt")" "$(num "$mf")" "$load" "$(num "$cores")" "$cpu" "$ipj"
     printf '"domain":"","part_of_domain":false,"workstation":false,"pending_reboot":false,"updates_pending":null,"security_updates":null,'
 }
 

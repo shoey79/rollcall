@@ -93,7 +93,7 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as devic
 | Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
-The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab.
+The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab. Searching from the **Overview** opens a temporary **Search** tab with every matching device; clear the box, or choose × on the tab, to go back to the Overview.
 
 **Pause all in this tab** pauses every device in the tab at once, e.g. for a site's patch night. If something is typed in the search box, only the devices shown are paused. **Resume N paused** ends the pause early for all of them. See [Pausing](#pausing-for-reboots-maintenance-mode).
 
@@ -119,6 +119,7 @@ Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit op
 
 - **Manage → Add device** opens a form with the name, the IP address or hostname, a checkbox for each service preset (showing the ports it checks), custom checks, SNMP, syslog, a linked Home Assistant device, other addresses and the monitoring schedule.
 - **Edit** on a row, or at the bottom of Details, opens the same form. **Delete** and **Reset uptime** for that device are in the form too.
+- The **i** next to a setting explains it: hover over it, tap it or tab to it. The Home Assistant parts are tick boxes: **Link a Home Assistant device** and **Add Home Assistant sensors as checks** open their searches when ticked; unticking the device unlinks it.
 - Changes apply straight away, with no add-on restart.
 - The list is saved in the add-on's data folder (`hosts.json`), which is included in Home Assistant backups.
 
@@ -599,7 +600,7 @@ The `plex` preset only checks that Plex's `/identity` page answers. For more, ti
 
 ### Upstream devices
 
-A device can have an **Upstream device** (Edit, under Group): what it's reached through, such as the router at a branch office, a switch, or a VPN firewall. While the upstream device is down, the devices behind it show as **Unreachable** (a striped dot) rather than Down, and don't alert on their own: you get **one** alert, for the upstream device, that lists what's behind it, e.g. *Branch router is DOWN … Devices behind it may also be affected (3): PC01, PC02, Switch.*
+A device can have an **Upstream device** (Edit, under Other addresses): what it's reached through, such as the router at a branch office, a switch, or a VPN firewall. While the upstream device is down, the devices behind it show as **Unreachable** (a striped dot) rather than Down, and don't alert on their own: you get **one** alert, for the upstream device, that lists what's behind it, e.g. *Branch router is DOWN … Devices behind it may also be affected (3): PC01, PC02, Switch.*
 
 **Many devices at once:** open the router, switch or VPN firewall's **Edit** and expand **Devices behind it**: tick every device reached through it, and untick any that aren't. A device already behind something else says so, and ticking it moves it here; devices this one is behind aren't offered (that would be a loop). Filter the list by name, address or group.
 
@@ -682,6 +683,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 |---|---|---|
 | **Agent** | A run took longer than `agent_slow_seconds` (120) | No report for `agent_stale_minutes` (15) |
 | **Disk** | A volume under `agent_disk_warn` (15%) free | Under `agent_disk_crit` (5%) free |
+| **Resources** | Memory at `agent_memory_warn` (90%) used or more; the CPU at `agent_cpu_warn` (90%) or more in the last `agent_cpu_reports` (3) reports; on a router, the 15-minute load above its number of CPU cores | Memory at `agent_memory_crit` (95%) used or more (two reports in a row) |
 | **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row). Automatic (Delayed Start) services, which Windows starts a couple of minutes after it starts, don't count as stopped until it's been up 5 minutes; Details marks them *delayed start* |
 | **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off). The details say what asked for the restart (Windows Update, component servicing, Configuration Manager, files waiting to be replaced) and what was installed since the last one | |
 | **Vulnerabilities** | A known vulnerability in Windows scoring `vuln_min_score` (9) or more that a later Windows update fixes (see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
@@ -778,6 +780,8 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 **Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker, certificates and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
 
+In Details, **Group Policy** and **Time** are on their own **Domain** tab. **Microsoft Defender** (Security tab) shows when the last quick and full scans finished (agent 1.0.52 or later). While a device is down, off schedule or its agent has stopped reporting, **Signed in** says nobody (it's off) or not known (no recent report), rather than showing who was signed in at its last report; the same goes for the **Signed-in user** line under the name.
+
 ### LAPS
 
 On devices where a LAPS policy applies (agent 1.0.18 or later), Rollcall checks that the managed local admin password is being rotated on the schedule the policy sets. It covers Windows LAPS (from Group Policy, Intune or local configuration, backing up to AD or Entra ID) and legacy Microsoft LAPS (AdmPwd), including Windows LAPS' legacy emulation mode.
@@ -822,13 +826,23 @@ To leave the check off a server, ignore it (`exchange:exchange`).
 
 ### Time
 
-On every domain-joined Windows device (agent 1.0.46 or later), the agent measures how far its clock is from the domain with `w32tm /stripchart`, the same as running it by hand. It's on the **Roles** tab.
+On every domain-joined Windows device (agent 1.0.46 or later), the agent measures how far its clock is from the domain with `w32tm /stripchart`, the same as running it by hand. It's on the **Domain** tab.
 
 - **Domain members** are compared with the domain controller they use; **other domain controllers** with the PDC emulator, which the rest of the domain takes its time from.
 - **Amber** when the clock is `agent_time_warn_seconds` (60) or more out, or Windows Time isn't syncing from anything ("Local CMOS Clock", "Free-running System Clock" or NoSync). **Red** at `agent_time_crit_seconds` (240) on two reports in a row: Kerberos refuses sign-ins at 5 minutes, so that's a warning before people can't log on.
 - **The PDC emulator** has nothing to compare with, so it's checked for a real time source instead: amber when it runs on its own clock, since the whole domain then drifts with it. Point it at an NTP server (`w32tm /config /manualpeerlist:"pool.ntp.org" /syncfromflags:manual /reliable:yes /update`).
 - If the domain controller can't be reached for the comparison, the check says so and stays green, rather than alerting for something the time isn't to blame for.
 - Can be ignored on a device (`time:time`).
+
+### Resources (memory and CPU)
+
+Every agent (Windows, Linux and the OpenWrt router agent) is checked for memory and CPU:
+
+- **Memory** is amber at `agent_memory_warn` (90%) used and red, with an alert, at `agent_memory_crit` (95%) for two reports in a row. Memory used is worked out from what the system reports as available (`MemAvailable` on Linux and routers, free physical memory on Windows), the same figure as in Details.
+- **CPU** is amber when it's at `agent_cpu_warn` (90%) or more in each of the last `agent_cpu_reports` (3) reports, about 15 minutes. Each report's reading is a moment, so one spike doesn't count, and a missed report starts the count again. CPU is never red: busy isn't broken.
+- **Routers** (router agent 1.0.2 or later) are also amber when the 15-minute load is above the number of CPU cores, a sign the router can't keep up.
+- **SQL Server and Exchange** keep most of a server's memory for themselves by design, so memory isn't checked on those servers unless you give the device its own memory limits.
+- **Each device can have its own limits**: in Details, under **System**, choose **Change** next to the Resources line. Blank uses the add-on's setting, 0 turns that one off, and **Don't check memory or CPU on this device** turns the check off.
 
 ### Group Policy and SYSVOL replication
 
@@ -842,7 +856,7 @@ On every domain-joined Windows device (agent 1.0.46 or later), the agent measure
 - **Red** when DFS-R has stopped replicating SYSVOL: after an unclean shutdown (event 2213, which needs resuming with the command in the event), because the DC was offline longer than DFS-R allows (4012, which needs a non-authoritative sync), or the folder is in error.
 - **Amber** while it can't reach a partner for over an hour (5002/5008/5014 with no 5004 since), during initial sync or recovery, or while SYSVOL still replicates with FRS. FRS isn't supported from Windows Server 2019; migrate with `dfsrmig`.
 
-Both are on the **Roles** tab. Each can be ignored on a device (`gpo:gpo`, `sysvol:sysvol`).
+Group Policy is on the **Domain** tab, with Time; SYSVOL replication is on the **Roles** tab, as part of the domain controller role. Each can be ignored on a device (`gpo:gpo`, `sysvol:sysvol`).
 
 ### DFS Replication
 
@@ -1043,7 +1057,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 
 ### Agent security
 
-- **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\PingMonitor`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then shows what was found, amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
+- **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\PingMonitor`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then says who changed it and when it was put back, e.g. *Its folder's permissions were changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov* (Windows doesn't record who changes permissions, so the "who" is whoever took ownership to change them; otherwise it names the accounts given access). The full list is under **What the agent found** in Details. It's amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
 - **The password scan never sends passwords**, only where each one is (see [Passwords left in files](#passwords-left-in-files)).
 - **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, which is signed (see [Updating agents automatically](#updating-agents-automatically)).
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
@@ -1130,6 +1144,7 @@ It doesn't update itself: to update, download it again and run `--install` again
 | **Security** | | `agent_failed_logons` or more failed SSH (dropbear) or LuCI sign-ins in one report |
 | **Network** (adapters you tick) | A ticked interface disabled, or its link slower than when it was ticked | A ticked interface disconnected or gone (two reports) |
 
+- **Resources:** memory and CPU are checked as on other agents (see [Resources](#resources-memory-and-cpu)), and the router is amber when its 15-minute load is above its number of CPU cores (router agent 1.0.2 or later).
 - **Details** shows the model and OpenWrt version, uptime, CPU, memory and load, each interface's addresses, traffic, errors and drops, and the internet connections (protocol, address, gateway, DNS servers, how long they've been up) on the **Roles** tab.
 - **Internet connections** are the interfaces named `wan…` or with a default route. One can be ignored by its name with **Ignore** in Details (`wan:wan6`).
 - **Failed sign-ins** come from the system log (`logread`): who, from where and how many times, each counted once.
@@ -1407,6 +1422,10 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_slow_seconds` | 120 | Amber if an agent run takes longer (0 turns it off) |
 | `agent_disk_warn` | 15 | Default amber level, % free |
 | `agent_disk_crit` | 5 | Default red level, % free |
+| `agent_memory_warn` | 90 | Resources: amber at this much memory used, % (0 turns it off) |
+| `agent_memory_crit` | 95 | Resources: red, and an alert, at this much memory used, % (two reports in a row; 0 turns it off) |
+| `agent_cpu_warn` | 90 | Resources: amber when the CPU is this busy, %, in each of the last `agent_cpu_reports` reports (0 turns it off) |
+| `agent_cpu_reports` | 3 | How many reports in a row (5 minutes apart) the CPU must be that busy |
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
 | `agent_bitlocker_require` | workstations | Which physical devices with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical devices that use it are always checked; virtual machines never are |

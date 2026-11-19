@@ -260,6 +260,7 @@ def normalize_report(r) -> dict:
         g = _as_dict(r["agent_integrity"])
         r["agent_integrity"] = {"at": str(g.get("at") or "")[:30], "first": g.get("first") is True,
                                 "what": [str(x)[:200] for x in (g.get("what") if isinstance(g.get("what"), list) else []) if x][:10]}
+        r["agent_integrity"].update(integrity_who(r["agent_integrity"]["what"]))
     for k, n in (("os_id", 30), ("os_version_id", 20)):  # Linux agent 1.0.20+: the distro and release
         if k in r:
             r[k] = re.sub(r"[^A-Za-z0-9._-]", "", str(r[k] or ""))[:n].lower()
@@ -309,6 +310,8 @@ def normalize_report(r) -> dict:
     if "defender" in c:
         d = c["defender"] = _as_dict(c["defender"])
         d["detections"] = [x for x in _as_list(d.get("detections")) if isinstance(x, dict)]
+        for k in ("quick_scan_end", "full_scan_end"):  # agent 1.0.52+
+            d[k] = str(d[k])[:30] if isinstance(d.get(k), str) and d[k] else None
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
     if "laps" in c:
@@ -445,6 +448,8 @@ def normalize_report(r) -> dict:
         im["queues"] = [x for x in _as_list(im.get("queues")) if isinstance(x, dict)]
     r["os_family"] = "linux" if r.get("os_family") == "linux" else "windows"
     r["agent_kind"] = "sh" if r.get("agent_kind") == "sh" else None
+    cc = r.get("cpu_cores")  # router agent 1.0.2+: for its load
+    r["cpu_cores"] = cc if isinstance(cc, int) and not isinstance(cc, bool) and 0 < cc <= 1024 else None
     if "wan" in c:
         c["wan"] = {"interfaces": [{"name": str(i.get("name") or "")[:40], "proto": str(i.get("proto") or "")[:20],
                                     "up": i.get("up") is True, "autostart": i.get("autostart") is not False,
@@ -1456,6 +1461,108 @@ def backup_job_state(j: dict, now: float) -> tuple[str, str]:
     return OK, ""
 
 
+# Programs that keep most of a server's memory for themselves by design: memory limits there need setting by hand.
+MEMORY_HUNGRY_ROLES = ("SQL Server", "Exchange")
+
+
+def resource_limits(opts: dict, settings: dict) -> dict:
+    """The memory and CPU limits for a device: its own (set in Details) or the add-on's. 0 is off."""
+    own = settings.get("resources") or {}
+    pick = lambda k, opt, dflt: float(own[k]) if own.get(k) is not None else float(opts.get(opt, dflt))
+    return {"off": own.get("off") is True, "mem_warn": pick("mem_warn", "agent_memory_warn", 90),
+            "mem_crit": pick("mem_crit", "agent_memory_crit", 95), "cpu_warn": pick("cpu_warn", "agent_cpu_warn", 90),
+            "cpu_reports": max(1, int(opts.get("agent_cpu_reports", 3))),
+            "mem_own": own.get("mem_warn") is not None or own.get("mem_crit") is not None}
+
+
+def resources_state(report: dict, opts: dict, settings: dict) -> tuple[str, str] | None:
+    """Memory, CPU and (routers) load against their limits: (level, detail), or None if off or not reported.
+
+    Memory: amber at mem_warn % used, red at mem_crit. CPU: amber when it's at cpu_warn or more in the last
+    cpu_reports reports (settings["cpu_recent"], newest first): each reading is a moment, so one spike doesn't
+    count, and busy isn't broken, so never red. A router (agent_kind "sh") is amber when its 15-minute load is
+    above its number of CPU cores. Memory is left alone on SQL Server and Exchange, which keep most of the
+    memory by design, unless the device has its own memory limits."""
+    lim = resource_limits(opts, settings)
+    if lim["off"]:
+        return None
+    tot, free, cpu = report.get("mem_total_mb"), report.get("mem_free_mb"), report.get("cpu_pct")
+    num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    mem = round(100 * (1 - free / tot), 1) if num(tot) and num(free) and tot > 0 and 0 <= free <= tot else None
+    cpu = float(cpu) if num(cpu) and 0 <= cpu <= 100 else None
+    if mem is None and cpu is None:
+        return None
+    level, bad, info = OK, [], []
+    hungry = next((r for r in report.get("roles") or [] if r in MEMORY_HUNGRY_ROLES), None)
+    if mem is not None:
+        if hungry and not lim["mem_own"]:
+            info.append(f"memory {mem:g}% used (not checked: {hungry} keeps memory for itself)")
+        elif lim["mem_crit"] and mem >= lim["mem_crit"]:
+            level = CRIT
+            bad.append(f"memory {mem:g}% used (red at {lim['mem_crit']:g}%)")
+        elif lim["mem_warn"] and mem >= lim["mem_warn"]:
+            level = WARN
+            bad.append(f"memory {mem:g}% used (amber at {lim['mem_warn']:g}%)")
+        else:
+            info.append(f"memory {mem:g}% used")
+    if cpu is not None:
+        n = lim["cpu_reports"]
+        recent = [float(x) for x in (settings.get("cpu_recent") or [cpu])][:n]
+        if lim["cpu_warn"] and len(recent) >= n and all(x >= lim["cpu_warn"] for x in recent):
+            level = level if level == CRIT else WARN
+            bad.append(f"CPU {cpu:g}%, at {lim['cpu_warn']:g}% or more in the last {n} report{'s' if n > 1 else ''}")
+        else:
+            info.append(f"CPU {cpu:g}%")
+    load, cores = report.get("load"), report.get("cpu_cores")
+    if report.get("agent_kind") == "sh" and isinstance(load, list) and len(load) == 3 and num(load[2]) and num(cores) and cores > 0:
+        if load[2] > cores:
+            level = level if level == CRIT else WARN
+            bad.append(f"15-minute load {load[2]:.2f} on {int(cores)} CPU core{'s' if cores > 1 else ''}")
+        else:
+            info.append(f"load {load[2]:.2f}")
+    text = "; ".join(bad) if bad else ", ".join(info)
+    return level, text[0].upper() + text[1:]
+
+
+_OWNED = re.compile(r"^.+? was owned by (.+)$")
+_ACCESS = re.compile(r"^(.+?) had access to .+$")
+
+
+def integrity_who(what: list) -> dict:
+    """Who changed the agent's folder, from what the agent found (its wording, Windows and Linux):
+    "the agent folder was owned by CONTOSO\\admin" -> who; "CONTOSO\\admin, BUILTIN\\Users had access to ..." -> access;
+    "agent.log could be read by others (644)" -> opened. Windows doesn't record who changed permissions (without
+    auditing), but taking ownership to change them leaves the owner, so that's the "who"."""
+    who, access, opened = [], [], False
+    for w in what or []:
+        m = _OWNED.match(w)
+        if m:
+            who.append(m.group(1).strip())
+            continue
+        m = _ACCESS.match(w)
+        if m:
+            access += [x.strip() for x in m.group(1).split(",") if x.strip()]
+        elif " by others" in w:
+            opened = True
+    who = list(dict.fromkeys(who))[:3]
+    return {"who": who, "access": [a for a in dict.fromkeys(access) if a not in who][:5], "opened": opened}
+
+
+def integrity_by(g: dict) -> str:
+    """' by CONTOSO\\admin', ' to give BUILTIN\\Users access', ' so others could read them', or ''."""
+    if g.get("who"):
+        return " by " + " and ".join(g["who"])
+    if g.get("access"):
+        return " to give " + ", ".join(g["access"]) + " access"
+    return " so others could read them" if g.get("opened") else ""
+
+
+def _clock(ts: float) -> str:
+    """'19:03 on 19 Nov'."""
+    t = time.localtime(ts)
+    return f"{time.strftime('%H:%M', t)} on {t.tm_mday} {time.strftime('%b', t)}"
+
+
 def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict | None = None) -> dict:
     """Turn one agent report into {"checks": [...], "notable": {...}}.
 
@@ -1499,6 +1606,10 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
             worst = min(vols, key=lambda v: v["pct"])
             detail = f"Lowest: {worst['name']} {worst['pct']:g}% free"
         checks.append(_check("disk", "Disk", level, detail, info={"volumes": vols}))
+
+    res = resources_state(report, opts, settings)
+    if res:
+        checks.append(_check("resources", "Resources", res[0], res[1], confirm=res[0] == CRIT))
 
     # Services: role services that stopped are red after two reports;
     # other stopped automatic services are amber (worth a look, no alert).
@@ -1807,16 +1918,17 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if gi and gi.get("at"):
         # The agent found its own folder's permissions changed (e.g. opened up to read its log) and put them back
         when = _ts(gi["at"])
-        what = "; ".join(gi.get("what") or []) or "permissions had been changed"
+        by = integrity_by(gi if "who" in gi else integrity_who(gi.get("what") or []))
+        at = _clock(when) if when else "?"
         acked = float(settings.get("integrity_ack") or 0)
         if gi.get("first"):
-            checks.append(_check("integrity", "Agent files", OK, f"Locked down when the agent updated ({what})"))
+            checks.append(_check("integrity", "Agent files", OK, "Locked down when the agent updated"))
         elif when and acked >= when:
-            checks.append(_check("integrity", "Agent files", OK, f"Acknowledged: put back at {time.strftime('%H:%M %d %b', time.localtime(when))} ({what})"))
+            checks.append(_check("integrity", "Agent files", OK, f"Acknowledged: its folder's permissions were changed{by}; the agent reset them at {at}"))
         elif when and time.time() - when < 86400:
-            checks.append(_check("integrity", "Agent files", WARN, f"Put back at {time.strftime('%H:%M', time.localtime(when))}: {what}"))
+            checks.append(_check("integrity", "Agent files", WARN, f"Its folder's permissions were changed{by}; the agent reset them at {at}"))
         else:
-            checks.append(_check("integrity", "Agent files", OK, f"Locked down (last put back {time.strftime('%d %b', time.localtime(when or 0))})"))
+            checks.append(_check("integrity", "Agent files", OK, f"Locked down (last reset {at}{by and ', changed' + by})"))
 
     rs = report.get("secrets")
     if rs and rs.get("on") and settings.get("secret_scan_on", True):  # turned off in Rollcall: gone straight away

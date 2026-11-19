@@ -189,6 +189,10 @@ DEFAULTS = {
     "agent_slow_seconds": 120,
     "agent_disk_warn": 15,
     "agent_disk_crit": 5,
+    "agent_memory_warn": 90,
+    "agent_memory_crit": 95,
+    "agent_cpu_warn": 90,
+    "agent_cpu_reports": 3,
     "agent_failed_logons": 20,
     "agent_laps_overdue_days": 3,
     "agent_bitlocker_require": "workstations",
@@ -2368,7 +2372,7 @@ class Monitor:
             if task:
                 task.cancel()
                 self._winget_task = asyncio.create_task(self.winget_loop())
-        thresholds = {"cert_warn_days", "cert_crit_days", "agent_disk_warn", "agent_disk_crit", "agent_patch_days",
+        thresholds = {"cert_warn_days", "cert_crit_days", "agent_disk_warn", "agent_disk_crit", "agent_memory_warn", "agent_memory_crit", "agent_cpu_warn", "agent_cpu_reports", "agent_patch_days",
                       "agent_laps_overdue_days", "agent_bitlocker_require", "agent_sql_backup_hours",
                       "agent_exchange_queue_warn", "agent_time_warn_seconds", "agent_time_crit_seconds", "agent_failed_logons", "agent_event_watch", "agent_security_alert_ids",
                       "agent_watch_services", "agent_ignore", "ups_runtime_warn_minutes", "ups_runtime_crit_minutes",
@@ -4294,6 +4298,7 @@ class Monitor:
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
+                "resources": dict(hs.get("resources") or {}),
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "secret_ack": self._ack_time(h, "secrets"),
                 "integrity_ack": self._ack_time(h, "integrity"),
@@ -4365,6 +4370,17 @@ class Monitor:
             disks[key] = {"warn": warn, "crit": crit}
         self._save_agent_settings()
         log.info("%s %s disk thresholds: %s", h.name, key, disks.get(key) or "defaults")
+        await self.reevaluate(h)
+
+    async def set_resources(self, h: Host, res: dict | None) -> None:
+        """A device's own memory and CPU limits (None: back to the add-on's), or the check off."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        if res:
+            hs["resources"] = res
+        else:
+            hs.pop("resources", None)
+        self._save_agent_settings()
+        log.info("%s: resource limits %s", h.name, res or "defaults")
         await self.reevaluate(h)
 
     async def forget_backup_job(self, h: Host, key: str, forget: bool) -> bool:
@@ -4461,6 +4477,13 @@ class Monitor:
             except sqlite3.Error as e:
                 log.warning("%s: couldn't record its metrics: %s", h.name, e)
         settings = self._host_settings(h)
+        # CPU in the last few reports (each is a moment): the Resources check wants it high in all of them.
+        # Agents report every 5 minutes; a gap (a missed report) means it isn't "in a row".
+        n = max(1, int(self.opts.get("agent_cpu_reports", 3)))
+        try:
+            settings["cpu_recent"] = self.metrics.recent(h.key, "cpu", received - n * 330, received, n)
+        except sqlite3.Error:
+            settings["cpu_recent"] = []
         result = evaluate(report, self.opts, now=received, settings=settings)
         prev_up = (h.agent_report or {}).get("uptime_s")
         h.agent_report, h.agent_seen = report, received
@@ -4701,6 +4724,14 @@ class Monitor:
             elif chip.status == RED:
                 chip.detail = f"No report for {fmt_duration(now - h.agent_seen)}"
 
+    def _agent_gone(self, h: Host) -> bool:
+        """Down, off schedule, unreachable, or its agent hasn't reported for agent_stale_minutes: what its last
+        report says about the moment (who's signed in) no longer holds."""
+        if h.status == RED or h.off_schedule or getattr(h, "unreachable", False):
+            return True
+        stale = max(float(self.opts.get("agent_stale_minutes", 15)), 12) * 60
+        return bool(h.agent_seen) and time.time() - h.agent_seen > stale
+
     def _agent_summary(self, h: Host) -> dict | None:
         if not h.agent_id:
             return None
@@ -4718,10 +4749,11 @@ class Monitor:
                 "cpu_pct": r.get("cpu_pct"), "mem_used_pct": mem, "pending_reboot": r.get("pending_reboot"),
                 "hw_vendor": agentlib.clean_hw(r.get("hw_vendor"))[:80], "hw_model": agentlib.clean_hw(r.get("hw_model"))[:80],
                 "serial": agentlib.clean_hw(r.get("serial"))[:60], "hw_board": r.get("hw_board") is True,
-                # who is signed in: active sessions first, one entry per person (None: an agent too old to say)
-                "users": None if "sessions" not in r else list(dict.fromkeys(
+                # who is signed in: active sessions first, one entry per person (None: an agent too old to say).
+                # Nobody while it's off or its agent has stopped reporting: the last report's users aren't there now.
+                "users": None if "sessions" not in r else [] if self._agent_gone(h) else list(dict.fromkeys(
                     x["user"] for x in sorted(r["sessions"], key=lambda x: (x["state"] != "active", x["session"] != "console")))),
-                "users_active": None if "sessions" not in r else len({x["user"] for x in r["sessions"] if x["state"] == "active"}),
+                "users_active": None if "sessions" not in r else 0 if self._agent_gone(h) else len({x["user"] for x in r["sessions"] if x["state"] == "active"}),
                 # None: an agent too old to say; "": physical; else what it runs on
                 "virtual": None if "virtual" not in r else str(r.get("virtual") or "")[:40]}
 
@@ -4815,7 +4847,8 @@ class Monitor:
                     "global_sec_filters": (self.agent_settings.get("global_sec_filters") or []) if include_security else [],
                     "config_ignore": list(self.opts.get("agent_ignore") or []), "disks": hs.get("disks") or {},
                     "nic_watch": hs.get("nic_watch") or {}, "nic_rates": h.nic_rates, "backup_forgot": hs.get("backup_forgot") or {},
-                    "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)}}
+                    "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)},
+                    "resources": hs.get("resources") or {}, "res_limits": agentlib.resource_limits(self.opts, {"resources": hs.get("resources") or {}})}
         if include_security and hs.get("domain_seen") is not None:
             dseen = hs["domain_seen"]
             dm = (r.get("checks") or {}).get("domain")
@@ -5003,7 +5036,7 @@ class Monitor:
             })
         self.syslog_sweep()
         return {"now": time.time(), "interval": self.interval,
-                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)), "time_warn": int(self.opts.get("agent_time_warn_seconds", 60)), "time_crit": int(self.opts.get("agent_time_crit_seconds", 240)), "name_line": str(self.opts.get("name_line", "auto")),
+                "agent_stale_minutes": int(self.opts.get("agent_stale_minutes", 15)), "laps_overdue_days": int(self.opts.get("agent_laps_overdue_days", 3)), "bitlocker_require": str(self.opts.get("agent_bitlocker_require", "workstations")), "cert_warn_days": int(self.opts.get("cert_warn_days", 30)), "cert_crit_days": int(self.opts.get("cert_crit_days", 7)), "sql_backup_hours": int(self.opts.get("agent_sql_backup_hours", 36)), "exchange_queue_warn": int(self.opts.get("agent_exchange_queue_warn", 250)), "time_warn": int(self.opts.get("agent_time_warn_seconds", 60)), "time_crit": int(self.opts.get("agent_time_crit_seconds", 240)), "mem_warn": int(self.opts.get("agent_memory_warn", 90)), "mem_crit": int(self.opts.get("agent_memory_crit", 95)), "cpu_warn": int(self.opts.get("agent_cpu_warn", 90)), "name_line": str(self.opts.get("name_line", "auto")),
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
@@ -5536,6 +5569,31 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if warn is not None and crit is not None and warn and crit > warn:
             return web.json_response({"error": "the red level can't be above the amber level"}, status=400)
         await monitor.set_disk(h, disk, warn, crit)
+        return web.json_response({"ok": True})
+
+    async def agent_resources(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await req.json()
+        if not isinstance(body, dict):
+            return web.json_response({"error": "expected an object"}, status=400)
+        res = {}
+        try:
+            for k in ("mem_warn", "mem_crit", "cpu_warn"):
+                v = body.get(k)
+                if v not in (None, ""):
+                    v = float(v)
+                    if not 0 <= v <= 100:
+                        raise ValueError
+                    res[k] = int(v) if v.is_integer() else v
+        except (TypeError, ValueError):
+            return web.json_response({"error": "limits must be numbers from 0 to 100 (0 turns one off)"}, status=400)
+        if res.get("mem_warn") and res.get("mem_crit") and res["mem_crit"] < res["mem_warn"]:
+            return web.json_response({"error": "the red level can't be below the amber level"}, status=400)
+        if body.get("off") is True:
+            res["off"] = True
+        await monitor.set_resources(h, res or None)
         return web.json_response({"ok": True})
 
     # -- Agents (admin) ---------------------------------------------------
@@ -6398,6 +6456,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/ignore", editor_only(agent_ignore))
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
+    app.router.add_post("/api/hosts/{key}/agent/resources", editor_only(agent_resources))
     app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
     app.router.add_post("/api/hosts/{key}/agent/secret-scan", editor_only(agent_secret_scan))
     app.router.add_get("/api/software", software_search)

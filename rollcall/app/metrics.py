@@ -41,6 +41,12 @@ class Metrics:
             self.db.executemany("INSERT OR REPLACE INTO metrics VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
             self.db.commit()
 
+    def recent(self, host: str, series: str, since: float, until: float, limit: int = 12) -> list[float]:
+        """The raw readings of a series between two times, newest first (e.g. CPU in the last few reports)."""
+        return [r[0] for r in self.db.execute(
+            "SELECT avg FROM metrics WHERE host = ? AND series = ? AND res = ? AND ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?",
+            (host, series, RAW, since, until, limit))]
+
     @staticmethod
     def from_report(report: dict, nic_rates: dict) -> dict[str, float]:
         """The values worth keeping from one agent report."""

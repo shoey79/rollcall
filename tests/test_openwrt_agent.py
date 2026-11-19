@@ -131,10 +131,11 @@ def test_report(openwrt):
     assert p.returncode == 0, p.stderr
     r = json.loads(p.stdout)
     assert "agent_token" not in r                                     # --report never shows the token
-    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.1"
+    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.2"
     assert r["hostname"] == "Lab-Router" and r["os"].startswith("OpenWrt 23.05.5 r24106") and r["os_id"] == "openwrt"
     assert r["hw_model"] == "Test Router Model X" and r["roles"] == ["Router (OpenWrt)"] and r["errors"] == []
     assert isinstance(r["cpu_pct"], float) and r["mem_total_mb"] > 0 and len(r["load"]) == 3 and r["uptime_s"] > 0
+    assert isinstance(r["cpu_cores"], int) and r["cpu_cores"] >= 1   # 1.0.2: for the Resources check's load
     assert r["checks"]["nics"]["adapters"] and all("rx_bytes" in a or a["status"] != "up" for a in r["checks"]["nics"]["adapters"])
     assert r["checks"]["wan"]["interfaces"] == [
         {"name": "wan", "proto": "dhcp", "up": True, "autostart": True, "uptime_s": 273600, "device": "eth1", "ipv4": "203.0.113.25",

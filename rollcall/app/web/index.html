@@ -86,7 +86,8 @@ button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
 .tbgap{flex:1 1 0;min-width:0}  /* keeps the tab buttons and Manage at the right on every tab */
 #menuBtn{font-size:13px;padding:7px 14px;white-space:nowrap}
 .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:220px;max-width:calc(100vw - 24px);padding:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:2px}
-.menu button{border:none;background:transparent;text-align:left;padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);display:flex;align-items:center;gap:8px;justify-content:space-between}
+.menu button{border:none;background:transparent;text-align:left;padding:9px 12px;border-radius:7px;font-size:13.5px;color:var(--text);display:flex;align-items:center;gap:10px;justify-content:flex-start}
+.menu button .badge{margin-left:auto}
 .menu button:hover,.menu button:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .menu button.danger{color:var(--red)}
 .menu hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
@@ -117,6 +118,19 @@ dialog{overscroll-behavior:contain}
 .field input:focus,.field select:focus,.custom input:focus{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);border-color:var(--accent)}
 fieldset{border:none;padding:0;margin:0 0 14px}
 legend{font-size:12px;color:var(--muted);font-weight:600;padding:0;margin-bottom:6px}
+/* The device form: each section under a heading, with a line above it */
+#hostForm fieldset{border-top:2px solid color-mix(in srgb,var(--muted) 40%,var(--line));padding-top:14px;margin:20px 0 0}
+#hostForm legend{float:left;width:100%;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text);font-weight:700;margin-bottom:10px}
+#hostForm legend small{text-transform:none;letter-spacing:0;color:var(--muted);font-weight:400}
+#hostForm legend+*{clear:both}
+#hostForm .subbox{margin:4px 0 10px 26px}
+/* "i": the explanation on hover, focus or tap */
+.tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;padding:0;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);font:italic 700 10.5px/1 Georgia,serif;cursor:help;vertical-align:1px;text-transform:none;letter-spacing:0}
+.tip:hover,.tip:focus-visible,.tip.on{border-color:var(--accent);color:var(--accent);outline:none}
+.tiptext{display:none}
+.menu svg.mi{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+.tipbox{position:fixed;z-index:1000;max-width:min(360px,calc(100vw - 16px));padding:10px 12px;border-radius:8px;background:var(--card);color:var(--text);border:1px solid color-mix(in srgb,var(--muted) 50%,var(--line));box-shadow:0 8px 24px rgba(0,0,0,.35);font:400 12.5px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-transform:none;letter-spacing:0;pointer-events:none}
+.tipbox code{font-size:11.5px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:0 4px}
 legend small{font-weight:400}
 .group-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:10px 0 6px}
 .presets{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px}
@@ -209,8 +223,9 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .dtab .dirty[hidden]{display:none}
 .dtab .dirty{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:6px;vertical-align:middle}
 @media (max-width:640px){.st-grid{grid-template-columns:1fr}}
-.sect{margin:16px 0 4px;padding-top:14px;border-top:1px solid var(--line)}
+.sect{margin:20px 0 4px;padding-top:16px;border-top:2px solid color-mix(in srgb,var(--muted) 40%,var(--line))}
 .sect:first-child{border-top:0;padding-top:0;margin-top:4px}
+details.fold{margin:0 0 8px}details.fold summary{cursor:pointer;color:var(--accent);font-size:12.5px;width:max-content}details.fold ul{margin:6px 0 0}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px;box-shadow:0 0 0 1px var(--line)}.swatch.none{background:transparent;box-shadow:none}
 .lcd{font-family:ui-monospace,Consolas,monospace;background:#1d2b1d;color:#b6f5b0;border-radius:6px;padding:8px 12px;margin:8px 0;display:inline-block;min-width:240px;font-size:13px}
 ul.tight{margin:4px 0 8px;padding-left:20px}
@@ -219,7 +234,7 @@ ul.tight{margin:4px 0 8px;padding-left:20px}
 .warn-text{color:var(--amber)}
 .discform{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}.discfilters{display:flex;gap:18px;flex-wrap:wrap;margin:4px 0 8px;font-size:13px}
 .discprog{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:6px 0}.discprog div{height:100%;background:var(--accent);transition:width .4s}
-.sect h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 6px;font-weight:600}
+.sect h3{font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text);margin:0 0 8px;font-weight:700}
 .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 18px;font-size:13px}
 .kv div span{display:block;color:var(--muted);font-size:11px}
 .pills{display:flex;flex-wrap:wrap;gap:5px}
@@ -234,7 +249,7 @@ ul.tight{margin:4px 0 8px;padding-left:20px}
 .bar i{display:block;height:100%;background:var(--green)}
 .bar i.amber{background:var(--amber)}.bar i.red{background:var(--red)}
 table.small{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:2px}
-table.small th,table.small td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:normal;vertical-align:top}
+table.small th,table.small td{padding:5px 8px;border-bottom:1px solid color-mix(in srgb,var(--line) 65%,transparent);text-align:left;white-space:normal;vertical-align:top}
 table.small th{font-size:10.5px}
 table.small tr.hl td{background:color-mix(in srgb,var(--amber) 10%,transparent)}
 table.small td.msg{max-width:420px;color:var(--muted)}
@@ -264,6 +279,7 @@ table.small tr.dim td{opacity:.55}
 .secpath{word-break:break-all;font-size:12.5px}
 .secset{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 16px;margin:10px 0 4px;font-size:13px}
 .secset label{display:flex;flex-direction:column;gap:3px}.secset label span{color:var(--muted);font-size:11px}
+#detBody select,#detBody textarea,#detBody input:not([type=checkbox]):not([type=radio]){font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
 .secset textarea{min-height:58px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
 .rebootpk{margin:2px 0 0;padding-left:18px;font-size:12.5px}
 .newer{display:inline-block;margin-top:2px;font-size:11.5px;font-weight:600;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);padding:0 7px;border-radius:9px;white-space:nowrap}
@@ -345,7 +361,7 @@ tr.unreach td{background:color-mix(in srgb,var(--grey) 9%,transparent)}
 .tab .pen:hover{opacity:1;background:color-mix(in srgb,var(--accent) 15%,transparent)}
 .tab.add{color:var(--accent);font-weight:500;border-style:dashed;background:transparent}
 /* Overview (landing tab) */
-body.home-on .wrap,body.home-on #filter,body.home-on #sortMobile{display:none!important}
+body.home-on .wrap,body.home-on #sortMobile{display:none!important}
 #home{display:grid;gap:14px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 .tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);text-align:left;font-size:13px}
@@ -518,7 +534,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="summary" id="summary"></div>
   </header>
   <div class="toolbar">
-    <input type="search" id="filter" placeholder="Filter by name, IP or service">
+    <input type="search" id="filter" placeholder="Search by name, IP or service">
     <select id="sortMobile" aria-label="Sort by"></select>
     <span class="tbgap"></span>
     <span class="viewonly" title="Only Home Assistant admins can add, edit, pause or reset">View only</span>
@@ -527,15 +543,15 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="menuwrap edit-only">
       <button type="button" id="menuBtn" class="primary" aria-haspopup="menu" aria-expanded="false" aria-controls="mainMenu">Manage<span class="badge" id="menuBadge" hidden></span> ▾</button>
       <div class="menu" id="mainMenu" role="menu" hidden>
-        <button type="button" id="addHost" role="menuitem">Add device</button>
-        <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents">Agents<span class="badge" id="pendBadge" hidden></span></button>
-        <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added">Discover devices</button>
-        <button type="button" id="swBtn" role="menuitem" title="Which devices have a program installed, and which version">Find software</button>
-        <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options">Settings</button>
-        <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export">Export / import</button>
-        <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log">Log</button>
+        <button type="button" id="addHost" role="menuitem"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add device</button>
+        <button type="button" id="agentsBtn" role="menuitem" title="Install, approve and manage the Windows and Linux agents"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5"/></svg>Agents<span class="badge" id="pendBadge" hidden></span></button>
+        <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="1.2"/><path d="M3.6 12.4a6.2 6.2 0 0 1 0-8.8M12.4 3.6a6.2 6.2 0 0 1 0 8.8M5.7 10.3a3.3 3.3 0 0 1 0-4.6M10.3 5.7a3.3 3.3 0 0 1 0 4.6"/></svg>Discover devices</button>
+        <button type="button" id="swBtn" role="menuitem" title="Which devices have a program installed, and which version"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5 8 2.5 13.5 5v6L8 13.5 2.5 11zM2.5 5 8 7.5 13.5 5M8 7.5v6"/></svg>Find software</button>
+        <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M12.6 8.0L14.2 8.0 M11.3 11.3L12.4 12.4 M8.0 12.6L8.0 14.2 M4.7 11.3L3.6 12.4 M3.4 8.0L1.8 8.0 M4.7 4.7L3.6 3.6 M8.0 3.4L8.0 1.8 M11.3 4.7L12.4 3.6"/></svg>Settings</button>
+        <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
+        <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Log</button>
         <hr>
-        <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host">Reset all uptime…</button>
+        <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.8 2.4v3.4h3.4"/></svg>Reset all uptime…</button>
       </div>
     </div>
   </div>
@@ -671,35 +687,29 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <label class="field">Name<input id="fName" maxlength="64" placeholder="SQL01" autocomplete="off"></label>
         <label class="field">IP address or hostname<input id="fHost" maxlength="253" placeholder="10.0.1.20" autocomplete="off" spellcheck="false"><small id="fHostVia" class="hint" hidden></small></label>
       </div>
+      <details class="addrs" id="addrBox">
+        <summary>Other addresses <span id="addrCount" class="muted"></span><button type="button" class="tip" aria-label="More about this">i<span class="tiptext">For a device with more than one network address, e.g. a firewall's WAN and internal IPs. Each one is pinged while the main address answers, and goes red if it stops answering. Add ports to check those too. Syslog from any of these addresses counts as this device's.</span></button></summary>
+        <div id="addrList"></div>
+        <button type="button" id="addAddr">+ Add address</button>
+      </details>
+      <div class="fields" style="margin:12px 0 0">
+        <label class="field"><span>Upstream device<button type="button" class="tip" aria-label="More about this">i<span class="tiptext">The device this one is reached through, such as its router, switch or VPN. While that's down, this one shows as <i>Unreachable</i> and doesn't alert on its own: you get one alert, for the upstream device, listing what's behind it.</span></button></span><select id="fParent"><option value="">None</option></select></label>
+        <label class="field"><span>Group<button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Which group it's in on the Overview, e.g. Servers, Network or Home automation. Type a new name to start a group. Blank: grouped by its icon's type.</span></button></span><input id="fGroup" maxlength="40" list="groupList" autocomplete="off" placeholder="Automatic"></label>
+      </div>
+      <details class="addrs" id="downBox" hidden>
+        <summary>Devices behind it <span id="downCount" class="muted"></span><button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Tick the devices reached through this one, e.g. everything on a switch or at the far end of a VPN: this becomes their upstream device. Untick one to clear it. A device already behind another says so, and ticking it moves it here.</span></button></summary>
+        <input id="downFilter" type="search" placeholder="Filter by name, address or group" autocomplete="off" style="width:100%;margin:6px 0">
+        <div id="downList" class="downlist"></div>
+      </details>
+      <datalist id="groupList"></datalist>
       <div class="iconrow">
         <div class="field"><span>Icon</span><button type="button" id="fIconBtn" class="iconbtn" aria-expanded="false"><span id="fIconShow"></span><span id="fIconName">Automatic</span> ▾</button></div>
         <label class="field">Make and model<input id="fModel" maxlength="64" placeholder="Optional, e.g. Dell PowerEdge R720xd" autocomplete="off"></label>
-        <label class="field">Line under the name<select id="fSubtitle">
+        <label class="field"><span>Line under the name<button type="button" class="tip" aria-label="More about this">i<span class="tiptext">What's shown under the device's name on the Overview. <b>Automatic</b> shows the make and model, or the operating system (from its agent) if no make is known. <b>Signed-in user</b> needs an agent, and says nobody while the device is off. <b>Add-on default</b> follows the add-on's <code>name_line</code> option.</span></button></span><select id="fSubtitle">
           <option value="">Add-on default</option><option value="auto">Automatic</option><option value="model">Make and model</option>
           <option value="os">Operating system</option><option value="address">Address</option><option value="user">Signed-in user</option><option value="none">Nothing</option></select></label>
       </div>
       <div id="iconGrid" class="icongrid" hidden></div>
-      <div class="fields" style="margin:12px 0 0">
-        <label class="field">Group<input id="fGroup" maxlength="40" list="groupList" autocomplete="off" placeholder="Automatic"></label>
-        <p class="hint" style="margin:0;align-self:end">Groups the Overview, e.g. Servers, Network, Home automation. Leave blank to group by the icon's type.</p>
-      </div>
-      <div class="fields" style="margin:12px 0 0">
-        <label class="field">Upstream device<select id="fParent"><option value="">None</option></select></label>
-        <p class="hint" style="margin:0;align-self:end">The device it's reached through, such as its router, switch or VPN. While that's down, this shows as <i>Unreachable</i> and doesn't alert on its own: you get one alert for the upstream device, listing what's behind it.</p>
-      </div>
-      <details class="addrs" id="downBox" hidden>
-        <summary>Devices behind it <span id="downCount" class="muted"></span></summary>
-        <p class="hint" style="margin:6px 0">Tick the devices reached through this one (e.g. everything on a switch, or at the far end of a VPN): it becomes their upstream device. Unticking one clears it. A device already behind another says so, and ticking it moves it here.</p>
-        <input id="downFilter" type="search" placeholder="Filter by name, address or group" autocomplete="off" style="width:100%;margin:0 0 6px">
-        <div id="downList" class="downlist"></div>
-      </details>
-      <datalist id="groupList"></datalist>
-      <details class="addrs" id="addrBox">
-        <summary>Other addresses <span id="addrCount" class="muted"></span></summary>
-        <p class="hint" style="margin:6px 0 8px">For devices with more than one network address, e.g. a firewall's WAN and internal IPs. Each one is pinged while the main address answers, and goes red if it stops; add ports to check them there too. Syslog from any of these addresses is matched to this device.</p>
-        <div id="addrList"></div>
-        <button type="button" id="addAddr">+ Add address</button>
-      </details>
       <fieldset>
         <legend>Services to check <small>— ping is always checked</small></legend>
         <input type="search" id="presetFilter" class="preset-filter" placeholder="Find a service, e.g. sql, proxmox, plex" autocomplete="off" spellcheck="false">
@@ -755,28 +765,28 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         </div>
       </fieldset>
       <fieldset>
-        <legend>Home Assistant device <small>— e.g. Pi-hole: its integration's readings shown with this device</small></legend>
-        <div id="haDevLinked"></div>
-        <input type="search" id="haDevSearch" class="preset-filter" placeholder="Search Home Assistant devices, e.g. pi-hole" autocomplete="off" spellcheck="false">
-        <div id="haDevResults" class="haresults"></div>
+        <legend>Home Assistant</legend>
+        <label class="schedopt"><input type="checkbox" id="fHaDevOn"> <span><b>Link a Home Assistant device</b><button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Shows the device's readings from its Home Assistant integration (e.g. Pi-hole's queries and blocking) in Details, and alerts on its problems as the <b>Home Assistant</b> check. Untick to unlink it.</span></button></span></label>
+        <div id="haDevBox" class="subbox" hidden>
+          <div id="haDevLinked"></div>
+          <input type="search" id="haDevSearch" class="preset-filter" placeholder="Search Home Assistant devices, e.g. pi-hole" autocomplete="off" spellcheck="false">
+          <div id="haDevResults" class="haresults"></div>
+        </div>
+        <label class="schedopt"><input type="checkbox" id="fHaSenOn"> <span><b>Add Home Assistant sensors as checks</b><button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Any Home Assistant sensor can be a check on this device, e.g. an access point's CPU and memory from the UniFi integration. <b>Add</b> one from the search and it appears under Custom checks, where you can change its limit. CPU and memory start as a problem above 90%, temperatures above 80; anything else just needs to be available.</span></button></span></label>
+        <div id="haSenBox" class="subbox" hidden>
+          <input type="search" id="haSearch" class="preset-filter" placeholder="Search Home Assistant sensors, e.g. office ap" autocomplete="off" spellcheck="false">
+          <div id="haResults" class="haresults"></div>
+        </div>
       </fieldset>
       <fieldset>
-        <legend>Home Assistant sensors <small>— e.g. CPU and memory from the UniFi integration</small></legend>
-        <input type="search" id="haSearch" class="preset-filter" placeholder="Search Home Assistant sensors, e.g. office ap" autocomplete="off" spellcheck="false">
-        <div id="haResults" class="haresults"></div>
-      </fieldset>
-      <fieldset>
-        <legend>Custom checks</legend>
+        <legend>Custom checks<button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Extra checks, one per line. Give one a name with <code>Name=</code> in front, e.g. <code>Reporting=tcp:50123</code>.<br><br>
+<b>A port on this device:</b> <code>tcp:5985</code><br>
+<b>A web page on this device:</b> <code>https:443/owa</code><br>
+<b>Any web address:</b> <code>https://mail.example.local/owa</code><br>
+<b>When a certificate expires:</b> <code>cert:443</code>, or for mail <code>SMTP=cert:25</code>, or another address <code>cert:mail.example.local:443</code><br>
+<b>A Home Assistant sensor:</b> <code>CPU=ha:sensor.office_ap_cpu&gt;90</code> is amber, then red, while it's over 90. Use <code>&gt;</code> <code>&lt;</code> <code>=</code> or <code>!=</code>; with no condition it only has to be available.</span></button></legend>
         <div id="customList"></div>
         <button type="button" id="addCustom">+ Add custom check</button>
-        <p class="hint">
-          A port: <code>tcp:5985</code> · a web page on this device: <code>https:443/owa</code> ·
-          a full URL: <code>https://mail.example.local/owa</code><br>
-          Give it a name with <code>Name=</code>, e.g. <code>Reporting=tcp:50123</code><br>
-          Certificate expiry: <code>cert:443</code>, <code>SMTP=cert:25</code> (mail ports use STARTTLS), or on another name or address <code>cert:mail.example.com:443</code><br>
-          A Home Assistant sensor: <code>CPU=ha:sensor.office_ap_cpu_utilization&gt;90</code> goes amber, then red, while the condition is true
-          (<code>&gt;</code> <code>&lt;</code> <code>=</code> <code>!=</code>). Without a condition it only needs to be available.
-        </p>
       </fieldset>
       <fieldset>
         <legend>Monitoring schedule</legend>
@@ -973,10 +983,17 @@ function svcChips(h) {
 }
 function upClass(p) { return p == null ? "muted" : p >= 99.9 ? "up-g" : p >= 95 ? "up-a" : "up-r"; }
 
+function textMatch(h, q) {
+  return !q || [h.name, h.host, h.ip || "", h.ip_range || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q);
+}
+// Searching from the Overview opens a temporary Search tab over every device; clearing it goes back.
+let searchFrom = "home";
 function render() {
   if (!data) return;
   const now = data.now;
   const q = document.getElementById("filter").value.trim().toLowerCase();
+  if (q && tabId !== "q:search" && currentTab().home) { searchFrom = tabId; tabId = "q:search"; }
+  else if (!q && tabId === "q:search") tabId = searchFrom || "home";
   const counts = {green: 0, amber: 0, red: 0, unknown: 0, maintenance: 0, degraded: 0, offsched: 0, unreach: 0};
   data.hosts.forEach(h => counts[h.off_schedule && !h.maint_until ? "offsched" : h.unreachable && !h.maint_until ? "unreach" : h.status]++);
 
@@ -995,7 +1012,7 @@ function render() {
   if (tab.home) { renderHome(); return; }
   const hosts = data.hosts
     .filter(h => tabMatch(h, tab))
-    .filter(h => !q || [h.name, h.host, h.ip || "", h.ip_range || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q))
+    .filter(h => textMatch(h, q))
     .sort(compare);
   shownHosts = hosts;
   const pauseBtn = document.getElementById("pauseTab"), resumeBtn = document.getElementById("resumeTab");
@@ -1743,6 +1760,7 @@ function ruleMatch(h, r) {
 }
 // Quick lists opened from the Overview's summary tiles: shown as a temporary tab with ×.
 const QUICK = {
+  "q:search": {name: "Search", match: h => textMatch(h, document.getElementById("filter").value.trim().toLowerCase()), describe: "Every device matching the search"},
   "q:up": {name: "Up", match: h => h.status === "green" && !h.off_schedule, describe: "Up and being monitored"},
   "q:attention": {name: "Need attention", match: h => h.status !== "red" && alerts().some(a => a.h.key === h.key), describe: "Up, but with alerts (down devices are under Down)"},
   "q:down": {name: "Down", match: h => h.status === "red", describe: "Not responding"},
@@ -1766,7 +1784,7 @@ function allTabs() {
 }
 function currentTab() {
   const q = QUICK[tabId];
-  if (q) return {id: tabId, name: q.name, quick: q.match, desc: q.describe, rules: []};
+  if (q) return {id: tabId, name: tabId === "q:search" ? `Search: “${document.getElementById("filter").value.trim().slice(0, 30)}”` : q.name, quick: q.match, desc: q.describe, rules: []};
   const tabs = allTabs();
   return tabs.find(t => t.id === tabId) || tabs[0];
 }
@@ -1781,7 +1799,7 @@ function renderTabs() {
     const red = list.filter(h => h.status === "red" && !h.unreachable).length, bad = list.filter(h => PROBLEM.has(h.status)).length;
     const custom = !t.builtin && t.id !== "all" && !t.quick;
     if (t.quick) return `<button type="button" class="tab on quicktab" data-tab="${esc(t.id)}" title="${esc(t.desc)} (from the Overview)">${esc(t.name)}
-      <span class="n">${list.length}</span><span class="x" data-tab="all" title="Show all" aria-label="Show all">×</span></button>`;
+      <span class="n">${list.length}</span>${t.id === "q:search" ? `<span class="x" data-tab="${esc(searchFrom)}" data-clearsearch="1" title="Clear the search" aria-label="Clear the search">×</span>` : `<span class="x" data-tab="all" title="Show all" aria-label="Show all">×</span>`}</button>`;
     return `<button type="button" class="tab${t.id === cur.id ? " on" : ""}" data-tab="${esc(t.id)}" title="${esc(describe(t))}">${esc(t.name)}
       <span class="n">${list.length}</span>${bad && t.id !== "problems" ? `<span class="bad${red ? " red" : ""}" title="${bad} need attention">${bad}</span>` : ""}
       ${custom && t.id === cur.id ? `<span class="pen edit-only" data-tabedit="${esc(t.id)}" title="Edit this tab">✎</span>` : ""}</button>`;
@@ -1808,6 +1826,8 @@ document.getElementById("tabs").addEventListener("click", e => {
   if (pen) { e.stopPropagation(); return openTab(views.find(v => v.id === pen.dataset.tabedit)); }
   const t = e.target.closest(".x[data-tab]") || e.target.closest("[data-tab]");
   if (!t) return;
+  if (t.dataset.tab === "q:search") return;  // already showing it
+  if (tabId === "q:search") document.getElementById("filter").value = "";  // leaving the search: it was for every device
   tabId = t.dataset.tab;
   if (!QUICK[tabId]) try { localStorage.setItem("pm_tab", tabId); } catch (err) {}
   render();
@@ -2364,7 +2384,7 @@ async function openDetails(key, jump) {
   if (detMode !== "agent") { detMode = "agent"; detKey = null; }
   if (key !== detKey || jump) {
     // Clear the previous server's details straight away so they don't flash up.
-    diskEditing = null;
+    diskEditing = null; resEditing = false;
     detTab = "overview";
     const h = data && data.hosts.find(x => x.key === key);
     document.getElementById("detTitle").textContent = h ? h.name : "Details";
@@ -2400,7 +2420,16 @@ function upRow(d, r) {
     return `<div><span>${h.status === "unreach" ? "Unreachable since" : h.status === "offsched" ? "Off since" : "Down since"}</span>${since ? at(since) : "—"}${d.received ? `<br><small class="muted">last report ${ago(d.received, now)}</small>` : ""}</div>`;
   }
   if (age > stale) return `<div><span>No report since</span>${at(d.received)}${h && h.latency_ms != null ? `<br><small class="muted">it answers ping, but its agent isn't reporting</small>` : ""}</div>`;
-  return `<div><span>Up for</span>${dur(r.uptime_s == null ? null : r.uptime_s + age)} (since ${when(r.boot_time)})</div>`;
+  const boot = r.boot_time || (r.uptime_s != null && d.received ? new Date((d.received - r.uptime_s) * 1000).toISOString() : null);
+  return `<div><span>Up for</span>${dur(r.uptime_s == null ? null : r.uptime_s + age)}${boot ? ` (since ${when(boot)})` : ""}</div>`;
+}
+// What the last report says about right now (who's signed in) no longer holds: "off" while it's down, off
+// schedule or unreachable; "silent" while it may be on but its agent hasn't reported. null otherwise.
+function agentGone(d) {
+  const h = data && data.hosts.find(x => x.key === detKey);
+  if (h && ["red", "offsched", "unreach"].includes(h.status)) return "off";
+  const stale = Math.max(12, (data && data.agent_stale_minutes) || 15) * 60;
+  return d.received && Date.now() / 1000 - d.received > stale ? "silent" : null;
 }
 function renderDetails(d) {
   const r = d.report || {}, c = r.checks || {}, hist = d.history || {};
@@ -2460,12 +2489,13 @@ function renderDetails(d) {
       : x.key === "domain" && x.status === "amber" && domainNew() ? `<button type="button" class="mini edit-only ackbtn" data-ack="domain" title="Back to green until someone else is added to a privileged group">Acknowledge</button>`
       : x.acked ? `<small>acknowledged: counts as OK while it stays like this</small><button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" data-undo="1">Undo</button>`
       : (x.status === "amber" || x.status === "red") && !TIME_ACK.includes(x.key) && !NO_ACK.includes(x.key) && x.key !== "agent" ? `<button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" title="Counts as OK while it stays like this: alerts again if it gets worse, or clears and comes back">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`);
-  const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null;
+  const mem = r.mem_total_mb ? Math.round(100 * (1 - r.mem_free_mb / r.mem_total_mb)) : null, gone = agentGone(d);
   html += sect("System", `<div class="kv">
     <div><span>Operating system</span>${esc(r.os || "—")}</div>
     <div><span>Name</span>${esc(r.fqdn || r.hostname || "—")}</div>
     <div><span>IP address</span>${esc((r.ips || []).join(", ") || "—")}</div>
-    ${r.sessions ? `<div><span>Signed in</span>${!r.sessions.length ? `<span class="muted">Nobody</span>` : (() => {
+    ${r.sessions && gone ? `<div><span>Signed in</span><span class="muted">${gone === "off" ? "Nobody: it's off" : "Not known: no recent report"}</span></div>`
+      : r.sessions ? `<div><span>Signed in</span>${!r.sessions.length ? `<span class="muted">Nobody</span>` : (() => {
       const act = r.sessions.filter(x => x.state === "active"), names = [...new Set(r.sessions.map(x => x.user))];
       return r.sessions.length === 1 ? esc(names[0]) + (r.sessions[0].session === "rdp" ? ` <small class="muted">(Remote Desktop)</small>` : r.sessions[0].session === "ssh" ? ` <small class="muted">(SSH)</small>` : "")
         : `${names.length} ${names.length === 1 ? "person" : "people"}, ${r.sessions.length} sessions${act.length < r.sessions.length ? ` <small class="muted">(${r.sessions.length - act.length} disconnected)</small>` : ""}`;
@@ -2481,8 +2511,29 @@ function renderDetails(d) {
       ((r.reboot_packages || []).length ? (linux ? ` <small class="muted">(${esc(r.reboot_packages.join(", "))})</small>`
         : `<br><small class="muted">Installed since the last restart:</small><ul class="rebootpk">${r.reboot_packages.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`)
         : (r.reboot_reasons && !linux ? `<br><small class="muted">Nothing installed since the last restart was found in Windows Update history or the Setup log.</small>` : ""))}</div></div>`);
+  if (r.cpu_pct != null || r.mem_total_mb) {
+    // The Resources check's limits: the device's own, or the add-on's (Settings)
+    const L = st.res_limits || {mem_warn: 90, mem_crit: 95, cpu_warn: 90, cpu_reports: 3}, own = st.resources || {};
+    const custom = ["mem_warn", "mem_crit", "cpu_warn"].some(k => own[k] != null) || own.off;
+    const hungry = (r.roles || []).find(x => x === "SQL Server" || x === "Exchange");
+    const lvl = (v, what) => v ? `${what} at ${v}%` : "";
+    const memTxt = hungry && !(own.mem_warn != null || own.mem_crit != null) ? `memory not checked (${esc(hungry)} keeps memory for itself)`
+      : [lvl(L.mem_warn, "memory amber"), lvl(L.mem_crit, "red")].filter(Boolean).join(", ") || "memory not checked";
+    const cpuTxt = L.cpu_warn ? `CPU amber at ${L.cpu_warn}% for ${L.cpu_reports} report${L.cpu_reports > 1 ? "s" : ""} in a row` : "CPU not checked";
+    html += `<div class="diskset" style="margin:-2px 0 6px">${resEditing
+      ? `<label>Memory amber at <input type="number" min="0" max="100" id="rMemWarn" value="${own.mem_warn ?? ""}" placeholder="${(data && data.mem_warn) ?? 90}">%</label>
+         <label>red at <input type="number" min="0" max="100" id="rMemCrit" value="${own.mem_crit ?? ""}" placeholder="${(data && data.mem_crit) ?? 95}">%</label>
+         <label>CPU amber at <input type="number" min="0" max="100" id="rCpuWarn" value="${own.cpu_warn ?? ""}" placeholder="${(data && data.cpu_warn) ?? 90}">%</label>
+         <label><input type="checkbox" id="rOff"${own.off ? " checked" : ""}> Don't check memory or CPU on this device</label>
+         <button type="button" class="mini primary" data-res-save="1">Save</button>
+         ${custom ? `<button type="button" class="mini" data-res-reset="1">Use defaults</button>` : ""}
+         <button type="button" class="mini" data-res-cancel="1">Cancel</button>
+         <small class="muted">Blank uses the add-on's setting. 0 turns that one off.</small>`
+      : `<small class="${custom ? "" : "muted"}">${L.off ? "Memory and CPU aren't checked on this device" : `Resources check: ${memTxt}; ${cpuTxt}${sh ? (r.cpu_cores ? `; amber when the 15-minute load is above ${r.cpu_cores} (its CPU cores)` : "; load: update the router agent to 1.0.2 to check it") : ""}`}${custom ? " (this device's own)" : ""}</small>
+         <button type="button" class="mini edit-only" data-res-edit="1">Change</button>`}</div>`;
+  }
   if (mOpen[detKey + "|sys"]) html += sect("CPU and memory over time", mPanel("sys"));
-  if ((r.sessions || []).length > 1 || (r.sessions || []).some(x => x.session !== "console")) {
+  if (!gone && ((r.sessions || []).length > 1 || (r.sessions || []).some(x => x.session !== "console"))) {
     const idle = m => !m ? "—" : m < 60 ? m + " min" : m < 1440 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " d " + Math.floor(m % 1440 / 60) + " h";
     const kind = x => ({console: "Console", rdp: "Remote Desktop", ssh: "SSH"})[x.session] || x.session || "—";
     html += sect(`Signed-in users (${r.sessions.length})`, tbl(["User", "Session", "State", "Idle", "Signed in", ...(r.sessions.some(x => x.from && !x.from.startsWith(":")) ? ["From"] : [])],
@@ -2685,10 +2736,12 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const head = key => { const ck = (d.checks || []).find(x => x.key === key); return ck ? `<p class="${ck.status !== "green" ? "old" : ""}" style="margin:0 0 8px">${ck.status === "green" ? "✓ " : ""}${esc(ck.detail || "")}</p>` : ""; };
     const GP = {1006: "Couldn't bind to a domain controller", 1030: "Couldn't get the list of policies", 1053: "Couldn't find the user or computer", 1054: "Couldn't find a domain controller",
       1055: "Couldn't resolve the device name", 1058: "Couldn't read a policy from SYSVOL", 1085: "A settings extension failed", 1096: "Couldn't process a policy file", 1129: "No network connection to a domain controller"};
+    flush("domain");  // Group Policy and Time aren't roles: they come with being in the domain
     if (c.gpo) html += sect("Group Policy", head("gpo") + `<div class="kv"><div><span>Last applied</span>${esc(when(c.gpo.last_success)) || "not in the last 24 h"}</div><div><span>Failures (24 h)</span>${c.gpo.failures_24h || 0}</div></div>` +
       ((c.gpo.failures || []).length ? tbl(["Time", "Problem", "Details"], c.gpo.failures.map(f =>
         `<tr><td>${esc(when(f.time))}</td><td>${esc(GP[f.id] || "Event " + f.id)} <small class="muted">${f.id}</small></td><td><small>${esc(f.message)}</small></td></tr>`)) : "") +
       `<p class="hint">From Group Policy's results in the System log. Amber when it's failing and hasn't applied for 3 hours (it refreshes every 90 minutes or so), so a failure at start-up that the next refresh fixes doesn't alert. ${(d.checks || []).some(x => x.key === "gpo") ? ignBtn("gpo", "gpo", "Group Policy") + " this check on this device." : ""}</p>`);
+    flush("roles");
     if (c.wan && (c.wan.interfaces || []).length) {
       const on = (d.checks || []).some(x => x.key === "wan");
       const dur = s => !s ? "" : s >= 86400 ? Math.floor(s / 86400) + " d" : s >= 3600 ? Math.floor(s / 3600) + " h" : Math.max(1, Math.floor(s / 60)) + " min";
@@ -2700,6 +2753,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
           <td>${bad && on ? ignBtn("wan", i.name, i.name) : ""}</td></tr>`;
       })) + `<p class="hint">The router's connections with a default route, from OpenWrt (<code>ubus call network.interface.&lt;name&gt; status</code>). Red when one that's set to start is down (two reports in a row); amber if it's only an IPv6 one, as many ISPs don't provide IPv6. ${on ? ignBtn("wan", "wan", "Internet (WAN)") + " this check on this router." : ""}</p>`);
     }
+    flush("domain");
     if (c.time) {
       const t = c.time, off = t.offset_s, ago = off == null ? "" : Math.abs(off) < 90 ? Math.abs(off).toFixed(1) + " s" : (Math.abs(off) / 60).toFixed(1) + " min";
       html += sect("Time", head("time") + `<div class="kv">` +
@@ -2708,6 +2762,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         `<div><span>Syncing from</span>${esc(t.source || "—")}${t.type ? ` <small class="muted">(${esc(t.type)})</small>` : ""}</div></div>` +
         `<p class="hint">Measured by the agent with <code>w32tm /stripchart</code> against the domain controller this device uses (or, on another DC, the PDC emulator). Amber at ${(data && data.time_warn) || 60} s out or when Windows Time isn't syncing from anything, red at ${(data && data.time_crit) || 240} s: Kerberos sign-ins fail at 5 minutes. On the PDC emulator, amber if it runs on its own clock. ${(d.checks || []).some(x => x.key === "time") ? ignBtn("time", "time", "Time") + " this check on this device." : ""}</p>`);
     }
+    flush("roles");
     if (c.sysvol) {
       const S = {0: "Uninitialised", 1: "Initialised", 2: "Initial sync", 3: "Auto recovery", 4: "Normal", 5: "In error"};
       const EV = {2212: "Unclean shutdown, recovering", 2213: "Stopped after an unclean shutdown", 2214: "Recovered from an unclean shutdown", 4012: "Stopped: offline too long",
@@ -2779,7 +2834,16 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   }
   if (c.rds) html += sect("Remote Desktop sessions", `<p class="empty-note">${c.rds.active} active, ${c.rds.disconnected} disconnected</p>`);
   flush("security");  // Defender is protection, not a server role: it sits with its detections
-  if (c.defender) html += sect("Microsoft Defender", `<p class="empty-note">Mode: ${esc(c.defender.mode || "?")} · real-time protection ${c.defender.realtime ? "on" : "<b>off</b>"} · definitions ${c.defender.signature_age_days} day(s) old</p>`);
+  if (c.defender) {
+    const df = c.defender, scan = iso => iso ? `${when(iso)} <small class="muted">(${ago(Date.parse(iso) / 1000, Date.now() / 1000)})</small>` : `<span class="muted">${"quick_scan_end" in df ? "Never" : "—"}</span>`;
+    html += sect("Microsoft Defender", `<div class="kv">
+      <div><span>Mode</span>${esc(df.mode || "?")}</div>
+      <div><span>Real-time protection</span>${df.realtime ? "On" : "<b class='old'>Off</b>"}</div>
+      <div><span>Definitions</span>${df.signature_age_days ? df.signature_age_days + (df.signature_age_days === 1 ? " day" : " days") + " old" : "Up to date (today)"}</div>
+      <div><span>Last quick scan</span>${scan(df.quick_scan_end)}</div>
+      <div><span>Last full scan</span>${scan(df.full_scan_end)}</div></div>` +
+      ("quick_scan_end" in df ? "" : `<p class="hint">Scan times are shown once the agent is updated to 1.0.52.</p>`));
+  }
   if (c.domain && c.domain.hidden) html += sect("Domain security", `<p class="hint">Visible to Home Assistant admins and Rollcall editors.</p>`);
   else if (c.domain) {
     // Domain-wide security, from the PDC emulator: privileged groups, KRBTGT, accounts to review
@@ -2909,13 +2973,15 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     // The agent found its own folder's permissions changed and put them back
     const gi = r.agent_integrity, a = (st.ack || {}).integrity, chk = (d.checks || []).find(x => x.key === "integrity");
     const at = Date.parse(gi.at) / 1000, acked = a && a.at >= at;
-    html += sect("Agent files", `${chk && chk.status !== "amber" ? `<p style="margin:0 0 6px">${esc(chk.detail)}</p>` : `<p style="margin:0 0 6px">The agent found these changes and put them back:</p>`}
-      <ul class="rebootpk">${(gi.what || []).map(w => `<li>${esc(w)}</li>`).join("")}</ul>
-      ${chk && chk.status === "amber" ? `<div class="ackbar"><span>Put back at ${when(gi.at)}. Was this you?</span>
+    const by = (gi.who || []).length ? `by <b>${gi.who.map(esc).join("</b> and <b>")}</b>` : (gi.access || []).length ? `to give <b>${gi.access.map(esc).join(", ")}</b> access` : gi.opened ? "so others could read them" : "";
+    const line = gi.first ? "Locked down when the agent was updated." : `The folder's permissions were changed${by ? " " + by : ""}, and the agent reset them at <b>${when(gi.at)}</b>.`;
+    html += sect("Agent files", `<p style="margin:0 0 6px">${line}</p>
+      ${(gi.what || []).length ? `<details class="fold"><summary>What the agent found</summary><ul class="rebootpk">${gi.what.map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
+      ${chk && chk.status === "amber" ? `<div class="ackbar"><span>Was this you, or someone you know about?</span>
         <button type="button" class="mini primary edit-only" data-ack="integrity">Acknowledge</button></div>`
       : acked ? `<div class="ackbar ok"><span>Acknowledged${a.by ? " by " + esc(a.by) : ""} at ${when(new Date(a.at * 1000).toISOString())}. Another change turns it amber again.</span>
         <button type="button" class="mini edit-only" data-unack="integrity">Undo</button></div>` : ""}
-      <p class="hint">Each run, the agent checks its folder and files still belong only to SYSTEM and Administrators (root on Linux), and puts back any change, e.g. after someone opened the folder to read the log.</p>`);
+      <p class="hint">Each run, the agent checks its folder and files still belong only to SYSTEM and Administrators (root on Linux), and puts back any change, e.g. after someone opened the folder to read the log. Windows doesn't record who changes permissions, so the "by" is whoever took ownership of the folder to change them.</p>`);
   }
   if (d.security_visible) {
     const fl = (hist.failed_logons || []).slice().reverse();
@@ -3014,7 +3080,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
     ...(st.config_ignore || []).map(e => ({e, scope: "config"}))];
-  if (ignRows.length) html += sect("Ignored on this server", tbl(["What", "Applies to", ""], ignRows.map(({e, scope}) => {
+  const ignHtml = !ignRows.length ? "" : sect("Ignored on this server", tbl(["What", "Applies to", ""], ignRows.map(({e, scope}) => {
     const [k, v] = parse(e);
     return `<tr><td>${KIND[k] || k}: <b${k === "secret" ? ' class="secpath"' : ""}>${esc(k === "secret" ? v.split("|").filter(Boolean).join(" · ") : v)}</b></td><td>${scope === "host" ? "This server" : scope === "all" ? "All servers" : "All servers (Configuration tab)"}</td>
       <td>${scope === "config" ? `<small class="muted">Change it in the add-on's Configuration</small>` : `<div class="actions">
@@ -3031,9 +3097,10 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       tm.map(([k, v]) => `<div class="diskrow"><b style="font-weight:500;font-size:12px">${esc(k)}</b><div class="bar"><i class="${v >= 30000 ? "red" : v >= 10000 ? "amber" : ""}" style="width:${Math.max(1, 100 * v / total)}%"></i></div><span>${secs(v)}</span></div>`).join(""));
   }
   if ((r.errors || []).length) html += sect("Agent warnings", `<ul class="steps">${r.errors.map(x => `<li>${esc(x)}</li>`).join("")}</ul>`);
+  html += ignHtml;  // below the run: what's ignored is reference, the run is what's looked at
   flush(null);
   // Tabs, with a badge for checks needing attention that belong to each.
-  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", software: "Software", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
+  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", domain: "Domain", software: "Software", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
   const order = Object.keys(names).filter(k => T[k] && !(sh && (k === "software" || k === "events")));  // nothing there from a router
@@ -4297,10 +4364,10 @@ document.getElementById("detBody").addEventListener("click", async e => {
 });
 
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
-const JUMP = {agent: ["agent", "Agent run"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
+const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["roles", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["roles", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["security", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");
@@ -4316,7 +4383,7 @@ function showDetTab(tab, sectionTitle) {
   } else body.scrollTop = 0;
 }
 
-let detSettings = null, diskEditing = null, lastDetails = null;
+let detSettings = null, diskEditing = null, resEditing = false, lastDetails = null;
 document.getElementById("detBody").addEventListener("click", async e => {
   const b = e.target.closest("[data-merge],[data-mergeopen]");
   if (!b) return;
@@ -4380,6 +4447,16 @@ document.getElementById("detBody").addEventListener("click", async e => {
     renderDetails(lastDetails);
   } else if (b.dataset.diskReset) {
     if (await detPost("/agent/disk", {disk: b.dataset.diskReset, warn: null, crit: null})) diskEditing = null;
+    renderDetails(lastDetails);
+  } else if (b.dataset.resEdit) {
+    resEditing = true; renderDetails(lastDetails);
+    const w = document.getElementById("rMemWarn"); if (w) w.focus();
+  } else if (b.dataset.resCancel) {
+    resEditing = false; renderDetails(lastDetails);
+  } else if (b.dataset.resSave || b.dataset.resReset) {
+    const v = id => { const x = document.getElementById(id).value; return x === "" ? null : +x; };
+    const body = b.dataset.resReset ? {} : {mem_warn: v("rMemWarn"), mem_crit: v("rMemCrit"), cpu_warn: v("rCpuWarn"), off: document.getElementById("rOff").checked};
+    if (await detPost("/agent/resources", body)) resEditing = false;
     renderDetails(lastDetails);
   }
 });
@@ -4934,6 +5011,18 @@ document.getElementById("haDevResults").addEventListener("click", e => {
   const b = e.target.closest("[data-hadev]"); if (!b) return;
   linkedDev = {id: b.dataset.hadev, name: b.dataset.hadevname}; drawLinkedDev(); haDevSearch();
 });
+// The tick boxes open each search; unticking the device unlinks it (ticking again before saving puts it back).
+let prevLinked = null;
+document.getElementById("fHaDevOn").addEventListener("change", e => {
+  document.getElementById("haDevBox").hidden = !e.target.checked;
+  if (e.target.checked) { if (!linkedDev && prevLinked) linkedDev = prevLinked; document.getElementById("haDevSearch").focus(); }
+  else { prevLinked = linkedDev; linkedDev = null; document.getElementById("haDevResults").innerHTML = ""; document.getElementById("haDevSearch").value = ""; }
+  drawLinkedDev();
+});
+document.getElementById("fHaSenOn").addEventListener("change", e => {
+  document.getElementById("haSenBox").hidden = !e.target.checked;
+  if (e.target.checked) haSearch();
+});
 document.getElementById("haDevLinked").addEventListener("click", e => {
   if (e.target.id === "haDevUnlink") { linkedDev = null; drawLinkedDev(); haDevSearch(); }
 });
@@ -5088,6 +5177,29 @@ function fillParents(h) {
   sel.innerHTML = `<option value="">None</option>` + opts.map(x => `<option value="${esc(x.key)}">${esc(x.name)}${x.ip && x.ip !== x.name ? " · " + esc(x.ip) : ""}</option>`).join("");
   sel.value = h && h.parent && opts.some(x => x.key === h.parent) ? h.parent : "";
 }
+// "i" tips: the text in .tiptext shown in a bubble near the button (inside the open dialog: a modal is above the page).
+let tipBox = null, tipFor = null;
+function showTip(b) {
+  hideTip();
+  const host = b.closest("dialog[open]") || document.body;
+  tipBox = document.createElement("div"); tipBox.className = "tipbox"; tipBox.setAttribute("role", "tooltip");
+  tipBox.innerHTML = b.querySelector(".tiptext").innerHTML; host.appendChild(tipBox);
+  const r = b.getBoundingClientRect(), w = tipBox.offsetWidth, ht = tipBox.offsetHeight;
+  tipBox.style.left = Math.max(8, Math.min(r.left - 12, innerWidth - w - 8)) + "px";
+  tipBox.style.top = (r.bottom + 8 + ht < innerHeight ? r.bottom + 8 : Math.max(8, r.top - ht - 8)) + "px";
+  tipFor = b; b.classList.add("on");
+}
+function hideTip() { if (tipBox) tipBox.remove(); if (tipFor) tipFor.classList.remove("on"); tipBox = tipFor = null; }
+document.addEventListener("mouseover", e => { const b = e.target.closest && e.target.closest(".tip"); if (b && b !== tipFor) showTip(b); else if (!b && tipFor && tipFor.dataset.tapped !== "1") hideTip(); });
+document.addEventListener("focusin", e => { const b = e.target.closest && e.target.closest(".tip"); if (b) showTip(b); });
+document.addEventListener("focusout", e => { if (e.target.closest && e.target.closest(".tip")) hideTip(); });
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest(".tip");
+  if (!b) { if (tipFor) { tipFor.dataset.tapped = ""; hideTip(); } return; }
+  e.preventDefault(); e.stopPropagation();  // not the label's input, or opening the summary's section
+  if (tipFor === b && b.dataset.tapped === "1") { b.dataset.tapped = ""; hideTip(); } else { showTip(b); b.dataset.tapped = "1"; }
+}, true);
+document.addEventListener("scroll", hideTip, true);
 async function openDialog(h) {
   try { await loadPresets(); } catch (e) { return alert("Couldn't load the list of checks. Is the add-on running?"); }
   editing = h || null;
@@ -5154,7 +5266,11 @@ async function openDialog(h) {
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
-  if (h) haSearch();
+  prevLinked = null;
+  document.getElementById("haDevBox").hidden = !linkedDev;
+  document.getElementById("fHaDevOn").checked = !!linkedDev;
+  document.getElementById("fHaSenOn").checked = false;
+  document.getElementById("haSenBox").hidden = true;
   filterPresets();
   updatePicked();
   document.getElementById("editOnly").style.visibility = h ? "visible" : "hidden";
