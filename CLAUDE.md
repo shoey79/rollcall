@@ -44,9 +44,10 @@ Features the owner has asked for, to build when they say. Remove each once it's 
   green_energy_today, grid_export_today, grid_import_today, hub_firmware, hub_serial_number, plus 8 diagnostic
   entities not yet seen (owner says voltage etc.: ask him to expand them before building). Harvi device (wireless CT
   sender; its entity ids include its serial, keep that out of the repo): power_ct_generation, generation_ct1,
-  none_ct2/none_ct3 (CTs not set up, ignore "None" CTs), firmware. Solar comes from whichever linked device has a
-  generation CT that reads (the owner's is on the Harvi; the Zappi's own CT3 reads 0): sum generation CTs across
-  the linked myenergi devices. Day totals tile from the hub: imported, exported, generated today. Alerts: plug status Fault/Restart RED with a phone notification;
+  none_ct2/none_ct3 (CTs not set up, ignore "None" CTs), firmware. Generation CTs: DON'T call them "Solar" or
+  derive anything from them: the owner's Harvi generation CT also sees his home batteries discharging, so it isn't
+  solar. Show "Generation (as myenergi measures it)", summed across the linked myenergi devices' generation CTs,
+  information only, never alerted. Day totals tile from the hub: imported, exported, generated today (same caveat). Alerts: plug status Fault/Restart RED with a phone notification;
   update available amber, no alert; HA lost touch (already generic) should say it may be myenergi's cloud.
 - Messages to users' screens (owner asked 19 Nov): a simple message box on agent devices, sent in Rollcall's reply to
   each agent's next report (so it arrives within ~5 minutes). Keep it simple, minimal parts: Windows via WTSSendMessage
