@@ -78,6 +78,9 @@ together). Remove each once it's released.
   uclient-fetch can't pin, so give it Rollcall's certificate as --ca-certificate (SANs must cover the address it
   uses), or pin with curl --pinnedpubkey when curl is installed. Docs: why pinning is stronger than "accept
   self-signed".
+  Defaults (owner agreed 19 Nov): existing installs are NOT switched automatically; admins see a dashboard prompt
+  ("Agents report over plain HTTP: turn on HTTPS"), one click makes the certificate and moves agents at their next
+  report, HTTP stays until the owner turns it off. New installs: on from the start.
 - Starlink: monitor a Starlink dish without an account token, from its local API (gRPC on the dish at
   192.168.100.1:9200, as Home Assistant's official Starlink integration does; works on residential; needs a
   route to it in bypass mode). The dish's address is fixed, so make Rollcall's dish address editable (default
@@ -97,6 +100,22 @@ together). Remove each once it's released.
   API, may change: say so in the docs; Starlink Business has an official API (service account) if ever needed.
   One Starlink check, two sources (local default, or account), same Starlink tab. Build once the owner's dish
   arrives, to test the local side against it.
+
+## Being built now: 1.92.1 security fixes (owner asked 19 Nov, from an outside security review)
+
+- Agent updates signed with an RSA key only Rollcall holds (generated in /data, public key built into downloaded
+  scripts), replacing the HMAC keyed by the agent's token (an attacker on a plain-HTTP path could capture the token
+  and sign a forged update). Also sign the servers/route list in the report reply. Agents refuse older or equal
+  versions (no downgrade replay). Old agents get the new version once the old way. Signature in the reply body, not a
+  new header (owner's external agents go through a Sophos reverse proxy). Key included in Export/import. A failed
+  check never stops reporting.
+- Dashboard editing fails closed when HA's user list can't be read (only 'editors' can change things; dashboard says
+  why). Panel is open to all HA users (panel_admin false), so this mattered.
+- Base image from Alpine 3.20 (unsupported) to a current HA base; a CI job that builds and starts the container.
+- Docs: clear the syslog port if unused; firewall TCP 8100 / UDP 514 to known senders.
+Owner wants full testing that no agent loses connectivity: Windows (PS 5.1 + 7) and Linux end to end against the real
+add-on, forged/tampered/downgrade updates refused while reporting carries on; router unaffected but run; container
+built and an agent reporting into it. Show results before releasing.
 
 ## Built, waiting for release
 
