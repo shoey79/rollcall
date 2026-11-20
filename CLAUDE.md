@@ -55,7 +55,7 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-- iLO 3 TLS fix (#14), branch `fix/ilo3-tls`: iLO polled with TLS 1.2 at most (OpenSSL 3.5's post-quantum key
+- iLO 3 TLS fix (#14), on main: iLO polled with TLS 1.2 at most (OpenSSL 3.5's post-quantum key
   share makes the ClientHello ~1,600 bytes and iLO 3 sends an internal error alert); HTTPS checks retry once
   capped at TLS 1.2 after a failed handshake. Tests in tests/test_legacy_tls.py. Waiting for the reporter to
   confirm on real iLO 3 hardware.
