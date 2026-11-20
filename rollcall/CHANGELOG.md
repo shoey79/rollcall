@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.93.0 - 2026-11-20
+
+### Added
+- **HTTPS for agents, with Rollcall's own certificate.** Under **Agents → HTTPS**, **Turn on HTTPS** (admins): Rollcall makes its own key and certificate, listens on port 8101, and agents move across at their next report, with nothing to buy or install. Agents trust exactly Rollcall's key ("pinning"), so nothing else can stand in for it: anything else on that port is refused before the agent sends anything, its token included. The port and key are handed to agents signed with the update key, so even that can't be changed on the way; agents downloaded with HTTPS on have them built in. Plain HTTP on 8100 stays on until you turn it off, and the dashboard lists agents still using it first. Agents reaching Rollcall through a reverse proxy with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are. New installs start with it on; existing ones are offered it on the dashboard. Routers get the certificate itself and trust only that (needs uclient-fetch's TLS support or curl; otherwise they stay on HTTP).
+- **Messages to users' screens.** Admins can send a short plain-text message to the agent devices they include (**Manage → Messages**), to every included device, a tab or one device, for 1 hour to 3 days. It's shown under the fixed heading **Message from the Rollcall Administrator**: on Windows as a message box in every signed-in session (console and Remote Desktop), on Linux to terminals and SSH sessions. Each device shows it once (later, if nobody is signed in); **Sent** shows where it was shown and to how many sessions, and **Withdraw** stops it. Off by default (`messages`, admins only), and every message is signed with Rollcall's own key, so nothing on the network can put words on anyone's screen.
+- **Several Home Assistant devices on one Rollcall device.** For integrations that split one thing into several devices: link each of them in **Edit**, and Details shows each one's entities under its own heading, with tiles and alerts drawn from all of them.
+- **myenergi** (HACS integration): link a Zappi with the hub and any Harvi for tiles for the charger's status, plug, mode, charging power, energy this session and today, lock, the grid now and today, what the home is using, and the supply's voltage and frequency. A Zappi fault is red and alerts; a firmware update, or the supply outside the UK's limits (216-253 V, 49.5-50.5 Hz), is amber. Generation is shown as myenergi measures it, never alerted (a generation clamp can also see a home battery). If Home Assistant loses touch, Rollcall says it may be myenergi's cloud.
+
+### Agents
+- **Windows agent 1.0.54, Linux agent 1.0.22:** Rollcall's own HTTPS with key pinning, and messages to users' screens. **Router agent 1.0.3:** Rollcall's own HTTPS (trusting only its certificate), and it now says which address each report went to. Windows and Linux agents update themselves if automatic updates are on; the router agent doesn't: download it again and run `--install`.
+
 ## 1.92.1 - 2026-11-19
 
 ### Security
