@@ -23,6 +23,11 @@ import ilo  # noqa: E402
 import main  # noqa: E402
 from test_ilo import ILO3  # noqa: E402
 
+# iLO 3 is TLS 1.0 only on early firmware; later firmware, iLO 4 and iDRAC 6 go up to TLS 1.1 or 1.2.
+VERSIONS = [ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1_1, ssl.TLSVersion.TLSv1_2]
+NAMES = {ssl.TLSVersion.TLSv1: "TLSv1", ssl.TLSVersion.TLSv1_1: "TLSv1.1", ssl.TLSVersion.TLSv1_2: "TLSv1.2"}
+pytestmark = pytest.mark.filterwarnings("ignore:ssl.TLSVersion.TLSv1:DeprecationWarning")
+
 ALERT_INTERNAL_ERROR = bytes([0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x50])
 MLKEM = b"\x11\xec"
 
@@ -76,15 +81,18 @@ def _client_hello(ctx: ssl.SSLContext) -> bytes:
 
 
 class OldStack:
-    """A TLS 1.2-at-most server that refuses a large or post-quantum ClientHello, as iLO 3 does."""
+    """A server that talks only one old TLS version, with an old RSA cipher, and refuses a large
+    or post-quantum ClientHello, as iLO 3 does."""
 
-    def __init__(self, reply: bytes):
+    def __init__(self, reply: bytes, version: ssl.TLSVersion = ssl.TLSVersion.TLSv1_2):
         self.reply = reply
         self.refused = 0
         self.served = 0
+        self.versions = []
         self.tmp = tempfile.TemporaryDirectory()
         self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        self.ctx.minimum_version = self.ctx.maximum_version = version
+        self.ctx.set_ciphers("AES128-SHA:@SECLEVEL=0")
         self.ctx.load_cert_chain(*_cert(Path(self.tmp.name)))
         self.sock = socket.socket()
         self.sock.bind(("127.0.0.1", 0))
@@ -114,6 +122,7 @@ class OldStack:
                 s.sendall(ALERT_INTERNAL_ERROR)
                 return
             t = self.ctx.wrap_socket(s, server_side=True)
+            self.versions.append(t.version())
             req = b""
             while b"\r\n\r\n" not in req:
                 req += t.recv(65536)
@@ -145,11 +154,13 @@ def test_legacy_context_sends_a_small_hello_with_no_post_quantum_key():
     assert main.legacy_tls_context().minimum_version <= ssl.TLSVersion.TLSv1   # iLO 3 and iDRAC 6 still need TLS 1.0
 
 
-def test_ilo_poll_reads_an_old_stack_with_the_legacy_context():
-    srv = OldStack(ILO3.encode())
+@pytest.mark.parametrize("version", VERSIONS, ids=lambda v: NAMES[v])
+def test_ilo_poll_reads_an_old_stack_with_the_legacy_context(version):
+    srv = OldStack(ILO3.encode(), version)
     try:
         d = asyncio.run(ilo.poll("127.0.0.1", "admin", "secret", main.legacy_tls_context(), timeout=10, port=srv.port))
         assert d["backplanes"][0]["bays"][1]["status"] == "Fault" and srv.served == 1
+        assert srv.versions == [NAMES[version]]
         if _modern_hello_is_large():   # the failure from issue #14, with OpenSSL 3.5 or later
             with pytest.raises(ilo.IloError, match="TLS handshake failed"):
                 asyncio.run(ilo.poll("127.0.0.1", "admin", "secret", main.health_tls_context(), timeout=10, port=srv.port))
@@ -171,11 +182,13 @@ def test_ilo_check_uses_the_legacy_context(monkeypatch):
     assert seen == [main.legacy_tls_context()]
 
 
-def test_https_check_falls_back_to_tls12_for_an_old_stack():
-    srv = OldStack(b"ok")
+@pytest.mark.parametrize("version", VERSIONS, ids=lambda v: NAMES[v])
+def test_https_check_falls_back_to_tls12_for_an_old_stack(version):
+    srv = OldStack(b"ok", version)
     try:
         ok, ms, detail, sch = asyncio.run(main.http_check(f"https://127.0.0.1:{srv.port}/", 10))
         assert ok is True and detail == "HTTP 200" and sch == "https"
+        assert srv.versions == [NAMES[version]]
         assert srv.served == 1 and srv.refused == (1 if _modern_hello_is_large() else 0)
     finally:
         srv.close()
