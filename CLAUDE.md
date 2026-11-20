@@ -35,7 +35,12 @@ Remove each line once it's released.
 Features the owner has asked for, to build when they say (he'll say once there's a reasonable number to build
 together). Remove each once it's released.
 
-(none)
+- Database details and health (owner asked 20 Nov): Manage → Database. Details: database size, Rollcall's whole
+  data folder, free space on Home Assistant's disk; what takes the room (check history, readings, syslog messages,
+  agent metrics...) with size, row count, oldest entry, and how long each is kept. Health: SQLite quick_check daily
+  and on demand (damage = red with an alert, say to restore from an export/backup); free disk amber below 10%, red
+  below 5%; "Compact now" (VACUUM, admins only; check there's free space about the database's size first; it
+  briefly pauses writes). Health shown in the window and on a small Rollcall card on the Overview.
 
 ## Built, waiting for release
 
