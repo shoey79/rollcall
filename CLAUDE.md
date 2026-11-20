@@ -18,6 +18,11 @@ docs, changelogs, commit messages or test data:
   [name](https://github.com/name) for the request)`. Their GitHub username is public, so it's fine to use.
 - Don't write a bare `@name` in commit messages (it notifies them); link the profile in the changelog instead.
 
+## Changelog formatting
+
+- Leave a blank line between changelog entries (each top-level `- ` bullet), so changes don't run together.
+  Sub-bullets under one entry stay together.
+
 ## Queued changes
 
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
@@ -55,7 +60,4 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-- iLO 3 TLS fix (#14), on main: iLO polled with TLS 1.2 at most (OpenSSL 3.5's post-quantum key
-  share makes the ClientHello ~1,600 bytes and iLO 3 sends an internal error alert); HTTPS checks retry once
-  capped at TLS 1.2 after a failed handshake. Tests in tests/test_legacy_tls.py. Waiting for the reporter to
-  confirm on real iLO 3 hardware.
+(none)

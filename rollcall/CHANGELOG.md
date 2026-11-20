@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.93.1 - 2026-11-20
 
 ### Fixed
 - **HPE iLO 3 health stopped working after 1.92.1 with "TLS handshake failed (tlsv1 alert internal error)"** ([#14](https://github.com/shoey79/rollcall/issues/14), thanks to [tomvining](https://github.com/tomvining) for the report). The newer base image's OpenSSL (3.5) adds a post-quantum key to the first message of a TLS 1.3 connection, taking it from about 500 bytes to over 1,600, and iLO 3 refuses it. Rollcall now talks to iLOs with TLS 1.2 at most (iLO 3 and iLO 4 don't do TLS 1.3 anyway), so the first message is back to its old size. HTTPS service checks whose handshake fails now try once more the same way, for other old management cards such as Dell iDRAC 6.
@@ -9,8 +9,11 @@
 
 ### Added
 - **HTTPS for agents, with Rollcall's own certificate.** Under **Agents → HTTPS**, **Turn on HTTPS** (admins): Rollcall makes its own key and certificate, listens on port 8101, and agents move across at their next report, with nothing to buy or install. Agents trust exactly Rollcall's key ("pinning"), so nothing else can stand in for it: anything else on that port is refused before the agent sends anything, its token included. The port and key are handed to agents signed with the update key, so even that can't be changed on the way; agents downloaded with HTTPS on have them built in. Plain HTTP on 8100 stays on until you turn it off, and the dashboard lists agents still using it first. Agents reaching Rollcall through a reverse proxy with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are. New installs start with it on; existing ones are offered it on the dashboard. Routers get the certificate itself and trust only that (needs uclient-fetch's TLS support or curl; otherwise they stay on HTTP).
+
 - **Messages to users' screens.** Admins can send a short plain-text message to the agent devices they include (**Manage → Messages**), to every included device, a tab or one device, for 1 hour to 3 days. It's shown under the fixed heading **Message from the Rollcall Administrator**: on Windows as a message box in every signed-in session (console and Remote Desktop), on Linux to terminals and SSH sessions. Each device shows it once (later, if nobody is signed in); **Sent** shows where it was shown and to how many sessions, and **Withdraw** stops it. Off by default (`messages`, admins only), and every message is signed with Rollcall's own key, so nothing on the network can put words on anyone's screen.
+
 - **Several Home Assistant devices on one Rollcall device.** For integrations that split one thing into several devices: link each of them in **Edit**, and Details shows each one's entities under its own heading, with tiles and alerts drawn from all of them.
+
 - **myenergi** (HACS integration): link a Zappi with the hub and any Harvi for tiles for the charger's status, plug, mode, charging power, energy this session and today, lock, the grid now and today, what the home is using, and the supply's voltage and frequency. A Zappi fault is red and alerts; a firmware update, or the supply outside the UK's limits (216-253 V, 49.5-50.5 Hz), is amber. Generation is shown as myenergi measures it, never alerted (a generation clamp can also see a home battery). If Home Assistant loses touch, Rollcall says it may be myenergi's cloud.
 
 ### Agents
@@ -20,11 +23,17 @@
 
 ### Security
 - **Agent updates are now signed with a key only Rollcall has.** Before, an update was signed with the agent's own token, and the token goes with every report. Over plain HTTP, someone able to read and change the traffic between an agent and Home Assistant could have captured it, offered an agent a "newer version" and signed it, and the agent would have run it as SYSTEM or root. Now the add-on makes its own RSA key the first time it starts (it never leaves the add-on), each agent script carries the public half, and agents only install updates signed with it. Found by an outside security review.
+
 - **The addresses agents report to are signed the same way**, so a changed reply can't send an agent somewhere else. An agent that gets addresses without a good signature keeps the ones it has.
+
 - **Agents already installed move across once, the old way**: update them while they report over your own network or a VPN (agents reporting over the internet through a reverse proxy with a real certificate, such as Let's Encrypt, are already protected). A failed check never stops an agent reporting, and agents still refuse older versions.
+
 - **Dashboard editing fails closed.** If Rollcall couldn't read Home Assistant's user list and `editors` was empty, anyone who could open the panel could make changes, including approving agents; the panel is open to every Home Assistant user. Now nobody can until the list can be read, apart from names in `editors`, and the dashboard shows **View only for now** with the reason.
+
 - **The add-on is built on Home Assistant's Alpine 3.24 base image** (from 3.20, which no longer gets security updates).
+
 - **The export now includes the key that signs agent updates**, so a restored install keeps updating its agents. Keep exports as safe as a password.
+
 - Docs: turn the syslog port off if you don't use it, and allow TCP 8100 and UDP 514 at your firewall only from the devices that use them.
 
 ### Agents
@@ -34,21 +43,28 @@
 
 ### Added
 - **Resources check: memory and CPU on every agent** (Windows, Linux and the OpenWrt router agent). Memory is amber at 90% used and red, with an alert, at 95% (two reports in a row). CPU is amber when it's 90% or more in each of the last 3 reports, about 15 minutes, so one spike doesn't count; it's never red. Routers are also amber when the 15-minute load is above their number of CPU cores. Each device can have its own limits, or the check turned off, under **Change** in Details (System), and the defaults are in Settings (`agent_memory_warn`, `agent_memory_crit`, `agent_cpu_warn`, `agent_cpu_reports`). Memory isn't checked on SQL Server and Exchange servers, which keep most of the memory for themselves, unless the device has its own limits.
+
 - **Searching from the Overview** opens a temporary **Search** tab with every matching device; clear the search, or × on the tab, to go back. The search box now shows on the Overview too.
+
 - **Microsoft Defender's last quick and full scans** in Details (Windows agent 1.0.52).
+
 - **Icons in the Manage menu.**
 
 ### Changed
 - **The device form is tidier.** The explanations next to the boxes are now an **i** that shows them on hover or tap. **Other addresses** comes straight after the address, then **Upstream device** and **Group** side by side, then the icon, make and model. Each section has a heading and a line above it. **Home Assistant** is one section with two tick boxes, **Link a Home Assistant device** and **Add Home Assistant sensors as checks**, that open their searches when ticked. The **Custom checks** help is an **i** too, reworded with an example of each kind.
+
 - **Details is easier to scan:** a heavier line between sections than between rows in a table, and bolder section headings. **Group Policy** and **Time** have moved from Roles to a new **Domain** tab. On the Agent tab, **Agent run** comes before **Ignored on this server**. The boxes in Details (e.g. the password scan settings) match the rest of the dashboard in dark mode.
+
 - **Agent files** now says it in one line: who changed the folder's permissions and when the agent reset them, e.g. *changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov*. The full list is under **What the agent found**.
 
 ### Fixed
 - **A device that's off no longer shows people signed in.** While it's down, off schedule or its agent has stopped reporting, Details says nobody is signed in (or not known), and the **Signed-in user** line under the name says nobody, instead of showing who was signed in at its last report.
+
 - **"Up for 2 days (since —)"** when an agent doesn't send its start time: the time is worked out from the uptime.
 
 ### Agents
 - **Windows agent 1.0.52:** reports Defender's last quick and full scan times. Installed agents update themselves if automatic updates are on.
+
 - **OpenWrt router agent 1.0.2:** reports its number of CPU cores, for the load check. The router agent doesn't update itself: download it again from **Manage → Agents** and run `--install` on the router.
 
 ## 1.91.1 - 2026-11-19
@@ -68,20 +84,25 @@
 
 ### Changed
 - **Windows agent 1.0.51: its scheduled tasks stop a run after 30 minutes.** They were created with Windows' default of 72 hours, and Windows doesn't start a task again while it's still running, so one stuck run stopped a device reporting for up to 3 days. Each run checks its tasks and sets this if it's missing, so agents already installed fix themselves; no reinstall needed. The agent's own clearing of a stuck run (1.0.49) stays, for runs started any other way.
+
 - **Details no longer says "Up for 2 h" about a device that's been off since yesterday.** That came from the agent's last report. Now, while a device is down it says **Down since** (or **Unreachable since**, **Off since** off schedule), with when it last reported; when it answers but its agent has stopped reporting, **No report since**; and while it's up, the uptime keeps counting between reports.
 
 ## 1.90.1 - 2026-11-19
 
 ### Fixed
 - **Plex (token) check: "connection failed (ClientOSError)"** when Plex's *Secure connections* setting is *Required*, as Plex then drops plain HTTP. The check now tries HTTPS on the same port and keeps using it, as Rollcall's web checks already do.
+
 - **Jellyfin and Plex: changing the address asked for the key again** even when it was the same server, e.g. switching to `https://`, changing the port, or using its name instead of its IP address, and the key was cleared without saying so. A key is kept while the address is on the same machine (names are looked up to check); only an address on a different machine needs the key entering again, and the form now says so when you save, instead of the check complaining afterwards.
+
 - **Plex token hint:** the token is at the end of the **address** of the *View XML* tab, not in the XML itself; the hint (and DOCS) now say so, and also where to find it on the Plex server (`PlexOnlineToken` in Plex's `Preferences.xml`, or the Windows registry).
 
 ## 1.90.0 - 2026-11-19
 
 ### Added
 - **Jellyfin tab in Details**, for any device with the Jellyfin check, with or without an agent (before, Jellyfin only showed on the Overview of a device without one). It shows what's playing: who, on which app and device, what, how far through and whether it's paused, and whether it's played directly or transcoded, and if so to what and why (e.g. *video codec not supported*). Also the server's version and health, users active in the last 15 minutes, plugins that aren't active, how many movies, series, episodes, albums, songs and books the library has, and failed scheduled tasks.
+
 - **Plex tab and check** (preset **Plex (token)**, `plex-api`), the same as Jellyfin's: what's playing and by whom (app and device, remote or at home, progress, paused), and whether it's played directly, direct streamed or transcoded, and what's being converted. Also the server's version, an update waiting (amber, no alert), what Plex is busy with (e.g. a library scan) and each library's size. Enter a Plex token under Edit; it's only ever sent to that Plex server.
+
 - **Jellyfin: why a restart is pending.** Jellyfin asks for a restart when a plugin is waiting to update, failed to load or isn't supported by its version, and a server restart doesn't clear that. The check now names it, e.g. *restart pending (LDAP Authentication: failed to load)*.
 
 ## 1.89.0 - 2026-11-19
@@ -104,23 +125,30 @@
 
 ### Added
 - **Upstream devices** ([#13](https://github.com/shoey79/rollcall/issues/13), thanks to [tomvining](https://github.com/tomvining) for the request). Give a device the router, switch or VPN it's reached through (Edit, **Upstream device**). While that's down, the devices behind it show as **Unreachable** instead of Down and don't alert on their own: one alert for the upstream device lists what may also be affected. A device that goes red before its upstream device has been checked waits (up to 3 minutes) while that's checked straight away, so the order checks happen in doesn't matter. Works through several levels, and loops are refused.
+
 - **Jellyfin health (API key)** (`jellyfin-api`), read by the add-on: red when Jellyfin stops answering or is unhealthy; amber, without an alert, for a pending restart, an update, a failed scheduled task (e.g. a library scan) or a degraded server; and the version and number of active streams. The key is never shown again and only ever sent to that Jellyfin server.
+
 - **Named IP ranges** (Settings, Display, `ip_ranges`), e.g. `Servers=10.0.1.0/24` or `IoT=192.168.20.10-200`: the range's name shows under each device's address, in Details and as the sensor's `ip_range` attribute.
 
 ### Changed
 - **"Device" instead of "computer"** throughout the dashboard, settings, alerts, emails, docs and README, as Rollcall watches far more than computers. Windows' own terms keep the word (computer accounts, Group Policy's *Computer Configuration*), and setting names, entity IDs and saved tabs are unchanged, so nothing needs redoing. The Overview group "Computers and servers" is now "Servers and PCs"; tabs that filter on the old name still work.
+
 - **Automatic (Delayed Start) services** (Windows agent 1.0.48): Windows starts these a couple of minutes after it starts, so they no longer show as stopped in a report sent straight after a restart. They count once the device has been up 5 minutes, the Services check says which are still starting, and Details marks them *delayed start*.
+
 - **Sizes under 1 GB in MB** ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to [tomvining](https://github.com/tomvining)): a router's memory showed as "of 0 GB" and its flash as "0.001 GB free of 0.002 GB"; they now read e.g. "121 MB" and "9 MB free of 12 MB". Routers' small disks also get a Home Assistant disk sensor now.
+
 - **Windows agent 1.0.47: the start-up run waits for the network.** Run a minute after Windows starts, it now waits up to 3 minutes for Rollcall to be reachable, so a restart is still reported straight away on devices whose network takes longer to come up.
 
 ### Fixed
 - **Settings: the boxes in each row line up** even when one side's help text runs to more lines.
+
 - **Device list: rows stay compact and the buttons stay visible.** A device with many checks showed every check as a chip, making its row very tall; now any check that isn't OK is always shown, and green ones up to six chips in all, with the rest in a "+N more ✓" chip that lists them. If the table is ever wider than the page (long names, browser zoom), the Check now / Details / Pause / Edit buttons move onto two rows instead of running off the edge.
 
 ## 1.87.0 - 2026-11-17
 
 ### Added
 - **OpenWrt agent** for routers and other small Linux that can't run Python: one shell script (`rollcall-agent.sh`, from **Manage → Agents**) that uses only what OpenWrt has built in, so there's nothing to install. Every 5 minutes it reports uptime, CPU, memory and load, storage, each interface's addresses and traffic, OpenWrt's services, and failed SSH (dropbear) and LuCI sign-ins. It's kept through firmware upgrades ([#12](https://github.com/shoey79/rollcall/issues/12), thanks to [tomvining](https://github.com/tomvining) for the request).
+
 - **Internet (WAN) check** for routers: red when an internet connection that's set to start is down, with OpenWrt's reason (e.g. `AUTH_FAILED`); amber when only an IPv6 one is down, as many ISPs don't provide IPv6. Details shows each connection's protocol, address, gateway, DNS servers and how long it's been up. A connection can be ignored by name.
 
 ### Changed
@@ -133,10 +161,12 @@
 
 ### Added
 - **Time check** on domain-joined Windows computers (Windows agent 1.0.46). The agent measures the clock against the domain with `w32tm /stripchart`: members against the domain controller they use, other DCs against the PDC emulator. **Amber** at 60 s out or when Windows Time isn't syncing from anything, **red** at 240 s (Kerberos sign-ins fail at 5 minutes); both are settings (`agent_time_warn_seconds`, `agent_time_crit_seconds`). The PDC emulator is checked for a real time source instead. If the DC can't be reached it says so rather than alerting. On the **Roles** tab.
+
 - **Rollcall's log in the dashboard:** **Manage → Log** shows the add-on's own log (the same as Settings → Apps → Rollcall → Log), with warnings-and-errors and errors-only views, search, follow and download. Passwords, tokens and keys are masked.
 
 ### Changed
 - **DFS Replication flags any DFS-R error**, not only the ones it had a rule for: e.g. 6404, a replicated folder's local path invalid or unreachable. Errors in the last 24 hours turn the check amber until the folder is back to normal or the error stops recurring, listed with how often they happened; warnings are listed without alerting. An error can be ignored by its ID (Windows agent 1.0.46).
+
 - **The agent summary chip says what it counts:** "Windows ✓ all 14 OK" when everything's fine, and "Windows: 14 of 16 OK" next to the chips for the two that need attention (was "Windows ✓ 14 checks" and "Windows: 14 OK").
 
 ## 1.85.3 - 2026-11-16
@@ -177,6 +207,7 @@
   - Amber for a vulnerability scoring `vuln_min_score` (9) or more; red, and notified, for one on CISA's Known Exploited Vulnerabilities list or that Microsoft says is being exploited, whatever its score.
   - The **Software** tab lists each one with its score, what it's in and the version that fixes it, and marks vulnerable packages; **Find software** marks them too. **Acknowledge** keeps it green until a new vulnerability appears.
   - New options: `vuln_checks`, `vuln_min_score`, and `vuln_linux_source`: `local` (download each distro's data and match it in the add-on, so nothing about your computers is sent anywhere), `online` (send OSV.dev one combined list of package names and versions) or `off`.
+
 - **HPE iLO 3 and iLO 4 health.** The new **HPE iLO health** preset (`hpilo`) logs in to the iLO with a read-only user and reads each drive, fans, temperatures and power supplies every 5 minutes. A failed drive, fan or power supply goes red; a drive predicting failure or rebuilding, a degraded logical drive or a temperature over its caution limit goes amber. An **iLO** tab in Details shows it all, with **Acknowledge** and **Ignore** as for SNMP ([#11](https://github.com/shoey79/rollcall/issues/11), thanks to [tomvining](https://github.com/tomvining) for the request).
 
 ### Changed
@@ -191,6 +222,7 @@
 
 ### Fixed
 - **Acknowledging, filtering and other changes are quick again when Home Assistant is slow.** Each change waited while every sensor for that computer was sent to Home Assistant one at a time, so with Home Assistant busy (e.g. its host patching) an acknowledgement could take many seconds, and several in a row piled up. Sensors are now sent in the background, a few at a time, and several changes to the same computer in quick succession are sent once. Agent reports and the minute-by-minute refresh don't wait for Home Assistant either, so checks carry on on time.
+
 - A Home Assistant update that times out now says "Home Assistant didn't answer in time" in the log, instead of ending in a blank.
 
 ## 1.82.1 - 2026-11-16
@@ -202,7 +234,9 @@
 
 ### Added
 - **Filter expected failed logons.** **Filter…** next to a line in **Failed logons** (Security tab) stops failed logons that happen every time, such as a Remote Desktop Gateway signing in to itself as the server's name, from counting as an attack. Match by account, where it came from and Windows' reason, with `*` wildcards, on this server or all servers. Filtered ones stay listed, greyed out, and don't turn Security red; others still do. They're managed with the event filters under **Security filters**.
+
 - **Dismiss acknowledged items** from the Overview's acknowledged list, one at a time or **Dismiss all**. They stay acknowledged but stop taking up room; when everything's dismissed the list is one line with **Show**. A dismissed item comes back if it alerts and is acknowledged again ([#8](https://github.com/shoey79/rollcall/issues/8), thanks to [tomvining](https://github.com/tomvining) for the request).
+
 - **Merge two entries for the same computer.** When a computer has an entry without the agent (e.g. one added for ping) and another one that has it, the first one's details say so and offer **Merge into this entry**: the agent, its checks, settings and graphs move onto it and the other entry is removed. It keeps its name, history and Home Assistant sensors, and nothing re-alerts ([#9](https://github.com/shoey79/rollcall/issues/9), thanks to [tomvining](https://github.com/tomvining) for the report).
 
 ### Fixed
@@ -237,6 +271,7 @@
   - Things that are still the case (a pending reboot, a stopped app pool, a backup that hasn't run, SNMP warnings) count as OK while they stay as they are or better, and alert again if they get worse, or clear and come back.
   - Not for Defender: a threat is cleared on the computer itself, then the next report clears the alert.
   - **N acknowledged**, under the alerts, lists what's acknowledged, by whom and when, each with **Undo**.
+
 - **Acknowledge additions to Domain Admins** and the other privileged groups, instead of waiting 24 hours for the amber to clear. Anyone added after that turns it amber again.
 
 ## 1.78.0 - 2026-11-15
@@ -283,16 +318,19 @@
 - **Start-up time for computers that are only on now and then.** A computer set to **Whenever it's switched on** now gets a start-up allowance each time it comes on, as timed schedules do (**Allow … minutes**, 15 by default). Until it ends, failed services and agent checks show as *starting up* instead of red, and nothing alerts. Anything still failing after that alerts straight away.
   - Timed schedules now hold back service and agent alerts during their allowance too. Before, the allowance only covered the computer replying to ping.
   - Restarting the add-on while such a computer is on doesn't start a new allowance or repeat its alerts.
+
 - **VPN status for Sophos firewalls** (SFOS: XG and XGS). With SNMP ticked, the SNMP details list each IPsec connection with its type and status.
   - A connection switched on in the firewall goes red if it's down, and amber if it's only partly up. Connections switched off in the firewall are just shown.
   - Untick **Alert** for one that's only up when needed.
   - A second connection dropping while the firewall is already red gets its own alert, and you hear when each comes back.
   - Sophos UTM isn't covered: it's end of life.
+
 - **Agents choose the inside or outside address by network.** Agents tried the address that worked last first, so one failed attempt at the inside address could leave them on the outside one for good.
   - New under Agents: **Internal networks** (e.g. `10.0.1.0/24`). Home Assistant's own networks are offered as a start.
   - With these set, each agent chooses afresh at every report, going by its own IPv4 addresses. On an internal network it tries the inside address first; anywhere else, the outside one. The other is the fallback, and it goes back to its usual address at the next report.
   - Needs Windows agent 1.0.42 or Linux agent 1.0.19. Agents that update automatically get it at their next report.
   - The **Approved** list now shows whether each agent last reported through the **internal** or **external** address. A ⚠ marks one that doesn't match its own network.
+
 - **Ombi** service preset (Media): checks its web page on port 5000.
 
 ### Changed
@@ -305,6 +343,7 @@
   - If the install fails, a screen says nothing was changed and how to get an install log.
   - Silent installs (`/qn`, e.g. MECM or Intune) show no screens, as before.
   - Download the installer again from Agents to get the new version.
+
 - Tests: GitHub builds a test installer and installs it on Windows both silently and interactively, checking the right screens appear.
 
 ## 1.72.3 - 2026-11-14
@@ -334,6 +373,7 @@
   - A new **Agent files** check shows what was found and put back. It's amber for 24 hours, and visible to admins and editors only.
   - The first check after updating only tidies up, without the amber, since hand-installed agents on Windows 10/11 are owned by whoever installed them.
   - It runs after the report is sent, so it can never stop one.
+
 - Tests: on GitHub's Windows machines, opening the folder up is put back and reported.
 
 ## 1.71.1 - 2026-11-13
@@ -363,6 +403,7 @@
   - **Installed since the last restart:** from Windows Update history, and packages the Setup log says need a restart to finish.
   - The Updates check names them too, e.g. *Reboot pending (KB5048661 and 1 more)*.
   - Configuration Manager's own "restart pending" now counts as well.
+
 - **Last update installed shows the update's name**, not only a KB number, which some updates don't have in their title.
 
 ## 1.69.2 - 2026-11-13
@@ -381,6 +422,7 @@
 - **Agent updates go to one computer first.** With automatic updates on, a new agent version is sent to one computer (preferably a server). The other agents only get it once that one has reported on the new version.
   - If it goes quiet for 20 minutes after updating, the rollout stops, you get a notification, and Agents offers **Retry** (on a different computer) or **Update the rest**.
   - This stops a faulty agent version silencing every agent at once, as 1.0.37 did.
+
 - **Release checks:**
   - a new test runs the real Windows agent with PowerShell set to stop on any program error, the way Windows PowerShell 5.1 behaves, and fails unless the report still gets through;
   - tests for the staged rollout.
@@ -477,6 +519,7 @@
   - **Windows "no events" error:** an event log with no matching events gave a collector error on non-English Windows, because the agent recognised that case by Windows' English message. It now goes by the error's ID.
   - **Certificate bindings:** the certificates bound to IIS and other HTTPS listeners weren't found on non-English Windows, because `netsh` labels are translated. They're now read by their values.
   - **Linux:** commands whose output the agent reads now always run in the C locale, so their output is the same whatever the system's language.
+
 - The docs say what's in English and what follows the system's language (new **Languages** section).
 
 ## 1.64.2 - 2026-11-12
@@ -514,6 +557,7 @@
   - **Recent changes** shows what was installed, removed, updated or downgraded.
   - On Windows the list matches Apps & features: machine-wide and signed-in users' programs, without Windows updates or hidden components. It doesn't use `Win32_Product`. On Linux it comes from dpkg or rpm.
   - The list is only sent when it changes, and the add-on asks for it again if it's missing.
+
 - **Manage → Find software:** search every computer for a program or publisher, and see which computers have it and which versions.
 
 ## 1.62.2 - 2026-11-11
@@ -522,6 +566,7 @@
 - **Overview summary tiles now open matching lists.** Clicking Up, Paused or off, or Agents just opened All, and Need attention opened a list that included down computers too.
   - Each tile now opens a list of exactly the computers it counts, as a temporary tab with **×** to go back to All.
   - Agents opens the agents that aren't reporting properly, if there are any.
+
 - A custom tab can no longer end up with the same internal ID as a built-in one, which made the two hard to tell apart.
 
 ## 1.62.1 - 2026-11-11
@@ -551,6 +596,7 @@
 - **Backup copy jobs stuck on Failed.** A backup copy job that copies several source jobs logs each copy as `<copy job>\<source job>`, but the copy job itself only logs a result when one of its own sessions ends. A failed retry of the copy job (`Retry of Backup Copy job '…' finished with Failed`) therefore stayed red even after every copy since had succeeded.
   - It now counts as superseded once copies have finished since it, and none of them failed. Its row shows "Last run failed; N copy sessions have succeeded since".
   - This is worked out by the add-on, so it applies to existing agents straight away.
+
 - "Retry of" no longer appears in the job type on the Backups tab (e.g. "Retry of Replication" shows as "Replication").
 
 ## 1.61.2 - 2026-11-11
@@ -564,6 +610,7 @@
 
 ### Fixed
 - **Off-schedule computers no longer hide their problems.** When a computer's monitoring window closed, its failed backup (or any other agent check that was red or amber) vanished from the Overview, even though nothing had changed. These now stay listed, marked as from the last report outside the schedule, and the tile and group summary count them.
+
 - **Backup alerts outside the schedule:** a failed or overdue Veeam job reported after a computer's window had closed was marked as seen without being sent, so it never alerted. Backup results are now sent whatever the schedule; only a manual pause holds them back.
 
 ## 1.61.0 - 2026-11-11
@@ -579,8 +626,11 @@
 ### Added
 - **Signed-in users** (Windows agent 1.0.32, Linux agent 1.0.13). Details shows who is signed in. With more than one session, or a Remote Desktop or SSH session, a table lists each with its state (active or disconnected), idle time and sign-in time.
   - On Windows it comes from `quser` (console plus Remote Desktop sessions), falling back to the console user on Home editions. On Linux it comes from `who`.
+
 - **Signed-in user** as a choice for the line under the name, e.g. "CONTOSO\jsmith" or "jsmith + 2 others".
+
 - **Signed-in user** condition for custom tabs, to find which computer someone is on.
+
 - Like security details, user names are only shown to Home Assistant admins.
 
 ## 1.59.0 - 2026-11-11
@@ -599,6 +649,7 @@
   - **Monitoring schedule:** one section per schedule.
   - **Nothing:** the previous single list.
   - Each section shows down / needs attention / paused / up counts and can be collapsed.
+
 - **Group** condition for custom tabs, e.g. a "Home" tab for `Lighting, Smart home, Heating and climate`. The tab editor suggests existing groups.
 
 ### Changed
@@ -613,6 +664,7 @@
   - Heating and climate: thermostat, TRV, radiator, underfloor heating, boiler, fan, air conditioning, air purifier.
   - Security: video doorbell, smart lock, alarm panel, siren, smoke/CO alarm, garage door.
   - Also mesh Wi-Fi, modem, DNS/ad blocker, server rack, tablet, smart speaker and display, projector, games console, washing machine, fridge, kitchen appliance, 3D printer, car, battery, inverter, solar, EV charger and energy meter.
+
 - **Automatic icons** for these from common names and models, e.g. "Landing light", "Tapo L530" and other Tapo/Kasa bulbs, strips and spots, Hue, "Hall thermostat", Nest, Hive, "Tapo KE100", "Tapo T100/T110/T300/T315", Sonos, Echo, Roborock, Zappi, Solis and Home Assistant. A "Lamp plug" stays a plug, and a "Nest Cam" stays a camera.
 
 ### Fixed
@@ -627,6 +679,7 @@
 - **Custom-built PCs:** BIOS placeholders such as "System manufacturer", "System Product Name", "To Be Filled By O.E.M." and "Default string", and dummy serial numbers, are no longer shown. This applies straight away to reports from older agents too.
   - Windows agent 1.0.30 reports the motherboard's make and model instead (e.g. "ASUSTeK COMPUTER INC. PRIME B660M-A").
   - With no make or model at all, Automatic shows the operating system instead of a blank line.
+
 - Drop-down lists in the Edit form now match the other fields.
 
 ## 1.55.0 - 2026-11-10
@@ -636,6 +689,7 @@
   - The agent connects to it through its local pipe, so it no longer shows as "can't connect".
   - Only database state is checked (suspect red, offline amber). Backups, logs and jobs are left to the role that owns the data, and no permission changes are needed.
   - A WID that can't be reached doesn't alert. Its databases don't count towards "backed up".
+
 - **SQL Server:** a whole instance can be ignored with the new **Ignore** button next to its name (`sqldb:<instance>\*`).
 
 ## 1.54.1 - 2026-11-10
@@ -649,7 +703,9 @@
 - **Printers over SNMP**, using the standard Printer MIB that most network printers support. Tick SNMP on a printer to see, on its SNMP tab:
   - each toner or ink cartridge with its colour and a level bar, plus drums, fusers and waste toner boxes;
   - paper trays, page count, status and error flags, the front-panel display and the printer's own alerts.
+
 - Alerts: amber when a supply is at `printer_supply_warn` (10%, a new option) or less, a waste box is nearly full, or the printer reports no paper, door open, offline or service needed; red for a paper jam.
+
 - Printers found by **Discover devices** that answer SNMP have the SNMP check suggested, so adding one includes its supplies.
 
 ## 1.53.3 - 2026-11-10
@@ -668,6 +724,7 @@
 
 ### Changed
 - **Automatic icons:** a computer with the *IP camera / NVR (RTSP)* preset, or any check on port 554, gets the CCTV camera icon. Names like `NVR01` or `CAM02`, and camera makes (Hikvision, Dahua, Reolink, Swann, Axis), do too ([#1](https://github.com/shoey79/rollcall/issues/1), thanks to [The-Flude](https://github.com/The-Flude) for the request).
+
 - In the Add and Edit form, *Automatic* now follows the checks you tick, so the icon updates as you choose them.
 
 ## 1.53.0 - 2026-11-10
@@ -705,9 +762,11 @@
 - **Group Policy check** (Windows agent 1.0.26) on domain-joined computers, from Group Policy's results in the System log.
   - Amber when it's failing and hasn't applied for 3 hours, so a failure at start-up that the next refresh fixes doesn't alert.
   - Failures are explained in plain words, e.g. can't read SYSVOL or can't find a domain controller.
+
 - **SYSVOL replication check** on domain controllers, from DFS-R's state and events.
   - Red when replication has stopped: after an unclean shutdown (2213), offline too long (4012), or in error.
   - Amber when a partner can't be reached for over an hour, during initial sync or recovery, or when SYSVOL still uses FRS.
+
 - Both are on the Roles tab, and can be ignored per computer (`gpo:gpo`, `sysvol:sysvol`).
 
 ## 1.49.0 - 2026-11-10
@@ -770,6 +829,7 @@
 
 ### Fixed
 - **Syslog from unknown devices** kept listing a device after it had been added (or after Syslog was ticked for it), until the add-on restarted. The entry now goes as soon as the sender is matched to a computer.
+
 - Messages that arrived before the sender was matched are no longer lost. Up to 200 per sender from the last hour are held, and filed in the computer's log once it's matched, e.g. when you add the device or when its name is first looked up.
 
 ## 1.45.1 - 2026-11-10
@@ -855,6 +915,7 @@
   - The **Syslog** check goes red, with a notification, when a registration fails for more than a minute.
   - It also goes red when a line stops re-registering while the adapter is still logging.
   - It recovers when the line registers again.
+
 - The SPA's `System started:` line counts as a restart in the readings.
 
 ## 1.40.4 - 2026-11-09
@@ -882,16 +943,19 @@
   - Its blocking switch is told apart from its per-group switches.
   - Its "Status" sensor is read as blocking on or off.
   - Pi-hole's diagnostic message count is noted.
+
 - A linked Home Assistant device's readings only showed on the device Overview, which computers with an agent don't have. Every linked device now gets a **Home Assistant** tab in Details.
 
 ## 1.40.0 - 2026-11-09
 
 ### Added
 - **Link a Home Assistant device** to a computer (Edit → Home Assistant device). Rollcall reads all of that integration's entities through Home Assistant, with no extra passwords. They show in the device's Overview, and problems alert as a **Home Assistant** check.
+
 - **Pi-hole**, through its Home Assistant integration:
   - Tiles for ad blocking, DNS queries, blocked today and the percentage blocked, clients, and domains on blocklists.
   - Amber when ad blocking is turned off.
   - Pi-hole updates are noted.
+
 - **Any other linked device** goes red if all its entities are unavailable, and amber for a "problem" sensor that's on.
 
 ## 1.39.0 - 2026-11-09
@@ -913,6 +977,7 @@
   - temperatures and fans from the device's logs, and log alerts waiting;
   - a **Needs attention** list that links to the SNMP or Logs tab with the detail;
   - every check with its uptime, recent warnings and errors, and the device's model, serial and firmware.
+
 - **Details** is now on every row, so a device with only ping and port checks also gets an Overview.
 
 ## 1.37.0 - 2026-11-09
@@ -932,6 +997,7 @@
   - Rollcall sends a SIP OPTIONS request; any SIP reply means the device's SIP service is running.
   - The chip shows the reply and the device's software (e.g. `SIP 200 OK · Cisco/SPA112-1.4.1(SR5)`).
   - Custom forms: `sip`, `sip:PORT` and `sip:HOST:PORT`.
+
 - A **VoIP phone / ATA** device icon. It's picked automatically for SPA, Yealink, Snom, Polycom, Grandstream and similar names, and for devices with SIP checks.
 
 ## 1.35.1 - 2026-11-09
@@ -950,6 +1016,7 @@
   - **Red alerts:** on battery (with the runtime left), output off, a low or faulty battery, a battery that needs replacing, a failed self-test, or under 5 minutes of runtime.
   - **Amber:** under 15 minutes of runtime, load at 80% or more, or the UPS on bypass.
   - The new options `ups_runtime_warn_minutes`, `ups_runtime_crit_minutes` and `ups_load_warn` set those limits.
+
 - **SNMP v1**, for older kit that ignores v2c requests, such as first-generation APC cards (AP9617 and similar). Choose **v1** as the SNMP version when editing the device. When a v2c device doesn't answer, the error now suggests trying v1.
 
 ## 1.34.0 - 2026-11-09
@@ -992,6 +1059,7 @@
   - Agents' logs now say where each report went ("Report sent to https://…: …").
   - Rollcall stores the address each agent last reported to and the IP the report came from. For reports through a reverse proxy, such as the firewall's WAF, that's the original IP from `X-Forwarded-For` and the proxy's own IP.
   - Shown under Last report in the Agents list, and in Details → Agent. The add-on log notes when an agent switches address.
+
 - Windows agent 1.0.16 and Linux agent 1.0.10.
 
 ## 1.31.0 - 2026-11-08
@@ -1034,6 +1102,7 @@
   - Agents try the addresses in order and remember which one worked, so laptops away from the office report through the outside address without waiting.
   - An address that can't be reached is skipped after 3 seconds.
   - The dialog warns if the outside address isn't HTTPS.
+
 - Windows agent 1.0.14 and Linux agent 1.0.8. Agents updating themselves keep their list of addresses.
 
 ## 1.26.2 - 2026-11-08
@@ -1050,8 +1119,11 @@
 
 ### Changed
 - **One Details button**: each device has a single **Details**, with tabs for whatever it has: the agent's tabs, **SNMP** and **Logs**. Before, a NAS had separate Details and Logs buttons.
+
 - **Manage menu**: Add computer, Agents, Export / import and Reset all uptime are now in a **Manage** menu, instead of being separate buttons. Reset all uptime also asks you to type RESET. The menu shows a badge when agents are waiting for approval.
+
 - **At a glance** can be sorted by status, name, uptime, latency, most recently changed or IP address. Your choice is remembered.
+
 - New Rollcall logo at the top of the page and as the browser tab icon. The sidebar icon is now `mdi:list-status`, to match.
 
 ### Fixed
@@ -1082,6 +1154,7 @@
   - The list shows the hardware under the name, e.g. "Hyper-V VM on HV01".
   - The new tab condition **Physical or virtual**, and the templates Physical machines, Virtual machines and Hyper-V VMs, split the list.
   - VMs get the virtual machine icon automatically.
+
 - Windows agent 1.0.13, Linux agent 1.0.7. Agents set to update automatically pick these up at their next report.
 
 ## 1.23.0 - 2026-11-07
@@ -1098,6 +1171,7 @@
 
 ### Added
 - **Device icons**: every computer shows an icon in the list and on the Overview. It's picked automatically from its name, agent or checks, or you choose one of 23 device types under **Icon** in Edit (rack/storage/tower server, NAS, switch, router, firewall, access point, cameras, printer, UPS and more). **Upload image** adds your own (PNG, JPEG, WebP or SVG, up to 300 KB), such as a manufacturer's logo or a photo of the hardware. Uploads are included in exports.
+
 - **Make and model** (optional), shown under the computer's name.
 
 ## 1.21.1 - 2026-11-07
@@ -1112,6 +1186,7 @@
 
 ### Added
 - **SNMP v3**: choose v2c or v3 for each SNMP device. v3 takes a user name plus authentication (MD5, SHA, SHA-224, SHA-256, SHA-384 or SHA-512) and privacy (none, DES, AES-128, AES-192 or AES-256). Requests are signed, replies are checked, and with privacy everything is encrypted. Wrong user names, passwords and protocols are reported in plain words. Passwords aren't shown on the dashboard, and leaving them blank when editing keeps the saved ones.
+
 - The add-on image now includes `py3-cryptography`, which SNMP v3 encryption needs.
 
 ## 1.20.2 - 2026-11-07
@@ -1123,6 +1198,7 @@
 
 ### Fixed
 - SNMP: switches that can't answer large requests in time, such as some Netgear smart switches, lost their PoE information and took around 20 seconds to poll. Rollcall now asks for fewer rows at a time when a request goes unanswered, and remembers that for the device's next poll.
+
 - SNMP Details now says when part of the information didn't arrive, instead of leaving it out silently, and shows how long each part took.
 
 ## 1.20.0 - 2026-11-06
@@ -1143,6 +1219,7 @@
 
 ### Fixed
 - Buffalo TeraStation: SMART showed as a number. It now shows as **OK** (1), and any other number shows as a warning with its code.
+
 - Buffalo TeraStation: polls took around 20 seconds waiting for the NAS's system-information table. It's no longer read, because the model and firmware are already in the device description.
 
 ## 1.19.1 - 2026-11-06
@@ -1196,6 +1273,7 @@
 
 ### Fixed
 - Windows agent 1.0.11: Veeam Backup for Microsoft 365 jobs were missing from Backups most of the time on Windows PowerShell 5.1. They were shown for one report, then lost for the next 30 minutes while the agent reused its cached copy.
+
 - Windows agent: a problem reading Microsoft 365 jobs (module not found, or `Get-VBOJob` failing) now shows as an agent error in Details instead of the jobs silently not appearing, and no longer affects Backup & Replication jobs. If the module isn't found by name, the agent also looks for it under `Program Files\Veeam`.
 
 ## 1.15.0 - 2026-11-06
@@ -1223,6 +1301,7 @@
 
 ### Added
 - **"Whenever it's switched on"** monitoring mode, for computers that are usually off (cold storage, monthly backups). Off is normal: shown as **Off**, never alerted, and not counted against uptime. While it's on, it and its checks and agent are monitored as usual.
+
 - **Never alert for this computer**: no notifications of any kind for it, while the dashboard, entities and events still show its real status. Marked 🔕 on the dashboard. Works with any schedule.
 
 ## 1.12.0 - 2026-11-05
@@ -1251,13 +1330,16 @@ Update the Linux agent to get this: download it again from **Agents** and run `-
 
 ### Changed
 - **Server Details has tabs**: Overview (checks, system, roles), Storage (disks, storage health, hardware), Services (services, IIS, containers), Roles (AD, DHCP, Hyper-V, printers, RDS, Defender, Immich; "Apps" on Linux), Events ("Journal" on Linux), Security and Agent (ignored items, run timings, warnings). Tabs only appear when they have something in them, and show a badge for checks needing attention. The open tab is kept when you refresh.
+
 - The check cards on the Overview are clickable: each opens its tab and scrolls to its section.
+
 - The Hardware Log row in Details no longer looks like a fault, and RAID controllers are labelled as such.
 
 ## 1.10.0 - 2026-11-04
 
 ### Added
 - **Dell PERC and server hardware via OpenManage** (Windows agent 1.0.8). Where OMSA's `omreport` is installed, the Storage check covers every PERC controller, virtual disk and physical disk (degraded or failed is red; rebuilding or predicted failure is amber), and a new **Hardware** check covers OMSA's chassis health: power supplies, fans, temperatures, voltages, memory, batteries and intrusion. Both show in Details.
+
 - **AMD RAIDXpert2 arrays** (Windows agent 1.0.8), worked out from its "AMD RAID API" events in the System log: critical is red, rebuilding amber with progress, and recent disk drop-outs, timeouts and bad-sector remaps amber. The array state is kept between runs.
 
 Update the Windows agent to get these.
@@ -1266,6 +1348,7 @@ Update the Windows agent to get these.
 
 ### Fixed
 - An agent could attach to the wrong dashboard entry when the server also holds another monitored address, such as an Exchange DAG or failover-cluster IP on whichever node owns it: the agent's checks showed on the DAG entry and not on the server. Agents are now matched by name before IP (and, by IP, their primary address first). An agent already attached by IP to an entry that isn't its server moves to the entry with its name at the next start or report, and the leftover agent sensors on the other entry are removed.
+
 - Log messages say "agent" rather than "Windows agent", since they cover Linux agents too.
 
 ## 1.9.2 - 2026-11-02
@@ -1282,6 +1365,7 @@ Update the Windows agent to get these.
 
 ### Changed
 - **Agents page** reorganised: the address agents report to, then side-by-side Windows and Linux sections with the same layout (requirements, download, install, options, update, remove, troubleshoot).
+
 - **Security rating up from 6 to 8.** The add-on no longer asks for the `NET_RAW` privilege (ping uses unprivileged ICMP sockets) and now has its own AppArmor profile, which limits what it can run and where it can write.
 
 ### Added
@@ -1306,6 +1390,7 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Added
 - **Monitoring schedules.** A computer can be monitored only at set times (Edit → Monitoring schedule): one or more windows of days and times, which can run past midnight. Outside them it shows as **Off schedule** and nothing alerts; it's still pinged, and the time doesn't count against uptime. When a window opens it shows **Starting up** for an allowance you choose (15 minutes by default) before a down alert. Times follow Home Assistant's time zone and daylight saving.
+
 - Off-schedule computers have their own count at the top and a tab condition (Status is Off schedule). The entity gains `off_schedule` and `schedule` attributes.
 
 ## 1.6.2 - 2026-11-02
@@ -1317,14 +1402,18 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Fixed
 - 1.6.0's add-on description contained a colon that made `config.yaml` invalid, so Home Assistant couldn't read the add-on. Fixed.
+
 - Documentation examples use `example.local` instead of a real domain. Install instructions are now for the GitHub repository.
 
 ## 1.6.0 - 2026-11-02
 
 ### Changed
 - **Renamed to Rollcall.** The sidebar, dashboard, notifications and agent messages now say Rollcall. Internal names are unchanged: the add-on ID (`ping_monitor`), entity IDs (`sensor.ping_monitor_*`), agent file names, folders, scheduled task, systemd timer and port 8100, so existing automations and installed agents keep working without changes.
+
 - Phone notifications use a "Rollcall" notification channel; on Android, set its sound or importance again if you'd customised the old "Ping Monitor" channel.
+
 - Exports are named `rollcall-export-<date>.zip`. Exports from Ping Monitor import as before.
+
 - Windows agent 1.0.6 and Linux agent 1.0.3: wording only. No need to redeploy.
 
 ## 1.5.0 - 2026-11-02
@@ -1336,6 +1425,7 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Added
 - **Home Assistant sensor checks.** Any HA sensor can be a check on a computer, e.g. a UniFi access point's CPU and memory from the UniFi Network integration: `CPU=ha:sensor.office_ap_cpu_utilization>90`. The condition describes the problem (`>` `>=` `<` `<=` `=` `!=`); without one, the sensor only needs to be available. The chip shows the current value.
+
 - The Edit dialog can search Home Assistant's sensors and add one with a click, with sensible defaults (CPU and memory above 90%, temperature above 80).
 
 ## 1.3.1 - 2026-11-01
@@ -1347,6 +1437,7 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Added
 - **Tabs** on the dashboard. Built in: All, Needs attention, and Windows / Linux / No agent when you have a mix. Admins can add their own with **+ New tab**, built from conditions on name (begins with, contains, ends with, is, pattern…), hostname or IP, IP range (CIDR, ranges or wildcards), operating system, status, agent role, service check and 24-hour uptime, matching all or any. A live preview shows what matches.
+
 - Each tab shows how many computers it holds and how many need attention. Tabs are shared by everyone and saved in `views.json`; each browser remembers its last tab.
 
 ## 1.2.4 - 2026-10-31
@@ -1371,6 +1462,7 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Fixed
 - A newly approved Linux server showed "Windows: waiting for first report" until its first report arrived. It now shows "Linux: waiting for first report".
+
 - The Immich API key instructions now list the permissions needed (`server.statistics`, `server.storage` and `job.read` or `queue.read`, on a key made by an admin) instead of "all permissions".
 
 ## 1.2.0 - 2026-10-28
@@ -1383,7 +1475,9 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - journal errors, with out-of-memory kills and disk/filesystem errors alerted straight away
   - failed SSH and sudo logins, users created or deleted, users added to groups
   - pending and security updates, last apt run, reboot required
+
 - Details shows Docker containers, an Immich section and journal errors for Linux servers; the dashboard chip reads **Linux ✓**.
+
 - Disk thresholds and Ignore work with Linux mount points (`disk:/srv/photos`).
 
 ### Changed
@@ -1393,11 +1487,14 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Added
 - Windows agent 1.0.5 times each part of its run and reports the total, CPU time and peak memory. Its log line now reads e.g. "run took 48 s; slowest: update history 41 s".
+
 - Details has an **Agent run** section breaking down where the time went.
+
 - The Agent check shows the run time and turns amber if a run takes longer than `agent_slow_seconds` (default 120; 0 turns this off).
 
 ### Changed
 - The last-update date (Windows Update history and the installed-updates list, which can be slow, especially on Windows 10/11) is now worked out every 6 hours or after a restart, instead of every run, and reads the latest 100 history entries instead of 300.
+
 - The agent doesn't ask workstations for Windows Server roles.
 
 ## 1.1.3 - 2026-10-21
@@ -1409,27 +1506,36 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Fixed
 - Reports from servers with a single disk were rejected (HTTP 500 in the agent log). PowerShell sends a one-item list as a bare object, and the add-on expected a list. The add-on now accepts either shape for every list in a report, so existing agents work without being redeployed.
+
 - Windows agent 1.0.4 sends the disk list as a list even with one disk.
+
 - If a report still can't be processed, the add-on logs the reason and keeps a copy (`agent_reports/failed-<id>.json`) for diagnosis.
 
 ## 1.1.1 - 2026-10-20
 
 ### Fixed
 - IIS FTP sites showed as "Unknown". IIS's site list reports through the web service, which doesn't run FTP sites. Windows agent 1.0.3 reads an FTP-only site's real state from IIS's FTP settings, falling back to whether the FTP service is running.
+
 - A site state of "Unknown" is no longer treated as a fault, so older agents don't raise false alerts.
+
 - Details labels FTP sites as such.
 
 ## 1.1.0 - 2026-10-20
 
 ### Added
 - **Ignore from the dashboard.** In a server's Details, admins can ignore stopped services, stopped IIS app pools and sites, printers, VMs, busy DHCP scopes, event IDs and whole disks, on that server or on all servers. Changes take effect immediately on the latest report and clear any related alert.
+
 - **Per-disk thresholds.** Each disk can have its own amber and red % free levels; 0 turns a level off.
+
 - An **Ignored on this server** list in Details, with **Apply to all servers** and **Stop ignoring**. Ignores from the Configuration tab are listed too.
+
 - Settings are saved in `agent_settings.json` and removed when a server is deleted from the dashboard.
 
 ### Changed
 - Disk status is worked out per volume against that volume's own thresholds.
+
 - Events that are ignored after they arrive no longer keep the Events chip amber.
+
 - After **Stop ignoring**, something that's still wrong goes red straight away instead of waiting for two more reports.
 
 ## 1.0.3 - 2026-10-20
@@ -1439,13 +1545,16 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Added
 - The agent reports the OS build including the update revision (e.g. 10.0.20348.2762), shown in Details and in the Updates check when no date is available.
+
 - Details shows where the last-update date came from.
+
 - `agent_patch_days: 0` turns off the "not updated for N days" warning; a pending reboot is still flagged.
 
 ## 1.0.2 - 2026-10-20
 
 ### Added
 - Windows agent 1.0.1: new `-Action` parameter (`Install`, `Uninstall`, `Report`) for tools that can't pass switch parameters, such as MECM Run Scripts.
+
 - MECM deployment steps in the Windows agents dialog and the README.
 
 ### Fixed
@@ -1465,24 +1574,35 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - **Instant alerts** for account lockouts, account creation and deletion, security group additions, audit policy changes, Security log cleared, unexpected shutdowns and crashes, disk/NTFS errors, Critical events, and Defender detections.
   - **Details** view per server: system info, roles, disks, services, role health, 24 h of errors and (admins only) security events.
   - **Sensors** for every agent check, plus CPU, memory and per-disk free space for HA graphs.
+
 - **Windows agents** admin dialog: download the script, approve or reject servers, revoke, rotate the enrolment key, see the last report and agent version.
+
 - Approved servers are added to the dashboard automatically, or matched to an existing entry by name or IP.
+
 - Agent API on port 8100, with optional HTTPS using Home Assistant's certificates.
+
 - New options: `agent_stale_minutes`, `agent_disk_warn`, `agent_disk_crit`, `agent_failed_logons`, `agent_patch_days`, `agent_event_alerts`, `agent_security_alerts`, `agent_event_watch`, `agent_security_alert_ids`, `agent_watch_services`, `agent_ignore`, `agent_auto_add`, `agent_ssl`, `agent_certfile`, `agent_keyfile`.
 
 ### Changed
 - Dashboard rows show one "Windows ✓" chip for an agent's healthy checks and list only the ones that need attention.
+
 - The Degraded note lists agent check names; the full reasons are in Details.
+
 - Deleting a computer also revokes its Windows agent.
 
 ## 0.9.0 - 2026-10-19
 
 ### Added
 - The Ping Monitor sidebar panel is now visible to all Home Assistant users, not only admins (`panel_admin: false`).
+
 - **View-only mode for non-admins.** They see status, services and uptime, and can use "Check now", but can't add, edit, delete, pause, resume or reset. The add-on enforces this itself, not just by hiding buttons, because HA doesn't stop non-admins opening an add-on's page by URL.
+
 - Admins are identified from Home Assistant's user list, matched to the signed-in user that HA's ingress passes to the add-on.
+
 - New option `editors`: HA usernames or display names of non-admins who may also make changes.
+
 - New option `admin_only_changes` (default on). Turn it off to let anyone who can open the panel make changes.
+
 - Blocked change attempts are logged with the user's name.
 
 ## 0.8.0 - 2026-10-18
@@ -1500,7 +1620,9 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - **Downloads:** Sonarr, Radarr, Lidarr, Prowlarr, SABnzbd, qBittorrent, Transmission.
   - **Monitoring & development:** Grafana, Prometheus, Gitea/Forgejo, Jenkins.
   - Apps with a health or status endpoint are checked through it; the rest by their default port.
+
 - Search box in the Add/Edit form to find a preset by name or common alias (e.g. "sccm", "mariadb", "pve").
+
 - A "Selected:" line in the form listing what's ticked, including anything hidden by the search.
 
 ### Changed
@@ -1510,11 +1632,14 @@ Update the agents to get the Storage check: download them again from **Agents** 
 
 ### Fixed
 - HTTPS checks against older devices (e.g. Dell iDRAC 6) showed Degraded even though the web page worked. HTTPS checks now accept TLS 1.0, old ciphers, small (1024-bit) keys and legacy renegotiation.
+
 - The Plex preset failed when Plex is set to require secure connections. `http:PORT` and `https:PORT` checks now try the other protocol when the port answers but not with the expected one, and remember which works ("via https" on the chip).
+
 - Web checks no longer fail on devices that send malformed HTTP headers. Only the status line is read.
 
 ### Added
 - `idrac` preset (also `ilo`, `bmc`): HTTPS on 443, listed as "Dell iDRAC / server BMC" in the Add/Edit form.
+
 - The Degraded note on the dashboard now shows why each service failed (e.g. "OWA: HTTP 503").
 
 ## 0.7.0 - 2026-10-18
@@ -1525,12 +1650,16 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - a checkbox for every service preset, grouped and showing the ports each one checks
   - custom check fields, with format hints and a clear error if one isn't valid
   - Delete and Reset uptime for that computer
+
 - Changes take effect immediately, without restarting the add-on.
+
 - Deleting a computer also removes its history, bell notifications and HA sensors.
 
 ### Changed
 - The computer list is now stored in the add-on's data folder (`hosts.json`) and managed on the dashboard.
+
 - Hosts in the Configuration tab are imported on start (matched by name), then that option is cleared. Hosts already imported are never re-applied, so they can't undo dashboard edits.
+
 - The per-row "Reset" button has moved into the Edit form, making room for "Edit".
 
 ## 0.6.0 - 2026-10-18
@@ -1540,28 +1669,40 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - Presets: `dc`, `dns`, `ldap`, `sql`, `iis`, `iis-https`, `sharepoint`, `exchange`, `wsus`, `fileserver`/`smb`, `rds`/`rdp`, `immich`, `jellyfin`, `plex`, `unifi`, `unifi-os`, `ssh`.
   - Custom: `tcp:PORT`, `http:PORT/path`, `https:PORT/path`, a full URL, and an optional `Label=` prefix.
   - Web checks pass on any response below 500, so a 401 (Windows auth) or a redirect to a login page counts as up. Certificates aren't verified.
+
 - **Degraded** status (orange): the computer pings but a service has failed twice in a row.
+
 - Per-service alerts ("🟠 SQL01: SQL is down" / "🟢 … is back up") and bell notifications, each with its own phone tag.
+
 - Service chips on each dashboard row. Hover for target, error detail, latency and 24h uptime. The filter box also matches service names.
+
 - `sensor.ping_monitor_<host>_<service>` for every service, plus a `services` attribute on each computer sensor.
+
 - `ping_monitor_service_changed` event.
+
 - New option `service_timeout` (default 5 seconds).
 
 ### Changed
 - When a whole computer goes down you get a single "down" alert. Its services reset and re-check once it's back, instead of each sending its own alert.
+
 - Pausing a computer also pauses its service checks.
+
 - Resetting a computer's uptime also clears its services' history.
 
 ## 0.5.0 - 2026-10-18
 
 ### Added
 - Tapping a phone notification now opens the Ping Monitor dashboard instead of the default HA page. The add-on finds its own sidebar path automatically.
+
 - New option `notification_url` to send taps somewhere else (for example `/lovelace/servers`). Leave it blank for the automatic path.
+
 - Phone notifications are tagged per computer, so a "back up" message replaces that computer's "down" alert instead of stacking.
+
 - Phone notifications are grouped and use their own "Ping Monitor" notification channel on Android, so the sound and priority can be set separately in the phone's notification settings.
 
 ### Changed
 - Recovery messages show seconds for outages under a minute (previously "after 0m").
+
 - The add-on now requests Supervisor API access (`hassio_api`) to look up its own slug.
 
 ### Notes
@@ -1576,15 +1717,20 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - If it isn't back within the time limit, it goes straight to red and alerts. If it never went down (a quick reboot between checks), it resumes quietly.
   - **Resume** button to end a pause early. The amber/red count starts fresh.
   - Pauses survive an add-on restart.
+
 - New option `maintenance_minutes` (default 30): the default time limit offered when pausing.
+
 - Pause time is left out of the uptime % and shows blue in the 24h strip.
+
 - Sensors report state `maintenance` and a `maintenance_until` attribute.
 
 ## 0.3.0 - 2026-10-18
 
 ### Added
 - "Reset all uptime" button on the dashboard, which clears the check history for every host.
+
 - "Reset" button on each row, which clears history for that host only.
+
 - Both ask for confirmation. Current status is kept; uptime % and the 24h strip start again from the next check, and the HA sensors are updated straight away.
 
 ## 0.2.1 - 2026-10-18
@@ -1599,19 +1745,30 @@ Update the agents to get the Storage check: download them again from **Agents** 
   - Names sort naturally (PC2 before PC10) and ignore case.
   - IP addresses sort numerically.
   - Hosts with no value yet (for example, no uptime) always sort last.
+
 - The chosen sort order is remembered between visits.
+
 - A "Sort" dropdown on narrow screens, where column headers are hidden.
 
 ## 0.1.0 - 2026-10-18
 
 ### Added
 - Initial release.
+
 - Pings a configurable list of hosts (IP or hostname) on a schedule. The default is every 5 minutes.
+
 - Status per host: green (up), amber (one missed check), red (two or more missed checks in a row).
+
 - Separate retry interval for the re-check after a miss.
+
 - Ingress dashboard in the HA sidebar showing status, name, IP, 24h uptime %, latency, last check, time since last change, a 24-hour history strip and a "Check now" button.
+
 - `sensor.ping_monitor_<name>` per host, with IP, uptime, latency and timestamps as attributes. Republished every 60 seconds so sensors return quickly after an HA restart.
+
 - Notifications through any `notify` services when a host goes red, and optionally when it recovers.
+
 - Persistent notification in HA while a host is red, cleared on recovery.
+
 - `ping_monitor_status_changed` event on every status change, for use in automations.
+
 - Check history stored in SQLite, kept for a configurable number of days. Last known status is restored on restart without re-sending alerts.
