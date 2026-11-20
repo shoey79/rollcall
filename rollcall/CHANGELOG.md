@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.94.1 - 2026-11-20
+
+### Fixed
+- **Starlink: the Obstructed tile and pings dropped were missing when they were 0.** The dish leaves zeros out of its status, and Rollcall took that as "not reported"; a clear sky now shows *0.0% of the time*.
+
 ## 1.94.0 - 2026-11-20
 
 ### Added
