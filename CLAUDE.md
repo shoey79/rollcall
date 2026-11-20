@@ -55,5 +55,4 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-- 1.93.0 (committed locally, waiting for the owner's go-ahead): several Home Assistant devices on one Rollcall device,
-  the myenergi view, messages to users' screens, built-in agent HTTPS with key pinning.
+(none)
