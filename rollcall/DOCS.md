@@ -551,7 +551,7 @@ It turns green again when the line registers. Tip: add `getOptRdata` to the adap
 
 For HPE servers with **iLO 3** or **iLO 4**, Rollcall can log in to the iLO and read the server's health: each drive, fans, temperatures and power supplies. Add the iLO as a device, using the iLO's own address, tick **HPE iLO health** (`hpilo`) and enter an iLO user name and password. In the iLO, create a user with only the **Login** privilege: Rollcall only reads.
 
-- It's read every 5 minutes over HTTPS, using HPE's RIBCL interface (an HTTPS POST to `/ribcl`), which both iLO 3 and iLO 4 have. The iLO's self-signed certificate and older TLS are accepted.
+- It's read every 5 minutes over HTTPS, using HPE's RIBCL interface (an HTTPS POST to `/ribcl`), which both iLO 3 and iLO 4 have. The iLO's self-signed certificate and older TLS are accepted, and Rollcall uses TLS 1.2 at most with it, which older iLO firmware needs.
 - An **iLO** tab in Details shows the power state, inlet temperature, each problem found, then:
   - **Storage:** each Smart Array controller with its cache, each logical drive with its RAID level, and each physical drive. iLO 4 reports drives when HPE's Agentless Management Service is installed on the server (it comes with HPE's Service Pack for ProLiant). iLO 3 lists drive bays on servers that have a drive backplane.
   - power supplies, fans and temperature sensors with their limits, and the iLO's own **Health at a glance**.

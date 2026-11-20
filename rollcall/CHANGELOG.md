@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **HPE iLO 3 health stopped working after 1.92.1 with "TLS handshake failed (tlsv1 alert internal error)"** ([#14](https://github.com/shoey79/rollcall/issues/14), thanks to [tomvining](https://github.com/tomvining) for the report). The newer base image's OpenSSL (3.5) adds a post-quantum key to the first message of a TLS 1.3 connection, taking it from about 500 bytes to over 1,600, and iLO 3 refuses it. Rollcall now talks to iLOs with TLS 1.2 at most (iLO 3 and iLO 4 don't do TLS 1.3 anyway), so the first message is back to its old size. HTTPS service checks whose handshake fails now try once more the same way, for other old management cards such as Dell iDRAC 6.
+
 ## 1.93.0 - 2026-11-20
 
 ### Added

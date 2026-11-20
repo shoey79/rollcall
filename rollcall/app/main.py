@@ -1171,6 +1171,27 @@ async def tcp_check(ip: str, port: int, timeout: float) -> tuple[bool, float | N
 
 _STATUS_LINE = re.compile(rb"^HTTP/\d(?:\.\d)?\s+(\d{3})")
 _tls_ctx: ssl.SSLContext | None = None
+_legacy_tls_ctx: ssl.SSLContext | None = None
+
+
+def _permissive_tls_context(max_tls12: bool) -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+    except (ValueError, AttributeError):
+        pass
+    if max_tls12:
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    for ciphers in ("ALL:@SECLEVEL=0", "ALL", "DEFAULT"):
+        try:
+            ctx.set_ciphers(ciphers)
+            break
+        except ssl.SSLError:
+            continue
+    ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+    return ctx
 
 
 def health_tls_context() -> ssl.SSLContext:
@@ -1182,22 +1203,23 @@ def health_tls_context() -> ssl.SSLContext:
     """
     global _tls_ctx
     if _tls_ctx is None:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        try:
-            ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-        except (ValueError, AttributeError):
-            pass
-        for ciphers in ("ALL:@SECLEVEL=0", "ALL", "DEFAULT"):
-            try:
-                ctx.set_ciphers(ciphers)
-                break
-            except ssl.SSLError:
-                continue
-        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
-        _tls_ctx = ctx
+        _tls_ctx = _permissive_tls_context(max_tls12=False)
     return _tls_ctx
+
+
+def legacy_tls_context() -> ssl.SSLContext:
+    """health_tls_context() capped at TLS 1.2, for old embedded web servers (HPE iLO 3, Dell iDRAC 6).
+
+    Since OpenSSL 3.5 (Alpine 3.22 on), offering TLS 1.3 adds a post-quantum key share
+    (X25519MLKEM768) to the first message, taking it from about 500 bytes to over 1,600.
+    Some old embedded TLS stacks can't take a first message that size, or key types they
+    don't know, and answer with an "internal error" alert. Without TLS 1.3 there's no key
+    share, so the first message is back to its old size.
+    """
+    global _legacy_tls_ctx
+    if _legacy_tls_ctx is None:
+        _legacy_tls_ctx = _permissive_tls_context(max_tls12=True)
+    return _legacy_tls_ctx
 
 
 def _is_ip(host: str) -> bool:
@@ -1209,15 +1231,16 @@ def _is_ip(host: str) -> bool:
 
 
 async def _http_once(scheme: str, host: str, port: int, path: str,
-                     timeout: float) -> tuple[bool | None, float | None, str]:
+                     timeout: float, legacy: bool = False) -> tuple[bool | None, float | None, str]:
     """One GET request, reading only the status line.
 
     Returns (ok, ms, detail). ok is None when the port answered but not with
     HTTP over this scheme (TLS failure, connection dropped, garbage), which is
-    the case where trying the other scheme is worthwhile.
+    the case where trying the other scheme is worthwhile. If the TLS handshake
+    fails, it's tried once more capped at TLS 1.2 (see legacy_tls_context).
     """
     t0 = time.monotonic()
-    tls = health_tls_context() if scheme == "https" else None
+    tls = (legacy_tls_context() if legacy else health_tls_context()) if scheme == "https" else None
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=tls,
@@ -1228,8 +1251,12 @@ async def _http_once(scheme: str, host: str, port: int, path: str,
     except ConnectionRefusedError:
         return False, None, "connection refused"
     except ssl.SSLError as err:
+        if tls is not None and not legacy:
+            return await _http_once(scheme, host, port, path, max(1.0, timeout - (time.monotonic() - t0)), legacy=True)
         return None, None, f"TLS handshake failed ({err.reason or type(err).__name__})".replace("_", " ").lower()
     except (ConnectionResetError, asyncio.IncompleteReadError):
+        if tls is not None and not legacy:  # some old stacks just drop the connection instead
+            return await _http_once(scheme, host, port, path, max(1.0, timeout - (time.monotonic() - t0)), legacy=True)
         return None, None, "connection reset"
     except OSError as err:
         return False, None, (err.strerror or type(err).__name__).lower()
@@ -2886,7 +2913,7 @@ class Monitor:
         h.ilo_polled = now
         try:
             try:
-                d = await ilolib.poll(h.ip or h.host, h.ilo_user, h.ilo_pass, health_tls_context(), timeout=60)
+                d = await ilolib.poll(h.ip or h.host, h.ilo_user, h.ilo_pass, legacy_tls_context(), timeout=60)
             except ilolib.IloError:
                 raise
             except Exception as err:  # noqa: BLE001 - anything unexpected is a failed reading, not a stale "OK"
