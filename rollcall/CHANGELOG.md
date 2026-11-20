@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.94.0 - 2026-11-20
+
+### Added
+- **Starlink.** Tick **Starlink dish** to watch a Starlink dish: online or not, outages and their reason, obstructions, latency, pings dropped, throughput, the dish's own alerts (motors, mast, heat, Ethernet), updates and its last restart, in a new **Starlink** tab and on the device's Overview. It's read from the dish itself on the local network (192.168.100.1:9200, no sign-in; the address can be changed), or, for a dish at another site, through the Starlink account with the starlink.com sign-in pasted under **Edit** (only ever sent to starlink.com, never shown again). An outage, a heat shutdown or the service disabled is red with an alert; the dish's warnings, heavy obstruction and an expired sign-in are amber without one. Rollcall only reads: it can't restart or stow the dish. The documentation covers reaching the dish in bypass mode, including when one of your networks is also 192.168.100.0/24.
+
 ## 1.93.1 - 2026-11-20
 
 ### Fixed
