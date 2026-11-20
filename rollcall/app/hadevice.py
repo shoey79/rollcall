@@ -1,12 +1,13 @@
-"""A Home Assistant device linked to a Rollcall device: its entities as they are now, and what
-Rollcall makes of them. Integrations Rollcall knows (Pi-hole so far) get headline tiles and
+"""The Home Assistant devices linked to a Rollcall device: their entities as they are now, and what
+Rollcall makes of them. Integrations Rollcall knows (Pi-hole, myenergi) get headline tiles and
 alerts; any other device gets its entities listed, an alert if Home Assistant has lost touch with
-it, and any "problem" binary sensors that are on."""
+it, and any "problem" binary sensors that are on. A Rollcall device can link several Home Assistant
+devices (1.93.0), e.g. the Zappi, hub and Harvi that the myenergi integration makes for one system."""
 from __future__ import annotations
 
 import re
 
-KNOWN = {"pi_hole": "Pi-hole", "pi_hole_v6": "Pi-hole (V6, from HACS)"}
+KNOWN = {"pi_hole": "Pi-hole", "pi_hole_v6": "Pi-hole (V6, from HACS)", "myenergi": "myenergi"}
 PIHOLE = ("pi_hole", "pi_hole_v6")
 UNAVAILABLE = ("unavailable", "unknown", "", None)
 
@@ -34,13 +35,12 @@ def _num(v):
         return None
 
 
-def read(dev: dict, ents: list[dict], states: dict) -> dict:
-    platforms = sorted({e.get("platform") or "" for e in ents} - {""})
-    out_ents = []
+def _entities(ents: list[dict], states: dict) -> list[dict]:
+    out = []
     for e in ents:
         st = states.get(e.get("entity_id")) or {}
         a = st.get("attributes") or {}
-        out_ents.append({
+        out.append({
             "entity_id": e.get("entity_id"), "platform": e.get("platform"), "key": _key(e),
             "name": str(a.get("friendly_name") or e.get("name") or e.get("original_name") or e.get("entity_id")),
             "state": st.get("state") if st else "unavailable", "unit": a.get("unit_of_measurement") or "",
@@ -48,16 +48,47 @@ def read(dev: dict, ents: list[dict], states: dict) -> dict:
             "title": a.get("title") or "", "installed": a.get("installed_version") or "", "latest": a.get("latest_version") or "",
             "changed": st.get("last_changed"),
         })
-    out_ents.sort(key=lambda x: (x["category"] != "", x["entity_id"].split(".")[0] != "sensor", x["name"].lower()))
-    d = {"device": {"name": dev.get("name_by_user") or dev.get("name") or "", "manufacturer": dev.get("manufacturer") or "",
-                    "model": dev.get("model") or "", "sw_version": dev.get("sw_version") or "",
-                    "integration": integration_name(platforms), "url": dev.get("configuration_url") or ""},
-         "entities": out_ents, "tiles": [], "items": [], "summary": ""}
+    out.sort(key=lambda x: (x["category"] != "", x["entity_id"].split(".")[0] != "sensor", x["name"].lower()))
+    return out
+
+
+def _device(dev: dict, ents: list[dict]) -> dict:
+    platforms = sorted({e.get("platform") or "" for e in ents} - {""})
+    return {"name": dev.get("name_by_user") or dev.get("name") or "", "manufacturer": dev.get("manufacturer") or "",
+            "model": dev.get("model") or "", "sw_version": dev.get("sw_version") or "",
+            "integration": integration_name(platforms), "url": dev.get("configuration_url") or ""}
+
+
+def read(dev: dict, ents: list[dict], states: dict) -> dict:
+    """One linked device (as before 1.93.0)."""
+    return read_many([(dev, ents)], states)
+
+
+def read_many(parts: list, states: dict, missing: list | None = None) -> dict:
+    """The Home Assistant devices linked to one Rollcall device, e.g. the myenergi integration's Zappi, hub and
+    Harvi: each one's entities under its own heading ("devices"), and what Rollcall makes of them all together
+    (tiles, problems, a summary). parts: [(device registry entry, its entity registry entries)], first one the
+    main device. missing: names of linked devices no longer in Home Assistant."""
+    devices = [{"device": _device(dev, ents), "entities": _entities(ents, states)} for dev, ents in parts]
+    every = [e for d in devices for e in d["entities"]]
+    platforms = sorted({e["platform"] or "" for e in every} - {""})
+    d = {"device": dict(devices[0]["device"]) if devices else {"name": "", "manufacturer": "", "model": "", "sw_version": "", "integration": "", "url": ""},
+         "devices": devices, "entities": every, "tiles": [], "items": [], "summary": ""}
+    if len(devices) > 1:
+        d["device"]["integration"] = integration_name(platforms)
     items = d["items"]
-    live = [e for e in out_ents if e["state"] not in UNAVAILABLE]
-    if out_ents and not live:
-        items.append({"level": "crit", "what": "Home Assistant", "detail": f"all {len(out_ents)} entities are unavailable: it has lost touch with the device"})
-    for e in out_ents:  # generic: problem sensors and pending updates
+    for name in missing or []:
+        items.append({"level": "warn", "what": name or "Linked device", "detail": "is no longer in Home Assistant (Edit to link it again)"})
+    many = len(devices) > 1
+    for part in devices:
+        ents = part["entities"]
+        live = [e for e in ents if e["state"] not in UNAVAILABLE]
+        if ents and not live:
+            lost = f"all {len(ents)} entities are unavailable: it has lost touch with the device"
+            if "myenergi" in {e["platform"] for e in ents}:
+                lost += " (the myenergi integration reads myenergi's cloud, so it may be myenergi's servers rather than the device)"
+            items.append({"level": "crit", "what": part["device"]["name"] if many else "Home Assistant", "detail": lost})
+    for e in every:  # generic: problem sensors and pending updates
         dom = e["entity_id"].split(".")[0]
         if dom == "binary_sensor" and e["device_class"] == "problem" and e["state"] == "on":
             items.append({"level": "warn", "what": e["name"], "detail": "reports a problem"})
@@ -65,9 +96,13 @@ def read(dev: dict, ents: list[dict], states: dict) -> dict:
             items.append({"level": "info", "what": "Update available", "detail": f"{e['title'] or e['name']} {e['latest']}".strip()
                           + (f" (running {e['installed']})" if e["installed"] else "")})
     if any(p in platforms for p in PIHOLE):
-        _pihole(d, [e for e in out_ents if e["platform"] in PIHOLE])
-    elif not d["summary"]:
-        d["summary"] = f"{len(live)} of {len(out_ents)} entities available" if out_ents else "no entities"
+        _pihole(d, [e for e in every if e["platform"] in PIHOLE])
+    if "myenergi" in platforms:
+        import myenergi  # noqa: PLC0415  (its own module: Zappi, hub, Harvi)
+        myenergi.profile(d, [(p["device"], [e for e in p["entities"] if e["platform"] == "myenergi"]) for p in devices])
+    if not d["summary"]:
+        live = [e for e in every if e["state"] not in UNAVAILABLE]
+        d["summary"] = f"{len(live)} of {len(every)} entities available" if every else "no entities"
     return d
 
 

@@ -76,6 +76,7 @@ _SPEC: dict[str, tuple] = {
     "agent_memory_crit": ("agents", "int", (0, 100)),
     "agent_cpu_warn": ("agents", "int", (0, 100)),
     "agent_cpu_reports": ("agents", "int", (1, 12)),
+    "messages": ("agents", "bool", None),
     "agent_sql_backup_hours": ("agents", "int", (1, 8760)),
     "agent_exchange_queue_warn": ("agents", "int", (1, 1000000)),
     "agent_time_warn_seconds": ("agents", "int", (5, 3600)),
@@ -158,6 +159,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "agent_memory_warn": ("Memory warning (% used)", "The Resources check goes amber at or above this much memory in use. Each device can have its own limits in its details. 0 turns it off."),
     "agent_memory_crit": ("Memory alert (% used)", "The Resources check goes red, and alerts, at or above this much memory in use (two reports in a row). 0 turns it off."),
     "agent_cpu_warn": ("CPU warning (% busy)", "The Resources check goes amber when the CPU is at or above this in several reports in a row (below). Amber only: busy isn't broken. 0 turns it off."),
+    "messages": ("Messages to users' screens", "Lets admins send a short message to the screens of agent devices they include (Manage → Messages). Off by default."),
     "agent_cpu_reports": ("CPU warning after (reports in a row)", "How many reports in a row the CPU must be that busy. Agents report every 5 minutes, and each reading is a moment, so one spike doesn't count."),
     "agent_failed_logons": ("Failed logons that count as an attack", "This many failed logons in one agent report turns the Security check red."),
     "agent_laps_overdue_days": ("LAPS overdue (days)", "The LAPS check goes red once a password rotation is this many days overdue."),
@@ -187,7 +189,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "agent_keyfile": ("Agent HTTPS private key", "The certificate's private key file in Home Assistant's /ssl folder."),
 }
 
-ACCESS_KEYS = ("admin_only_changes", "editors")      # only real Home Assistant admins may change these
+ACCESS_KEYS = ("admin_only_changes", "editors", "messages")  # only real Home Assistant admins may change these
 AGENT_PORT_KEYS = ("agent_ssl", "agent_certfile", "agent_keyfile")
 MAX_ITEMS, MAX_ITEM_LEN = 500, 200
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")

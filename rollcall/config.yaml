@@ -18,9 +18,11 @@ homeassistant_api: true
 hassio_api: true
 ports:
   8100/tcp: 8100
+  8101/tcp: 8101
   5140/udp: 514
 ports_description:
   8100/tcp: Agent reports (Windows and Linux servers send their health here)
+  8101/tcp: Agent reports over HTTPS (Rollcall's own certificate, once turned on under Agents)
   5140/udp: Syslog (devices send their log messages here)
 map:
   - ssl
@@ -77,6 +79,7 @@ options:
   agent_memory_crit: 95
   agent_cpu_warn: 90
   agent_cpu_reports: 3
+  messages: false
   agent_failed_logons: 20
   agent_laps_overdue_days: 3
   agent_bitlocker_require: workstations
@@ -168,6 +171,7 @@ schema:
   agent_memory_crit: int(0,100)
   agent_cpu_warn: int(0,100)
   agent_cpu_reports: int(1,12)
+  messages: bool
   agent_failed_logons: int(1,100000)
   agent_laps_overdue_days: int(1,60)
   agent_bitlocker_require: list(off|workstations|all)

@@ -152,6 +152,9 @@ configuration:
   agent_cpu_warn:
     name: CPU warning (% busy)
     description: "The Resources check goes amber when the CPU is at or above this in several reports in a row (below). Amber only: busy isn't broken. 0 turns it off."
+  messages:
+    name: Messages to users' screens
+    description: Lets admins send a short message to the screens of agent devices they include (Manage → Messages). Off by default.
   agent_cpu_reports:
     name: CPU warning after (reports in a row)
     description: How many reports in a row the CPU must be that busy. Agents report every 5 minutes, and each reading is a moment, so one spike doesn't count.
@@ -238,4 +241,5 @@ configuration:
     description: Optional. Devices listed here are imported into the dashboard once, then this list is emptied. Adding them in the dashboard is easier.
 network:
   8100/tcp: Agent reports (Windows and Linux servers send their health here)
+  8101/tcp: Agent reports over HTTPS (Rollcall's own certificate, once turned on under Agents)
   5140/udp: Syslog (devices send their log messages here)

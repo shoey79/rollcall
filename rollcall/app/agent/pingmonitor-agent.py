@@ -47,14 +47,19 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-AGENT_VERSION = "1.0.21"
+AGENT_VERSION = "1.0.22"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 # The public half of Rollcall's own signing key, built in when the script is downloaded: agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it.
 UPDATE_KEY = "__PM_UPDATE_KEY__"
+# Rollcall's own HTTPS (1.93.0): its port and key fingerprint, built in when it was on at download (else learnt from
+# Rollcall's signed reply). Reports then go to https://<same address>:<port>, checked against exactly that key.
+TLS_PIN = "__PM_TLS_PIN__"
+TLS_PORT = 0
 IGNORE_CERT = False
 
 PREFIX = os.environ.get("PM_PREFIX", "")          # for testing only
@@ -948,6 +953,8 @@ def build_report(state, conf):
         r["secrets"] = secret_report(state)
     if state.get("integrity"):
         r["agent_integrity"] = state["integrity"]  # its own files' permissions had been changed (put back)
+    if state.get("messages_log"):
+        r["messages_shown"] = state["messages_log"]  # which messages it showed, and to how many sessions
     r["checks"] = {}
     with step("storage health"):
         sh = storage_health()
@@ -1423,7 +1430,7 @@ def check_own_permissions(state):
 # --------------------------------------------------------------------------
 # Talking to the add-on
 # --------------------------------------------------------------------------
-ACTIVE = {"server": None, "preferred": None, "pushed": [], "route": None, "side": None}
+ACTIVE = {"server": None, "preferred": None, "pushed": [], "route": None, "side": None, "pin": None, "tls_port": 0}
 
 
 def route_side(route, ips):
@@ -1454,6 +1461,74 @@ def clean_route(rt):
 
 
 def server_list(server):
+    """The add-on's addresses, each plain HTTP one with its Rollcall HTTPS twin first when that's on (the HTTP one
+    stays as the fallback until Rollcall turns plain HTTP off)."""
+    plain = server_list_plain(server)
+    if not ACTIVE["pin"]:
+        return plain
+    out = []
+    for u in plain:
+        if u.startswith("http://"):
+            host = urllib.parse.urlsplit(u).hostname or ""
+            out.append("https://%s:%d" % ("[%s]" % host if ":" in host else host, ACTIVE["tls_port"]))
+        out.append(u)
+    return list(dict.fromkeys(out))
+
+
+def pinned(url):
+    if not ACTIVE["pin"] or not url.startswith("https://"):
+        return False
+    try:
+        return urllib.parse.urlsplit(url).port == ACTIVE["tls_port"]
+    except ValueError:
+        return False
+
+
+def spki_pin(der):
+    """base64 SHA-256 of a certificate's SubjectPublicKeyInfo, read from its DER (no libraries needed)."""
+    def tlv(b, i):
+        tag, ln = b[i], b[i + 1]
+        i += 2
+        if ln & 0x80:
+            n = ln & 0x7F
+            ln = int.from_bytes(b[i:i + n], "big")
+            i += n
+        return tag, i, i + ln
+    _, i, _ = tlv(der, 0)
+    _, k, _ = tlv(der, i)
+    fields = []
+    while len(fields) < 7:
+        tag, s_, e = tlv(der, k)
+        fields.append((tag, k, e))
+        k = e
+    if fields[0][0] != 0xA0:
+        fields = fields[:6]
+    _, start, end = fields[-1]
+    return base64.b64encode(hashlib.sha256(der[start:end]).digest()).decode()
+
+
+def pinned_request(url, method="GET", data=None, headers=None, timeout=30):
+    """A request to Rollcall's own HTTPS: the server's key is checked before anything (the token included) is sent."""
+    import http.client
+    u = urllib.parse.urlsplit(url)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE  # the key is checked below instead
+    conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=ctx)
+    try:
+        conn.connect()
+        got = spki_pin(conn.sock.getpeercert(binary_form=True) or b"")
+        if got != ACTIVE["pin"]:
+            raise ssl.SSLError("the server at %s doesn't have Rollcall's key (it has %s...), so nothing was sent" % (url, got[:12]))
+        conn.request(method, (u.path or "/") + ("?" + u.query if u.query else ""), body=data, headers=headers or {})
+        r = conn.getresponse()
+        return r.status, r.read()
+    except http.client.HTTPException as err:  # e.g. a garbled answer: try the next address, like any connection error
+        raise OSError("%s: %s" % (type(err).__name__, err)) from None
+    finally:
+        conn.close()
+
+
+def server_list_plain(server):
     """The add-on's addresses: server can list several, e.g. internal then external
     ("http://10.0.0.5:8100,https://rollcall.example.com:8100"). The one that worked last goes first."""
     # Addresses the add-on sent (set under Agents) first; the installed ones stay on the end.
@@ -1504,6 +1579,12 @@ def send_to(srv, path, body, token=None, ignore_cert=False):
                                  headers={"Content-Type": "application/json; charset=utf-8"})
     if token:
         req.add_header("Authorization", "Bearer " + token)
+    if pinned(url):
+        status, raw = pinned_request(url, "POST", req.data, dict(req.header_items()))
+        try:
+            return status, json.loads(raw.decode() or "null")
+        except ValueError:
+            return status, None
     ctx = ssl._create_unverified_context() if (url.startswith("https") and ignore_cert) else None
     try:
         with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
@@ -1552,6 +1633,56 @@ def config_text(body):
     return ("rollcall-agent-config/1\nservers=%s\nroute=%s\n" % (servers, route)).encode("utf-8")
 
 
+MESSAGE_HEADING = "Message from the Rollcall Administrator"  # fixed here: the sender can't change it
+
+
+def message_text(m):
+    """A message as the exact text Rollcall signed (see messages.py in the add-on)."""
+    text = str(m.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
+    return ("rollcall-message/1\nid=%s\nexpires=%d\n%s" % (m.get("id"), int(m.get("expires") or 0), text)).encode("utf-8")
+
+
+def send_to_terminals(text):
+    """Send a message to everyone signed in at a terminal or over SSH (wall). Returns how many sessions there
+    were. Desktop sessions without a terminal open don't see wall."""
+    who = subprocess.run(["who"], capture_output=True, text=True, timeout=10)
+    sessions = len([ln for ln in who.stdout.splitlines() if ln.strip()])
+    if not sessions:
+        return 0
+    wall = shutil.which("wall")
+    if not wall:
+        raise RuntimeError("wall isn't installed (it's in util-linux or bsdutils)")
+    subprocess.run([wall], input="%s\n\n%s\n" % (MESSAGE_HEADING, text), text=True, timeout=15, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return sessions
+
+
+def show_messages(state, messages):
+    """Messages from a Rollcall admin (only on devices an admin included, with the messages option on). Each must be
+    signed with Rollcall's own key, so a reply changed on the way can't put words on anyone's screen. Shown once;
+    with nobody signed in, tried again at each report until it expires. The next report says what happened."""
+    log_ = [x for x in state.get("messages_log") or [] if isinstance(x, dict) and x.get("id")]
+    done = {x["id"] for x in log_ if x.get("sessions", 0) > 0}
+    now = time.time()
+    for m in (messages if isinstance(messages, list) else [])[:3]:
+        mid = str((m or {}).get("id") or "") if isinstance(m, dict) else ""
+        if not mid or mid in done or int(m.get("expires") or 0) <= now:
+            continue
+        if not rollcall_signed(message_text(m), m.get("sig")):
+            log("WARN A message from Rollcall didn't have a good signature, so it wasn't shown")
+            continue
+        entry = {"id": mid, "sessions": 0}
+        try:
+            entry["sessions"] = send_to_terminals(str(m.get("text") or ""))
+        except Exception as err:  # noqa: BLE001
+            entry["error"] = str(err)[:160]
+        log_ = [x for x in log_ if x["id"] != mid] + [entry]
+        log("WARN Couldn't show a message from Rollcall: %s" % entry["error"] if "error" in entry else
+            "Showed a message from Rollcall to %d session(s)" % entry["sessions"] if entry["sessions"] else
+            "A message from Rollcall is waiting: nobody is signed in")
+    state["messages_log"] = log_[-20:]
+
+
 def self_update(offer, token, server, ignore):
     """Install a newer agent the add-on offers (only when an admin has turned updates on).
 
@@ -1570,8 +1701,13 @@ def self_update(offer, token, server, ignore):
         url += "&ignore_cert=1"
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     ctx = ssl._create_unverified_context() if (url.startswith("https") and ignore) else None
-    with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-        raw = resp.read()
+    if pinned(url):
+        status, raw = pinned_request(url, "GET", None, {"Authorization": "Bearer " + token}, 60)
+        if status != 200:
+            raise RuntimeError("HTTP %s" % status)
+    else:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+            raw = resp.read()
     try:
         got = json.loads(raw.decode("utf-8"))
         body, sig = base64.b64decode(got["script"]), got["signature"]
@@ -1611,6 +1747,11 @@ def agent_run(conf, report_only=False):
     ACTIVE["preferred"] = state.get("last_server")
     ACTIVE["pushed"] = [x for x in state.get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))]
     ACTIVE["route"] = clean_route(state.get("route"))
+    tls = state.get("tls") or {}
+    if tls.get("pin") and int(tls.get("port") or 0) > 0 and not tls.get("off"):
+        ACTIVE["pin"], ACTIVE["tls_port"] = tls["pin"], int(tls["port"])
+    elif not tls.get("off") and not TLS_PIN.startswith("__PM_") and TLS_PORT > 0:
+        ACTIVE["pin"], ACTIVE["tls_port"] = TLS_PIN, TLS_PORT
     if ACTIVE["route"]:
         ACTIVE["side"] = route_side(ACTIVE["route"], report.get("ips"))
         if ACTIVE["side"] != state.get("route_side"):
@@ -1658,6 +1799,22 @@ def agent_run(conf, report_only=False):
     signed = bool(body) and rollcall_signed(config_text(body), body.get("config_sig"))
     if body and not signed and (body.get("servers") or body.get("route")):
         log("WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has")
+    # Rollcall's own HTTPS: the port and key, signed with the update key (so not changeable on the way)
+    tls = (body or {}).get("tls")
+    if isinstance(tls, dict):
+        tp, tk = int(tls.get("port") or 0), str(tls.get("pin") or "")
+        if tp > 0 and tk and rollcall_signed(("rollcall-agent-tls/1\nport=%d\npin=%s\n" % (tp, tk)).encode(), body.get("tls_sig")):
+            old = state.get("tls") or {}
+            if old.get("pin") != tk or int(old.get("port") or 0) != tp or old.get("off"):
+                log("Rollcall's HTTPS is on: reports go to port %d from the next run, to Rollcall's own key only" % tp)
+            state["tls"] = {"port": tp, "pin": tk}
+        else:
+            log("WARN Rollcall's HTTPS details didn't have a good signature; ignored")
+    elif signed and (state.get("tls") or {}).get("pin") and not state["tls"].get("off"):
+        log("Rollcall's HTTPS was turned off; reports go over the address this agent has")
+        state["tls"] = {"off": True}
+    elif signed and not state.get("tls") and not TLS_PIN.startswith("__PM_"):
+        state["tls"] = {"off": True}
     pushed = [str(x) for x in (body or {}).get("servers") or [] if re.match(r"^https?://[^\s,;]+$", str(x))][:4] if signed else []
     if pushed:
         if pushed != state.get("servers"):
@@ -1672,6 +1829,12 @@ def agent_run(conf, report_only=False):
     log("Report sent to %s: %d role(s), %d error(s); run took %.1f s%s" % (ACTIVE["server"],
         len(report["roles"]), len(report["errors"]), report["run_ms"] / 1000,
         "; slowest: %s %.1f s" % (slow[0], slow[1] / 1000) if slow else ""))
+    if (body or {}).get("messages"):
+        try:
+            show_messages(state, body["messages"])
+            save_json(STATE_PATH, state)
+        except Exception as err:  # noqa: BLE001
+            log("WARN Messages: %s" % err)
     if (body or {}).get("agent_update"):
         try:
             self_update(body["agent_update"], state["token"], server, ignore)

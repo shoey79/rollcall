@@ -27,11 +27,11 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding devices, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, linked Home Assistant devices, upstream devices
+4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
-8. [Agent addresses and updates](#agent-addresses-and-updates)
+8. [Agent addresses and updates](#agent-addresses-and-updates): HTTPS, updates, messages to users' screens
 9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
 10. [Administration](#administration): settings, who can change things, export and import, security
 11. [Reference](#reference): every option, ports, sensors and events, files
@@ -613,7 +613,9 @@ A device can have an **Upstream device** (Edit, under Other addresses): what it'
 
 ### Linked Home Assistant devices
 
-If Home Assistant already has an integration for a device, link its Home Assistant device and Rollcall reads all of the integration's entities, with no extra passwords. In **Edit → Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. To remove it, choose **Unlink**.
+If Home Assistant already has an integration for a device, link its Home Assistant device and Rollcall reads all of the integration's entities, with no extra passwords. In **Edit**, tick **Link a Home Assistant device**, search (e.g. `pi-hole`) and choose **Link**. To remove it, choose **Unlink**.
+
+Some integrations split one thing into several Home Assistant devices, such as myenergi's Zappi, hub and Harvi. Link each of them to the same Rollcall device: the first is the main one, and the others' readings show alongside it, each under its own heading, with tiles and alerts drawn from all of them.
 
 ![A Pi-hole linked to its Home Assistant device, with its readings and controls](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/ha.png)
 
@@ -627,6 +629,14 @@ This adds a **Home Assistant** check and a **Home Assistant** tab in Details, in
   - ad blocking turned off is amber;
   - Pi-hole's own diagnostic messages and updates are noted;
   - the chip reads e.g. "Pi-hole: blocking on, 85,710 queries today, 21.4% blocked".
+
+- **myenergi** (the `myenergi` integration from HACS): link the Zappi, and the hub and any Harvi too, to one device:
+  - tiles for the Zappi's status and plug, its charge mode, charging power now (from the Zappi's own clamp), energy added this session and charged today (with the green part), and locked or unlocked;
+  - from the hub: grid now (importing or exporting), what the home is using, the supply's voltage and frequency, and today's imports, exports and generation;
+  - **generation** is shown as myenergi measures it, and never alerts: a "generation" clamp can also see a home battery discharging, so it isn't necessarily solar. With the hub linked its total is used; without it, the clamps on the Zappi and Harvi are added up;
+  - a Zappi fault (plug status *Fault/Restart*) is **red** and alerts; a firmware update, or the supply outside the UK's limits (216–253 V, 49.5–50.5 Hz), is amber;
+  - the integration reads myenergi's cloud, so if Home Assistant loses touch, Rollcall says it may be myenergi's servers rather than the charger.
+  Readings are found by what they measure, so renaming the devices in Home Assistant doesn't matter.
 
 Keep the **Pi-hole** preset ticked as well. It checks DNS and the admin page directly, so you still hear about a dead Pi-hole even if Home Assistant is down.
 
@@ -1059,12 +1069,12 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 
 - **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\PingMonitor`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then says who changed it and when it was put back, e.g. *Its folder's permissions were changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov* (Windows doesn't record who changes permissions, so the "who" is whoever took ownership to change them; otherwise it names the accounts given access). The full list is under **What the agent found** in Details. It's amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
 - **The password scan never sends passwords**, only where each one is (see [Passwords left in files](#passwords-left-in-files)).
-- **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, signed with a key only Rollcall has (see [Updating agents automatically](#updating-agents-automatically)).
-- **Limit who can reach the agent port.** Allow TCP 8100 at your firewall only from the networks your agents report from.
+- **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, signed with a key only Rollcall has (see [Updating agents automatically](#updating-agents-automatically)), and messages to users' screens if you turn them on (see [Messages to users' screens](#messages-to-users-screens)).
+- **Limit who can reach the agent ports.** Allow TCP 8100 (and 8101 with HTTPS on) at your firewall only from the networks your agents report from.
 - **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
 - **Revoke** stops a server's reports. Deleting a device from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
-- **Reports go over HTTP by default**, so they're readable on your network. To use HTTPS, turn on **Agent port uses HTTPS** (`agent_ssl`) under **Manage → Settings → Agent port**, with a certificate in Home Assistant's `/ssl` folder (`agent_certfile`, `agent_keyfile`), and download the script with an `https://` address. Tick **Accept a self-signed certificate** if yours is self-signed.
+- **Reports can go over HTTPS with Rollcall's own certificate** (see [HTTPS for agents](#https-for-agents)). Without it they go over plain HTTP, readable on your network. Using your own certificate on the agent port instead (`agent_ssl`, with `agent_certfile` and `agent_keyfile` in Home Assistant's `/ssl` folder) still works; **Accept a self-signed certificate** then makes agents accept any certificate, so it keeps reports private but doesn't stop something else standing in for Rollcall. Rollcall's own HTTPS does.
 
 ---
 
@@ -1190,6 +1200,17 @@ Under **Agents → Where the agents report to** there are two addresses: **Insid
 
 For the outside address to work, forward its port on your firewall to Home Assistant's agent port, or publish it through a reverse proxy, and use HTTPS (`agent_ssl`). Otherwise reports and each server's token cross the internet unencrypted. Servers still have to be approved, and every report is checked against that server's own token.
 
+### HTTPS for agents
+
+Rollcall can secure agent reports itself, with nothing to buy or install. Under **Agents → Where the agents report to → HTTPS**, choose **Turn on HTTPS** (admins only). New installs start with it on; existing ones are offered it on the dashboard.
+
+- **Rollcall makes its own key and certificate** (a P-256 key, kept in its data folder and in exports) and listens for agents over HTTPS on **port 8101**, beside plain HTTP on 8100. Nothing goes into Windows' certificate store.
+- **Agents trust exactly that key** ("pinning"), not names or certificate authorities, so a certificate for the right name from anyone else is refused, before anything, the token included, is sent. That's stronger than **Accept a self-signed certificate**, which accepts any certificate.
+- **Agents move across by themselves.** At its next report each agent gets the port and the key's fingerprint, signed with the key that signs updates (so even that hand-over can't be changed on the way), and from the run after it reports to `https://<the same address>:8101`. The address it had stays as the fallback. Agents downloaded while HTTPS is on have it built in and use it from their first report. Needs Windows agent 1.0.54, Linux agent 1.0.22 or router agent 1.0.3.
+- **Routers** can't check a key or a signature: the router agent is given Rollcall's certificate and trusts only that (`uclient-fetch --ca-certificate`, or curl), so the certificate lists every address agents use; Rollcall adds new ones as agents report from them. It's kept on the router's flash, written only when it changes. A router without TLS support for uclient-fetch (the `libustream-*` package) stays on HTTP.
+- **Plain HTTP stays on** until you choose **Turn off plain HTTP**; the HTTPS section lists any agents still using it first. Leave it on if a reverse proxy forwards to port 8100 over plain HTTP: agents that reach Rollcall through one with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are.
+- **Port 8101** must be open under the add-on's **Configuration → Network** (it is by default). If it's closed, the HTTPS section says so and agents stay on HTTP.
+
 ### Devices that report over the internet
 
 A device that reports through the outside address usually can't be pinged from Home Assistant. **Tell it's up by** (in Edit) handles this:
@@ -1220,6 +1241,20 @@ An agent only installs an update if all of these pass; otherwise it keeps its cu
 The addresses Rollcall tells agents to report to (under **Agents → Where the agents report to**) are signed the same way, so a changed reply can't send an agent somewhere else. An agent that gets addresses without a good signature keeps the ones it has, and says so in its log. A failed check never stops an agent reporting.
 
 The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-agent.py.old`). Only installed agents update themselves; a copy run by hand from a share doesn't. A Group Policy startup script pointing at an older copy won't undo an update, because `-Install` never replaces a newer installed copy with an older one.
+
+### Messages to users' screens
+
+Admins can put a short message on the screens of agent devices, e.g. *The file server restarts at 6pm today: please save your work.* It's **off by default**: turn on **Messages to users' screens** (`messages`) under **Manage → Settings → Agents** (admins only). Off by default because anyone who could get into Home Assistant could otherwise put a message on your users' screens.
+
+- **Manage → Messages** (admins only). Under **Who can receive messages**, choose **Choose…** and tick the devices that may get them; only those can, whoever sends.
+- Write the message (plain text, up to 500 characters and 12 lines), choose who it goes to (every included device, a tab, or one device) and how long it stays (1 hour to 3 days), and **Send**.
+- It's shown at each device's next report, within about 5 minutes, under the heading **Message from the Rollcall Administrator**, which the sender can't change. Each message is signed with Rollcall's own key, so a reply changed on the way can't put words on anyone's screen.
+- **Windows** shows it as a message box in every signed-in session, console and Remote Desktop alike, as `msg *` does. **Linux** sends it to terminals and SSH sessions (`wall`), so a desktop user without a terminal open won't see it. Routers can't receive messages.
+- Each device shows it once. With nobody signed in, it waits and shows it at a later report, until the message stops being shown.
+- **Sent** lists each message with who sent it and, for each device, whether it was shown and to how many sessions. **Withdraw** stops devices that haven't shown it yet. Sending, withdrawing and changing who can receive are in Rollcall's log.
+- Needs Windows agent 1.0.54 or Linux agent 1.0.22.
+
+For a message every user sees when they sign in, Group Policy's *Interactive logon: Message text for users attempting to log on* is the better tool.
 
 ---
 
@@ -1430,6 +1465,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_memory_crit` | 95 | Resources: red, and an alert, at this much memory used, % (two reports in a row; 0 turns it off) |
 | `agent_cpu_warn` | 90 | Resources: amber when the CPU is this busy, %, in each of the last `agent_cpu_reports` reports (0 turns it off) |
 | `agent_cpu_reports` | 3 | How many reports in a row (5 minutes apart) the CPU must be that busy |
+| `messages` | false | Lets admins send short messages to the screens of agent devices they include (Manage → Messages) |
 | `agent_failed_logons` | 20 | Failed logons in one report that count as an attack |
 | `agent_laps_overdue_days` | 3 | LAPS goes red once rotation is this many days overdue |
 | `agent_bitlocker_require` | workstations | Which physical devices with a TPM must use BitLocker: `workstations` (Windows 10/11), `all` or `off`. Physical devices that use it are always checked; virtual machines never are |
@@ -1465,6 +1501,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | Port | Used for | Change it under |
 |---|---|---|
 | TCP 8100 | Agent reports | Configuration → Network |
+| TCP 8101 | Agent reports over HTTPS (Rollcall's own certificate) | Configuration → Network |
 | UDP 514 | Syslog | Configuration → Network |
 
 The dashboard itself uses Home Assistant's ingress, with no port of its own.

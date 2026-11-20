@@ -68,10 +68,14 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.53'
+$AgentVersion = '1.0.54'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
+# Rollcall's own HTTPS (1.93.0): the port and its key's fingerprint, built in when it was on at download (else learnt
+# from Rollcall's signed reply). Reports then go to https://<same address>:<port>, checked against exactly that key.
+$TlsPin = '__PM_TLS_PIN__'
+$TlsPort = 0
 $TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
@@ -172,6 +176,9 @@ function Read-State {
             }
             if ($raw.integrity -and $raw.integrity.at) { $state.integrity = @{ at = [string]$raw.integrity.at; first = [bool]$raw.integrity.first; what = @($raw.integrity.what | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
             if ($raw.perm_checked) { $state.perm_checked = $true }
+            if ($raw.tls) { $state.tls = @{ port = [int]$raw.tls.port; pin = [string]$raw.tls.pin; off = [bool]$raw.tls.off } }
+            if ($raw.messages_log) { $state.messages_log = @($raw.messages_log | Where-Object { $_ -and $_.id } | Select-Object -Last 20 | ForEach-Object {
+                    $e = [ordered]@{ id = [string]$_.id; sessions = [int]$_.sessions }; if ($_.error) { $e.error = [string]$_.error }; $e }) }
             if ($raw.reboot_pkgs) { $state.reboot_pkgs = @{ boot = [string]$raw.reboot_pkgs.boot; checked = $raw.reboot_pkgs.checked; list = @($raw.reboot_pkgs.list | Where-Object { $_ } | ForEach-Object { [string]$_ }) } }
         } catch {
             Write-AgentLog "WARN state file unreadable, starting fresh: $($_.Exception.Message)"
@@ -2749,6 +2756,7 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     } catch { Add-CollectorError 'installed software' $_ }
     try { $report.secrets = Measure-Step 'password scan' { Get-SecretReport $State } } catch { Add-CollectorError 'password scan' $_ }
     if ($State.integrity) { $report.agent_integrity = $State.integrity }  # its folder's permissions had been changed (put back)
+    if ($State.messages_log) { $report.messages_shown = @($State.messages_log) }  # which messages it showed, and to how many sessions
     try { $report.services = Measure-Step 'services' { Get-ServiceReport $allServices $discovery } } catch { Add-CollectorError 'services' $_ }
     $report.events = Measure-Step 'event logs' { Get-EventReport $State $since }
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
@@ -2863,6 +2871,90 @@ function Get-RouteSide($Route) {
 }
 
 function Get-ServerList {
+    # With Rollcall's own HTTPS on, each plain HTTP address gets its HTTPS twin (same address, the HTTPS port)
+    # tried first; the HTTP one stays as the fallback until Rollcall turns plain HTTP off.
+    $plain = @(Get-ServerListPlain)
+    if (-not $script:TlsPinNow) { return $plain }
+    $out = New-Object Collections.ArrayList
+    foreach ($u in $plain) {
+        if ($u -like 'http://*') { try { $h = ([uri]$u).Host; [void]$out.Add("https://${h}:$($script:TlsPortNow)") } catch { } }
+        [void]$out.Add($u)
+    }
+    return @($out | Select-Object -Unique)
+}
+
+function Test-PinnedUrl([string]$Url) {
+    if (-not $script:TlsPinNow -or $Url -notlike 'https://*') { return $false }
+    try { return ([uri]$Url).Port -eq $script:TlsPortNow } catch { return $false }
+}
+
+function Initialize-PinCheck {
+    if ('Rollcall.Pin' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+namespace Rollcall {
+    public static class Pin {
+        // A P-256 key's SubjectPublicKeyInfo: this header, then the 65-byte point (as Rollcall hashes it)
+        static readonly byte[] Header = { 0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00 };
+        static readonly byte[] P256 = { 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07 };
+        public static string Expected;
+        public static string Seen;
+        public static string Of(X509Certificate cert) {
+            var c = new X509Certificate2(cert);
+            byte[] key = c.PublicKey.EncodedKeyValue.RawData, prm = c.PublicKey.EncodedParameters.RawData;
+            if (c.PublicKey.Oid.Value != "1.2.840.10045.2.1" || key.Length != 65 || prm.Length != P256.Length) return "";
+            for (int i = 0; i < P256.Length; i++) if (prm[i] != P256[i]) return "";
+            var all = new byte[Header.Length + key.Length];
+            Buffer.BlockCopy(Header, 0, all, 0, Header.Length);
+            Buffer.BlockCopy(key, 0, all, Header.Length, key.Length);
+            using (var sha = SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(all));
+        }
+        public static bool Check(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) {
+            // Exactly Rollcall's key; names and certificate authorities don't come into it
+            Seen = cert == null ? "" : Of(cert);
+            return !string.IsNullOrEmpty(Expected) && Seen == Expected;
+        }
+        public static readonly RemoteCertificateValidationCallback Callback = Check;
+    }
+}
+'@
+}
+
+function Invoke-PinnedRequest([string]$Uri, [string]$Method, [byte[]]$Body, [string]$Token, [int]$TimeoutSec = 30) {
+    # A request to Rollcall's own HTTPS, refused unless the server has exactly the key Rollcall told this agent about
+    Initialize-PinCheck
+    [Rollcall.Pin]::Expected = $script:TlsPinNow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $req = [Net.HttpWebRequest][Net.WebRequest]::Create($Uri)
+    $req.Method = $Method; $req.Timeout = $TimeoutSec * 1000; $req.ReadWriteTimeout = $TimeoutSec * 1000
+    $req.ServerCertificateValidationCallback = [Rollcall.Pin]::Callback
+    try { $req.ServicePoint.Expect100Continue = $false } catch { }
+    if ($Token) { $req.Headers['Authorization'] = "Bearer $Token" }
+    $resp = $null
+    try {
+        if ($Body) {
+            $req.ContentType = 'application/json; charset=utf-8'; $req.ContentLength = $Body.Length
+            $s = $req.GetRequestStream(); try { $s.Write($Body, 0, $Body.Length) } finally { $s.Close() }
+        }
+        $resp = $req.GetResponse()
+    } catch {
+        $e = $_.Exception
+        while ($e -and -not ($e -is [Net.WebException])) { $e = $e.InnerException }
+        if ($e -and $e.Response) { $resp = $e.Response }
+        elseif ([Rollcall.Pin]::Seen -and [Rollcall.Pin]::Seen -ne [Rollcall.Pin]::Expected) { throw "the server at $Uri doesn't have Rollcall's key (it has $([Rollcall.Pin]::Seen.Substring(0, [Math]::Min(12, [Rollcall.Pin]::Seen.Length)))...), so nothing was sent" }
+        else { throw }
+    }
+    try {
+        $ms = New-Object IO.MemoryStream
+        $resp.GetResponseStream().CopyTo($ms)
+        return @{ status = [int]$resp.StatusCode; bytes = $ms.ToArray() }
+    } finally { $resp.Close() }
+}
+
+function Get-ServerListPlain {
     # -Server can list several addresses, e.g. internal then external:
     # 'http://10.0.0.5:8100,https://rollcall.example.com:8100'. The one that worked last is tried first.
     # Addresses the add-on sent (set under Agents) come first; the ones this copy was installed with
@@ -2941,6 +3033,12 @@ function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
         ContentType = 'application/json; charset=utf-8'; TimeoutSec = 30; UseBasicParsing = $true
     }
     if ($Token) { $params.Headers = @{ Authorization = "Bearer $Token" } }
+    if (Test-PinnedUrl $uri) {
+        $r = Invoke-PinnedRequest $uri 'POST' $params.Body $Token
+        $content = $null
+        if ($r.bytes.Length) { try { $content = [Text.Encoding]::UTF8.GetString($r.bytes) | ConvertFrom-Json } catch { } }
+        return @{ status = $r.status; body = $content }
+    }
     # Windows PowerShell 5.1 otherwise asks permission before sending (Expect: 100-continue): an extra
     # round trip, and if Rollcall is slow to answer that, the request can be abandoned half-way.
     [Net.ServicePointManager]::Expect100Continue = $false
@@ -3011,6 +3109,69 @@ function Get-ConfigText($Body) {
     return [Text.Encoding]::UTF8.GetBytes("rollcall-agent-config/1`nservers=$servers`nroute=$route`n")
 }
 
+$MessageHeading = 'Message from the Rollcall Administrator'  # fixed here: the sender can't change it
+
+function Get-MessageText($M) {
+    # A message as the exact text Rollcall signed (see messages.py in the add-on)
+    $text = ([string]$M.text) -replace "`r`n", "`n" -replace "`r", "`n"
+    return [Text.Encoding]::UTF8.GetBytes("rollcall-message/1`nid=$([string]$M.id)`nexpires=$([long]$M.expires)`n$text")
+}
+
+function Send-SessionMessage([string]$Title, [string]$Text) {
+    # Show a message box in every signed-in session (console and Remote Desktop), as 'msg *' does, without
+    # waiting for anyone to choose OK. Returns how many sessions it went to.
+    if (-not ('Rollcall.Wts' -as [type])) {
+        Add-Type -Namespace Rollcall -Name Wts -MemberDefinition @'
+[DllImport("wtsapi32.dll", SetLastError = true)]
+public static extern bool WTSEnumerateSessions(IntPtr hServer, int reserved, int version, out IntPtr sessions, out int count);
+[DllImport("wtsapi32.dll")]
+public static extern void WTSFreeMemory(IntPtr memory);
+[DllImport("wtsapi32.dll", EntryPoint = "WTSSendMessageW", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool WTSSendMessage(IntPtr hServer, int sessionId, string title, int titleBytes, string message, int messageBytes, int style, int timeout, out int response, bool wait);
+[StructLayout(LayoutKind.Sequential)]
+public struct SessionInfo { public int SessionId; public IntPtr WinStationName; public int State; }
+'@
+    }
+    $list = [IntPtr]::Zero; $count = 0
+    if (-not [Rollcall.Wts]::WTSEnumerateSessions([IntPtr]::Zero, 0, 1, [ref]$list, [ref]$count)) { throw "couldn't list the signed-in sessions" }
+    $sent = 0
+    try {
+        $size = [Runtime.InteropServices.Marshal]::SizeOf([type][Rollcall.Wts+SessionInfo])
+        for ($i = 0; $i -lt $count; $i++) {
+            $info = [Runtime.InteropServices.Marshal]::PtrToStructure([IntPtr]($list.ToInt64() + $i * $size), [type][Rollcall.Wts+SessionInfo])
+            if ($info.SessionId -eq 0 -or $info.State -ne 0) { continue }  # session 0 is services; 0 = WTSActive (someone signed in)
+            $resp = 0
+            # MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST; no timeout; don't wait
+            if ([Rollcall.Wts]::WTSSendMessage([IntPtr]::Zero, $info.SessionId, $Title, $Title.Length * 2, $Text, $Text.Length * 2, 0x00050040, 0, [ref]$resp, $false)) { $sent++ }
+        }
+    } finally { [Rollcall.Wts]::WTSFreeMemory($list) }
+    return $sent
+}
+
+function Show-RollcallMessages($State, $Messages) {
+    # Messages from a Rollcall admin (only on devices an admin included, and only with the messages option on).
+    # Each must be signed with Rollcall's own key, so a reply changed on the way can't put words on anyone's
+    # screen. Shown once; with nobody signed in it's tried again at each report until it expires. What happened
+    # goes in the next report (messages_shown).
+    $log = [Collections.ArrayList]@(@($State.messages_log) | Where-Object { $_ -and $_.id })
+    $done = @($log | Where-Object { $_.sessions -gt 0 } | ForEach-Object { [string]$_.id })
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    foreach ($m in @($Messages | Select-Object -First 3)) {
+        $id = [string]$m.id
+        if (-not $id -or $done -contains $id -or [long]$m.expires -le $now) { continue }
+        if (-not (Test-RollcallSignature (Get-MessageText $m) ([string]$m.sig))) { Write-AgentLog "WARN A message from Rollcall didn't have a good signature, so it wasn't shown"; continue }
+        $text = ([string]$m.text) -replace "`r`n", "`n" -replace "`n", "`r`n"
+        $n = 0; $err = $null
+        try { $n = Send-SessionMessage $MessageHeading $text } catch { $err = $_.Exception.Message }
+        $entry = [ordered]@{ id = $id; sessions = [int]$n }
+        if ($err) { $entry.error = $err }
+        foreach ($old in @($log | Where-Object { [string]$_.id -eq $id })) { $log.Remove($old) }
+        [void]$log.Add($entry)
+        Write-AgentLog $(if ($err) { "WARN Couldn't show a message from Rollcall: $err" } elseif ($n) { "Showed a message from Rollcall in $n session(s)" } else { "A message from Rollcall is waiting: nobody is signed in" })
+    }
+    $State.messages_log = @($log | Select-Object -Last 20)
+}
+
 function Invoke-AgentUpdate($State, $Offer) {
     # The add-on offers a newer agent only when an admin has turned updates on. The download is checked before
     # anything changes: it must be signed with Rollcall's own key (the public half is built into this script, so
@@ -3029,9 +3190,10 @@ function Invoke-AgentUpdate($State, $Offer) {
         if ($PSVersionTable.PSVersion.Major -ge 6) { $params.SkipCertificateCheck = $true }
         else { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
     }
-    $r = Invoke-WebRequest @params
+    $raw = if (Test-PinnedUrl $uri) { $p = Invoke-PinnedRequest $uri 'GET' $null $State.token 60; if ($p.status -ne 200) { throw "HTTP $($p.status)" }; $p.bytes }
+           else { (Invoke-WebRequest @params).RawContentStream.ToArray() }
     $got = $null
-    try { $got = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()) | ConvertFrom-Json } catch { }
+    try { $got = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json } catch { }
     if (-not $got -or -not $got.script -or -not $got.signature) { throw 'The update came without a signature, so it was not installed' }
     $bytes = [Convert]::FromBase64String([string]$got.script)
     if (-not (Test-RollcallSignature $bytes ([string]$got.signature))) { throw 'The update failed its signature check, so it was not installed' }
@@ -3114,6 +3276,9 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     $script:PreferredServer = [string]$state.last_server
     $script:PushedServers = @($state.servers | Where-Object { $_ -match '^https?://[^\s,;]+$' })
+    $script:TlsPinNow = $null; $script:TlsPortNow = 0
+    if ($state.tls -and -not $state.tls.off -and $state.tls.pin -and $state.tls.port -gt 0) { $script:TlsPinNow = [string]$state.tls.pin; $script:TlsPortNow = [int]$state.tls.port }
+    elseif (-not ($state.tls -and $state.tls.off) -and $TlsPin -notlike '__PM_*' -and $TlsPort -gt 0) { $script:TlsPinNow = $TlsPin; $script:TlsPortNow = $TlsPort }
     $script:Route = $null
     if ($state.route -and $state.route.inside -match '^https?://[^\s,;]+$' -and $state.route.outside -match '^https?://[^\s,;]+$' -and @($state.route.networks).Count) {
         $script:Route = $state.route
@@ -3169,6 +3334,17 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     # Without one, it carries on with the addresses it has.
     $signed = $res.body -and $res.body.config_sig -and (Test-RollcallSignature (Get-ConfigText $res.body) ([string]$res.body.config_sig))
     if ($res.body -and -not $signed -and ($res.body.servers -or $res.body.route)) { Write-AgentLog "WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has" }
+    # Rollcall's own HTTPS: the port and key, signed with the update key (so not changeable on the way)
+    if ($res.body -and $res.body.tls) {
+        $tp = [int]$res.body.tls.port; $tk = [string]$res.body.tls.pin
+        if ($tp -gt 0 -and $tk -and (Test-RollcallSignature ([Text.Encoding]::UTF8.GetBytes("rollcall-agent-tls/1`nport=$tp`npin=$tk`n")) ([string]$res.body.tls_sig))) {
+            if (-not $state.tls -or $state.tls.pin -ne $tk -or [int]$state.tls.port -ne $tp -or $state.tls.off) { Write-AgentLog "Rollcall's HTTPS is on: reports go to port $tp from the next run, to Rollcall's own key only" }
+            $state.tls = @{ port = $tp; pin = $tk; off = $false }
+        } else { Write-AgentLog "WARN Rollcall's HTTPS details didn't have a good signature; ignored" }
+    } elseif ($signed -and $state.tls -and -not $state.tls.off) {
+        Write-AgentLog "Rollcall's HTTPS was turned off; reports go over the address this agent has"
+        $state.tls = @{ port = 0; pin = ''; off = $true }
+    } elseif ($signed -and -not $state.tls -and $TlsPin -notlike '__PM_*') { $state.tls = @{ port = 0; pin = ''; off = $true } }
     if ($signed -and $res.body.servers) {
         $pushed = @($res.body.servers | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^https?://[^\s,;]+$' } | Select-Object -First 4)
         if ($pushed.Count -and (($pushed -join ',') -ne (@($state.servers) -join ','))) {
@@ -3188,6 +3364,9 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $took = if ($report.run_ms) { '{0:N1} s' -f ($report.run_ms / 1000) } else { '?' }
     Write-AgentLog ("Report sent to {0}: {1} role(s), {2} error(s); run took {3}{4}" -f $script:ActiveServer, @($report.roles).Count, @($report.errors).Count, $took,
         $(if ($slow) { '; slowest: {0} {1:N1} s' -f $slow.Key, ($slow.Value / 1000) } else { '' }))
+    if ($res.body -and $res.body.messages) {
+        try { Show-RollcallMessages $state @($res.body.messages); Save-State $state } catch { Write-AgentLog "WARN Messages: $($_.Exception.Message)" }
+    }
     if ($res.body -and $res.body.agent_update) {
         try { Invoke-AgentUpdate $state $res.body.agent_update } catch { Write-AgentLog "WARN Agent update: $($_.Exception.Message)" }
     }

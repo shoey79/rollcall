@@ -128,6 +128,15 @@ legend{font-size:12px;color:var(--muted);font-weight:600;padding:0;margin-bottom
 .tip{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;padding:0;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);font:italic 700 10.5px/1 Georgia,serif;cursor:help;vertical-align:1px;text-transform:none;letter-spacing:0}
 .tip:hover,.tip:focus-visible,.tip.on{border-color:var(--accent);color:var(--accent);outline:none}
 .tiptext{display:none}
+.tlsprompt{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:8px 0;padding:10px 12px;border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--accent) 8%,var(--card));font-size:13.5px}
+.msgcompose .msgpreview{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--bg)}
+.msgcompose .msgpreview b{display:block;margin-bottom:6px}
+.msgcompose textarea{width:100%;box-sizing:border-box;font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--text);resize:vertical}
+details.msgsent{border-bottom:1px solid color-mix(in srgb,var(--line) 65%,transparent);padding:6px 0}
+details.msgsent summary{cursor:pointer;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+details.msgsent .msgwhen{color:var(--muted);font-size:12.5px;min-width:96px}
+details.msgsent .msgtext{flex:1;min-width:160px}
+pre.msgfull{white-space:pre-wrap;font:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;margin:6px 0}
 .menu svg.mi{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 .tipbox{position:fixed;z-index:1000;max-width:min(360px,calc(100vw - 16px));padding:10px 12px;border-radius:8px;background:var(--card);color:var(--text);border:1px solid color-mix(in srgb,var(--muted) 50%,var(--line));box-shadow:0 8px 24px rgba(0,0,0,.35);font:400 12.5px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;text-transform:none;letter-spacing:0;pointer-events:none}
 .tipbox code{font-size:11.5px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:0 4px}
@@ -550,6 +559,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M12.6 8.0L14.2 8.0 M11.3 11.3L12.4 12.4 M8.0 12.6L8.0 14.2 M4.7 11.3L3.6 12.4 M3.4 8.0L1.8 8.0 M4.7 4.7L3.6 3.6 M8.0 3.4L8.0 1.8 M11.3 4.7L12.4 3.6"/></svg>Settings</button>
         <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
         <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Log</button>
+        <button type="button" id="msgBtn" role="menuitem" hidden title="Send a short message to the screens of agent devices (admins only)"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Messages</button>
         <hr>
         <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.8 2.4v3.4h3.4"/></svg>Reset all uptime…</button>
       </div>
@@ -557,6 +567,8 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   </div>
   <nav class="tabs" id="tabs" aria-label="Device lists"></nav>
   <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
+  <div class="tlsprompt" id="tlsPrompt" hidden><span>🔒 Agents report to Rollcall over plain HTTP. <b>Turn on HTTPS</b>: Rollcall makes its own certificate and agents move across by themselves.</span>
+    <span><button type="button" class="mini primary" id="tlsGo">Set it up</button> <button type="button" class="mini" id="tlsLater">Not now</button></span></div>
   <section id="home" aria-label="Overview"><div class="tiles"><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div></div><div class="panel"><h2>Alerts</h2><div class="allok">Loading…</div></div></section>
   <div class="wrap">
     <table>
@@ -579,12 +591,19 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 
 <dialog id="agDlg" class="wide">
   <form method="dialog">
-    <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents only send reports; they never take instructions.</div></div>
+    <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents send reports; they never take instructions, apart from updates and messages that you turn on.</div></div>
     <div class="dlg-body" id="agBody"></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
   </form>
 </dialog>
 
+<dialog id="msgDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Messages</h2><div class="sub">A short message on the screens of agent devices you include, under the heading <b>Message from the Rollcall Administrator</b>. It's shown at each device's next report, within about 5 minutes.</div></div>
+    <div class="dlg-body" id="msgBody"><p class="empty-note">Loading…</p></div>
+    <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
 <dialog id="swDlg" class="wide">
   <form method="dialog">
     <div class="dlg-head"><h2>Find software</h2><div class="sub">Which devices with an agent have a program installed, and which version. Searches program names and publishers.</div></div>
@@ -2249,6 +2268,9 @@ function applyStatus(fresh) {
     const mb = document.getElementById("menuBadge");
     mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
+    document.getElementById("msgBtn").hidden = !data.can_admin;
+    let later = 0; try { later = +localStorage.getItem("pm_tls_later") || 0; } catch (e) { }
+    document.getElementById("tlsPrompt").hidden = !(data.tls_prompt && data.can_admin && Date.now() - later > 7 * 86400000);
     const vo = document.querySelector(".viewonly");
     if (vo) { vo.textContent = data.edit_blocked ? "View only for now" : "View only";
       vo.title = data.edit_blocked ? "Rollcall can't read Home Assistant's user list just now, so it can't tell who's an admin, and changes are off until it can. To make changes meanwhile, add your Home Assistant username to 'editors' in the add-on's Configuration tab." : "Only Home Assistant admins can add, edit, pause or reset"; }
@@ -3575,6 +3597,11 @@ async function openOverview(key) {
 }
 // A linked Home Assistant device's entities (diagnostic ones folded away) and its update notes.
 function haEntities(hd, ha, now) {
+  // One section per linked device (several since 1.93.0); "information" notes go with the first
+  const parts = hd.devices && hd.devices.length ? hd.devices : [{device: hd.device, entities: hd.entities}];
+  return parts.map((p, i) => haDeviceSection({...p, items: i === 0 ? hd.items : [], read: hd.read}, ha, now)).join("");
+}
+function haDeviceSection(hd, ha, now) {
   const info = (hd.items || []).filter(i => i.level === "info");
   const isCtl = e => /^(button|switch)\./.test(e.entity_id);
   const ctl = (hd.entities || []).filter(isCtl), ents = (hd.entities || []).filter(e => !isCtl(e));
@@ -3589,7 +3616,7 @@ function haEntities(hd, ha, now) {
       <td>${canEdit && st !== "unavailable" ? `<button type="button" class="mini${act[0] === "turn_off" ? " danger" : ""}" data-haact="${esc(act[0])}" data-haent="${esc(e.entity_id)}" data-haname="${esc(e.name)}">${act[1]}</button>` : ""}</td></tr>`;
   };
   const row = e => `<tr><td>${esc(e.name)}<br><small class="muted">${esc(e.entity_id)}</small></td><td>${e.state === "unavailable" || e.state === "unknown" ? `<span class="muted">${esc(e.state)}</span>`
-    : esc(isNaN(+e.state) || e.state === "" ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
+    : esc(isNaN(+e.state) || e.state === "" || !e.unit ? e.state : (+e.state).toLocaleString()) + (e.unit ? (e.unit === "%" ? "" : " ") + esc(e.unit) : "")}</td></tr>`;
   return sect(`Home Assistant · ${esc(hd.device.name || (ha && ha.device_name) || "")}`,
     `<p class="hint" style="margin:0 0 6px">${esc([hd.device.integration, [hd.device.manufacturer, hd.device.model].filter(Boolean).join(" "), hd.device.sw_version && "version " + hd.device.sw_version].filter(Boolean).join(" · "))}${hd.read ? ` · read ${ago(hd.read, now)}` : ""}</p>`
     + info.map(i => `<p class="hint" style="margin:0 0 6px">ℹ <b>${esc(i.what)}:</b> ${esc(i.detail)}</p>`).join("")
@@ -3936,7 +3963,7 @@ function renderOverview(h, sn, lg, ha) {
   const info = [kv("Address", esc(h.host + (h.ip && h.ip !== h.host ? ` (${h.ip})` : ""))), kv("IP range", esc(h.ip_range || "")), kv("Reached through", viaHtml(h.ip || h.host)), kv("Make and model", esc(h.model || (u && u.model) || "")),
     kv("Name on the device", esc(d && d.name || "")), kv("Location", esc(d && d.location || "")),
     kv("Up for", d && d.uptime_s != null ? fmtUp(d.uptime_s) : ""), kv("Serial", esc(u && u.serial || "")), kv("Firmware", esc(u && u.firmware || "")),
-    kv("Description", esc(d && d.descr || "")), kv("In Home Assistant", esc(hd ? [hd.device.name, hd.device.integration].filter(Boolean).join(" · ") : h.ha_device_name || "")), kv("Upstream device", h.parent ? esc(hostName(h.parent)) + (h.unreachable ? ` <small class="muted">(unreachable: ${esc(h.upstream_down || "")} is down)</small>` : "") : ""),
+    kv("Description", esc(d && d.descr || "")), kv("In Home Assistant", esc(hd ? (hd.devices && hd.devices.length > 1 ? hd.devices.map(p => p.device.name).join(", ") + " · " + hd.device.integration : [hd.device.name, hd.device.integration].filter(Boolean).join(" · ")) : h.ha_device_name || "")), kv("Upstream device", h.parent ? esc(hostName(h.parent)) + (h.unreachable ? ` <small class="muted">(unreachable: ${esc(h.upstream_down || "")} is down)</small>` : "") : ""),
     kv("Behind it", esc(data.hosts.filter(x => x.parent === h.key).map(x => x.name).sort(collator.compare).join(", "))),
     kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always"))), kv("Alerts", h.critical ? "🚨 Critical: sounds even when the phone is on silent" : "")].join("");
   html += sect("Device", `<div class="kv">${info}</div>`);
@@ -4550,6 +4577,39 @@ function mbText(mb) {
   const n = Number(mb);
   return !isFinite(n) ? "" : n < 1024 ? `${Math.round(n)} MB` : `${Math.round(n / 1024)} GB`;
 }
+// Rollcall's own HTTPS for agents (agenttls.py): on, off, and plain HTTP off once agents have moved
+function tlsHtml(t) {
+  const admin = data && data.can_admin;
+  let body;
+  if (t.own_cert) body = `<p>The agent port uses HTTPS with your own certificate (<b>Manage → Settings → Agent port</b>).</p>`;
+  else if (!t.on) body = `<p><b>Agents report over plain HTTP</b>, so anyone on the network path could read their reports. Turn on HTTPS and Rollcall makes its own certificate: agents move across at their next report and only trust Rollcall's own key, so nothing can stand in for it. Nothing to buy or install, and plain HTTP stays on until you turn it off.</p>
+      ${admin ? `<button type="button" class="primary" data-tls="on">Turn on HTTPS</button>` : `<p class="hint">Only Home Assistant admins can turn it on.</p>`}`;
+  else {
+    const left = t.agents_http || [];
+    if (t.port_off) { body = `<p>⚠ <b>HTTPS is on, but its port isn't open</b>: open port ${t.port} in the add-on's <b>Configuration → Network</b>. Until then agents carry on over plain HTTP.</p>`
+      + (admin ? `<button type="button" class="danger" data-tls="off">Turn HTTPS off</button>` : ""); return `<h4 class="subh" style="margin-top:14px">HTTPS</h4>${body}`; }
+    body = `<p>✓ <b>HTTPS is on</b>, on port ${t.port} with Rollcall's own key (<code>${esc((t.pin || "").slice(0, 12))}…</code>). ${t.agents_https} agent${t.agents_https === 1 ? "" : "s"} use${t.agents_https === 1 ? "s" : ""} it.
+        ${left.length ? `Still on plain HTTP: ${esc(left.slice(0, 8).join(", "))}${left.length > 8 ? ` and ${left.length - 8} more` : ""} (agents move at their next report; older agents once they're updated: Windows 1.0.54, Linux 1.0.22, router 1.0.3).` : ""}</p>
+      <p>Plain HTTP on port ${t.http_port}: <b>${t.plain_http ? "on" : "off"}</b>.</p>
+      ${admin ? `<div style="display:flex;gap:8px;flex-wrap:wrap">${t.plain_http ? `<button type="button" data-tls="plain-off"${left.length ? ` data-left="${left.length}"` : ""}>Turn off plain HTTP</button>` : `<button type="button" data-tls="plain-on">Turn plain HTTP back on</button>`}
+        <button type="button" class="danger" data-tls="off">Turn HTTPS off</button></div>` : ""}
+      <p class="hint">Port ${t.port} must be open in the add-on's <b>Configuration → Network</b> (it is by default). Agents reaching Rollcall through a reverse proxy with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are; the proxy can keep forwarding to plain HTTP on ${t.http_port}, so leave plain HTTP on if you use one. A router without curl or uclient-fetch's TLS support stays on HTTP.</p>`;
+  }
+  return `<h4 class="subh" style="margin-top:14px">HTTPS</h4>${body}`;
+}
+document.getElementById("agBody") && document.getElementById("agBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-tls]"); if (!b) return;
+  const act = b.dataset.tls;
+  if (act === "plain-off" && !confirm((b.dataset.left ? `${b.dataset.left} agent(s) still report over plain HTTP and will stop reporting until they move to HTTPS. ` : "") +
+      "Turn off plain HTTP on the agent port?\n\nA reverse proxy that forwards to it over plain HTTP (e.g. a firewall's web server protection) will stop working too.")) return;
+  if (act === "off" && !confirm("Turn HTTPS off? Agents go back to plain HTTP (it's turned back on).")) return;
+  b.disabled = true;
+  const body = act === "on" ? {https: true} : act === "off" ? {https: false} : {plain_http: act === "plain-on"};
+  const r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(d.error || `That didn't work (${r.status})`); b.disabled = false; return; }
+  agInfo.tls = d.tls; document.getElementById("agTls").innerHTML = tlsHtml(d.tls); load();
+});
 function renderAgents() {
   const a = agInfo, now = Date.now() / 1000;
   const staleSec = (a.stale_minutes || 15) * 60;
@@ -4571,7 +4631,8 @@ function renderAgents() {
     Without them, agents try the inside address first and then remember whichever worked last, so one failed attempt can leave an agent on the outside address.
     Use the IP if servers can't resolve the name. Changes are saved here and sent to agents with their next report, so installed agents follow them without a new download.</p>
     <p class="hint" id="agSaved"></p>
-    <p class="hint" id="agExtWarn" hidden></p>`);
+    <p class="hint" id="agExtWarn" hidden></p>
+    <div id="agTls">${tlsHtml(a.tls || {})}</div>`);
   const card = (o) => `<div class="oscard" data-ospane="${o.os}"${o.os === agOsTab ? "" : " hidden"}>
       <div class="oshead"><h4>${o.title}</h4><small class="muted">${o.version ? "version " + esc(o.version) : ""}</small></div>
       <p class="osreq">${o.req}</p>
@@ -4741,6 +4802,14 @@ document.getElementById("agBody").addEventListener("click", async e => {
   }
 });
 document.getElementById("agentsBtn").addEventListener("click", openAgents);
+document.getElementById("tlsGo").addEventListener("click", async () => {
+  await openAgents();
+  setTimeout(() => { const el = document.getElementById("agTls"); if (el) el.scrollIntoView({behavior: "smooth", block: "center"}); }, 300);
+});
+document.getElementById("tlsLater").addEventListener("click", () => {
+  try { localStorage.setItem("pm_tls_later", String(Date.now())); } catch (e) { }
+  document.getElementById("tlsPrompt").hidden = true;
+});
 
 // ---- Network discovery ----
 let disc = null, discTimer = null, discShowKnown = false, discShowHidden = false;
@@ -4830,6 +4899,110 @@ function logFollow() {
   clearInterval(addonLogTimer);
   if (document.getElementById("alFollow").checked && document.getElementById("alDlg").open) addonLogTimer = setInterval(logLoad, 5000);
 }
+// ---- Messages to users' screens (admins only; off unless the messages option is on) ----
+let msgInfo = null, msgIncEdit = null;
+const verLt = (a, b) => { if (!a) return false; const x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); } return false; };
+document.getElementById("msgBtn").addEventListener("click", () => {
+  document.getElementById("mainMenu").hidden = true;
+  msgIncEdit = null;
+  document.getElementById("msgDlg").showModal(); msgLoad();
+});
+async function msgLoad() {
+  try {
+    const r = await fetch("api/messages", {cache: "no-store"});
+    msgInfo = await r.json();
+    if (!r.ok) throw new Error(msgInfo.error || r.status);
+  } catch (e) { document.getElementById("msgBody").innerHTML = `<p class="empty-note">${esc(e.message || "Couldn't load messages.")}</p>`; return; }
+  msgRender();
+}
+function msgTargets() {
+  const inc = new Set(msgInfo.devices.filter(d => d.included).map(d => d.key));
+  const tabs = allTabs().filter(t => !t.home).map(t => {
+    const keys = data.hosts.filter(h => tabMatch(h, t)).map(h => h.key).filter(k => inc.has(k));
+    return {id: "tab:" + t.id, label: `Tab: ${t.name}`, keys};
+  }).filter(t => t.keys.length);
+  const one = msgInfo.devices.filter(d => d.included).map(d => ({id: "dev:" + d.key, label: d.name, keys: [d.key]}));
+  return [{id: "all", label: `Every included device (${inc.size})`, keys: [...inc]}, ...tabs, ...one];
+}
+function msgRender() {
+  const box = document.getElementById("msgBody"), m = msgInfo, now = Date.now() / 1000;
+  if (!m.enabled) {
+    box.innerHTML = `<p class="empty-note">Messages are turned off. An admin can turn them on under <b>Manage → Settings → Agents → Messages to users' screens</b>.</p>
+      <p class="hint">They're off by default because anyone who could get into Home Assistant could otherwise put a message on your users' screens. For a message every user sees when they sign in, Group Policy's <i>Interactive logon: Message text for users attempting to log on</i> is the better tool.</p>`;
+    return;
+  }
+  const inc = m.devices.filter(d => d.included);
+  const targets = msgTargets();
+  const hrs = h => h < 24 ? `${h} hour${h > 1 ? "s" : ""}` : `${h / 24} day${h > 24 ? "s" : ""}`;
+  const compose = !inc.length ? `<p class="empty-note">No devices can receive messages yet: choose them under <b>Who can receive messages</b> below.</p>` : `
+    <div class="msgcompose">
+      <div class="msgpreview"><b>Message from the Rollcall Administrator</b><textarea id="msgText" rows="5" maxlength="${m.max_chars}" placeholder="e.g. The file server restarts at 6pm today for updates. Please save your work before then."></textarea>
+        <small class="muted" id="msgCount">0 / ${m.max_chars}</small></div>
+      <div class="fields" style="margin-top:8px">
+        <label class="field">Send to<select id="msgTo">${targets.map(t => `<option value="${esc(t.id)}">${esc(t.label)}</option>`).join("")}</select></label>
+        <label class="field">Stops being shown after<select id="msgHours">${m.hours.map(h => `<option value="${h}"${h === 4 ? " selected" : ""}>${hrs(h)}</option>`).join("")}</select></label>
+      </div>
+      <p class="hint">Plain text only. Each signed-in user sees it once, in a box they close with OK; a device with nobody signed in shows it when it next can, until it stops being shown.</p>
+      <div style="display:flex;justify-content:flex-end"><button type="button" class="primary" id="msgSend">Send…</button></div>
+    </div>`;
+  const status = x => x.shown ? `<span class="okc">Shown</span> <small class="muted">${x.sessions} session${x.sessions === 1 ? "" : "s"}, ${ago(x.shown, now)}</small>`
+    : x.error ? `<b class="old">Couldn't show</b> <small class="muted">${esc(x.error)}</small>`
+    : x.waiting ? `<span class="muted">Waiting: nobody signed in</span>` : `<span class="muted">Not yet</span>`;
+  const sent = !m.sent.length ? `<p class="empty-note">No messages sent yet.</p>` : m.sent.map(x => {
+    const shown = x.devices.filter(d => d.shown).length;
+    return `<details class="msgsent"><summary><span class="msgwhen">${esc(new Date(x.at * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}))}</span>
+        <span class="msgtext">${esc(x.text.split("\n")[0].slice(0, 90))}</span>
+        <span class="muted">${x.cancelled ? "withdrawn" : !x.live ? "finished" : "showing"} · shown on ${shown} of ${x.devices.length}</span></summary>
+      <p class="hint">Sent by ${esc(x.by || "an admin")}${x.label ? " to " + esc(x.label) : ""}; ${x.live ? "stops being shown " + esc(new Date(x.expires * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})) : "no longer being shown"}.</p>
+      <pre class="msgfull">${esc(x.text)}</pre>
+      ${tbl(["Device", "What happened"], x.devices.map(d => `<tr><td>${esc(d.name)}</td><td>${status(d)}</td></tr>`))}
+      ${x.live ? `<button type="button" class="mini danger" data-msgcancel="${esc(x.id)}">Withdraw</button> <small class="muted">Devices that haven't shown it yet won't.</small>` : ""}
+    </details>`;
+  }).join("");
+  const editing = msgIncEdit !== null;
+  const who = !m.devices.length ? `<p class="empty-note">No Windows or Linux agents yet.</p>` : editing ? `
+      <input type="search" id="msgIncQ" class="preset-filter" placeholder="Filter devices" autocomplete="off">
+      <div class="downlist" id="msgIncList">${m.devices.map(d => `<label class="downrow"><input type="checkbox" value="${esc(d.key)}"${msgIncEdit.has(d.key) ? " checked" : ""}> <span>${esc(d.name)}<small class="muted"> · ${d.os === "windows" ? "Windows" : "Linux"} agent ${esc(d.version)}${verLt(d.version, d.os === "windows" ? "1.0.54" : "1.0.22") ? " (needs an agent update to show messages)" : ""}</small></span></label>`).join("")}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px"><button type="button" class="mini" id="msgIncAll">Tick all shown</button><button type="button" class="mini" id="msgIncCancel">Cancel</button><button type="button" class="mini primary" id="msgIncSave">Save</button></div>`
+    : `<p>${inc.length ? `${inc.length} of ${m.devices.length} agent device${m.devices.length === 1 ? "" : "s"} can receive messages: ${esc(inc.slice(0, 6).map(d => d.name).join(", "))}${inc.length > 6 ? ` and ${inc.length - 6} more` : ""}.` : "None yet."}
+      <button type="button" class="mini" id="msgIncEdit">Choose…</button></p><p class="hint">Only devices ticked here can receive a message, whoever sends it. Windows shows it in every signed-in session (including Remote Desktop); Linux sends it to terminals and SSH sessions (wall), so a desktop user without a terminal open won't see it. Routers can't receive messages.</p>`;
+  box.innerHTML = sect("New message", compose) + sect("Sent", sent) + sect("Who can receive messages", who);
+  const ta = document.getElementById("msgText");
+  if (ta) ta.addEventListener("input", () => { document.getElementById("msgCount").textContent = `${ta.value.length} / ${m.max_chars}`; });
+}
+document.getElementById("msgBody").addEventListener("input", e => {
+  if (e.target.id !== "msgIncQ") return;
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll("#msgIncList .downrow").forEach(r => { r.hidden = !!q && !r.textContent.toLowerCase().includes(q); });
+});
+document.getElementById("msgBody").addEventListener("change", e => {
+  if (e.target.closest("#msgIncList") && e.target.type === "checkbox") { if (e.target.checked) msgIncEdit.add(e.target.value); else msgIncEdit.delete(e.target.value); }
+});
+document.getElementById("msgBody").addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const post = async (url, body) => {
+    const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(d.error || `That didn't work (${r.status})`); return null; }
+    return d;
+  };
+  if (b.id === "msgIncEdit") { msgIncEdit = new Set(msgInfo.devices.filter(d => d.included).map(d => d.key)); msgRender(); }
+  else if (b.id === "msgIncCancel") { msgIncEdit = null; msgRender(); }
+  else if (b.id === "msgIncAll") { document.querySelectorAll("#msgIncList .downrow:not([hidden]) input").forEach(i => { i.checked = true; msgIncEdit.add(i.value); }); }
+  else if (b.id === "msgIncSave") { if (await post("api/messages/included", {keys: [...msgIncEdit]})) { msgIncEdit = null; msgLoad(); } }
+  else if (b.dataset.msgcancel) { if (confirm("Withdraw this message? Devices that haven't shown it yet won't.") && await post(`api/messages/${encodeURIComponent(b.dataset.msgcancel)}/cancel`)) msgLoad(); }
+  else if (b.id === "msgSend") {
+    const text = document.getElementById("msgText").value.trim(), t = msgTargets().find(x => x.id === document.getElementById("msgTo").value);
+    if (!text) { alert("Write a message first."); return; }
+    if (!t || !t.keys.length) { alert("None of those devices can receive messages."); return; }
+    if (!confirm(`Send this message to ${t.keys.length} device${t.keys.length === 1 ? "" : "s"} (${t.label})?\n\nMessage from the Rollcall Administrator\n\n${text}`)) return;
+    b.disabled = true;
+    const d = await post("api/messages", {text, keys: t.keys, hours: +document.getElementById("msgHours").value, label: t.id === "all" ? "every included device" : t.label});
+    b.disabled = false;
+    if (d) msgLoad();
+  }
+});
 document.getElementById("logBtn").addEventListener("click", () => {
   document.getElementById("mainMenu").hidden = true;
   const out = document.getElementById("alOut"); delete out.dataset.seen; out.innerHTML = `<span class="muted">Loading…</span>`;
@@ -4986,11 +5159,14 @@ function updatePicked() {
 
 // Home Assistant sensor search: one click adds it as a custom check with a sensible condition.
 let haTimer = null, haSeq = 0;
-// Linking a Home Assistant device: Rollcall reads all its entities (Pi-hole gets its own tiles and alerts).
-let linkedDev = null, haDevSeq = 0, haDevTimer = null;
+// Linking Home Assistant devices: Rollcall reads all their entities (Pi-hole and myenergi get their own tiles and
+// alerts). Several can be linked (1.93.0), e.g. a myenergi Zappi, hub and Harvi; the first is the main one.
+const HA_LINK_MAX = 6;
+let linkedDevs = [], haDevSeq = 0, haDevTimer = null;
 function drawLinkedDev() {
-  document.getElementById("haDevLinked").innerHTML = linkedDev
-    ? `<div class="harow"><span><b>${esc(linkedDev.name)}</b><small>linked: its readings show in Details, and problems alert as the <b>Home Assistant</b> check</small></span><span></span><button type="button" class="mini danger" id="haDevUnlink">Unlink</button></div>`
+  document.getElementById("haDevLinked").innerHTML = linkedDevs.length
+    ? linkedDevs.map((x, i) => `<div class="harow"><span><b>${esc(x.name)}</b><small>${i === 0 ? "linked: its readings show in Details, and problems alert as the <b>Home Assistant</b> check" : "also linked: its readings show alongside"}</small></span><span></span><button type="button" class="mini danger" data-haunlink="${esc(x.id)}">Unlink</button></div>`).join("")
+      + (linkedDevs.length < HA_LINK_MAX ? `<p class="hint" style="margin:4px 0 6px">Something with more than one Home Assistant device, such as a myenergi Zappi, hub and Harvi? Search for each and choose <b>Link</b>.</p>` : "")
     : `<p class="hint" style="margin:0 0 6px">Not linked. Search for the device, e.g. the Pi-hole integration's device, and choose <b>Link</b>.</p>`;
 }
 async function haDevSearch() {
@@ -5003,7 +5179,7 @@ async function haDevSearch() {
     if (d.error) { box.innerHTML = `<p class="hint">${esc(d.error)}</p>`; return; }
     box.innerHTML = d.devices.length ? d.devices.map(x => `<div class="harow"><span>${esc(x.name)}<small>${esc([x.integration, [x.manufacturer, x.model].filter(Boolean).join(" "), x.entities + " entities"].filter(Boolean).join(" · "))}</small></span>
         <span class="val">${x.known ? "readings and alerts" : ""}</span>
-        ${linkedDev && linkedDev.id === x.id ? `<span class="ignored">Linked</span>` : `<button type="button" class="mini" data-hadev="${esc(x.id)}" data-hadevname="${esc(x.name)}">Link</button>`}</div>`).join("") +
+        ${linkedDevs.some(y => y.id === x.id) ? `<span class="ignored">Linked</span>` : linkedDevs.length >= HA_LINK_MAX ? "" : `<button type="button" class="mini" data-hadev="${esc(x.id)}" data-hadevname="${esc(x.name)}">Link</button>`}</div>`).join("") +
         (d.total > d.devices.length ? `<p class="hint">${d.total - d.devices.length} more: add another word to narrow it down.</p>` : "")
       : `<p class="hint">No devices match "${esc(q)}".</p>`;
   } catch (e) { if (seq === haDevSeq) box.innerHTML = `<p class="hint">Couldn't search Home Assistant.</p>`; }
@@ -5012,14 +5188,15 @@ document.getElementById("haDevSearch").addEventListener("input", () => { clearTi
 document.getElementById("haDevSearch").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(haDevTimer); haDevSearch(); } });
 document.getElementById("haDevResults").addEventListener("click", e => {
   const b = e.target.closest("[data-hadev]"); if (!b) return;
-  linkedDev = {id: b.dataset.hadev, name: b.dataset.hadevname}; drawLinkedDev(); haDevSearch();
+  if (!linkedDevs.some(y => y.id === b.dataset.hadev) && linkedDevs.length < HA_LINK_MAX) linkedDevs.push({id: b.dataset.hadev, name: b.dataset.hadevname});
+  drawLinkedDev(); haDevSearch();
 });
 // The tick boxes open each search; unticking the device unlinks it (ticking again before saving puts it back).
-let prevLinked = null;
+let prevLinked = [];
 document.getElementById("fHaDevOn").addEventListener("change", e => {
   document.getElementById("haDevBox").hidden = !e.target.checked;
-  if (e.target.checked) { if (!linkedDev && prevLinked) linkedDev = prevLinked; document.getElementById("haDevSearch").focus(); }
-  else { prevLinked = linkedDev; linkedDev = null; document.getElementById("haDevResults").innerHTML = ""; document.getElementById("haDevSearch").value = ""; }
+  if (e.target.checked) { if (!linkedDevs.length && prevLinked.length) linkedDevs = prevLinked; document.getElementById("haDevSearch").focus(); }
+  else { prevLinked = linkedDevs; linkedDevs = []; document.getElementById("haDevResults").innerHTML = ""; document.getElementById("haDevSearch").value = ""; }
   drawLinkedDev();
 });
 document.getElementById("fHaSenOn").addEventListener("change", e => {
@@ -5027,7 +5204,8 @@ document.getElementById("fHaSenOn").addEventListener("change", e => {
   if (e.target.checked) haSearch();
 });
 document.getElementById("haDevLinked").addEventListener("click", e => {
-  if (e.target.id === "haDevUnlink") { linkedDev = null; drawLinkedDev(); haDevSearch(); }
+  const b = e.target.closest("[data-haunlink]");
+  if (b) { linkedDevs = linkedDevs.filter(x => x.id !== b.dataset.haunlink); drawLinkedDev(); haDevSearch(); }
 });
 function haDefault(e) {
   const id = e.entity_id, num = e.state !== "" && !isNaN(+e.state);
@@ -5226,7 +5404,7 @@ async function openDialog(h) {
   const [addrRows, otherChecks] = splitAddrChecks(h ? h.checks : []);
   addrRows.forEach(addAddrRow); addrCount();
   document.getElementById("addrBox").open = addrRows.length > 0;
-  linkedDev = h && h.ha_device ? {id: h.ha_device, name: h.ha_device_name || h.ha_device} : null;
+  linkedDevs = h && h.ha_device ? [{id: h.ha_device, name: h.ha_device_name || h.ha_device}, ...(h.ha_more || []).map(x => ({id: x.id, name: x.name || x.id}))] : [];
   drawLinkedDev();
   document.getElementById("haDevSearch").value = ""; document.getElementById("haDevResults").innerHTML = "";
   for (const c of otherChecks) {
@@ -5269,9 +5447,9 @@ async function openDialog(h) {
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
-  prevLinked = null;
-  document.getElementById("haDevBox").hidden = !linkedDev;
-  document.getElementById("fHaDevOn").checked = !!linkedDev;
+  prevLinked = [];
+  document.getElementById("haDevBox").hidden = !linkedDevs.length;
+  document.getElementById("fHaDevOn").checked = linkedDevs.length > 0;
   document.getElementById("fHaSenOn").checked = false;
   document.getElementById("haSenBox").hidden = true;
   filterPresets();
@@ -5298,9 +5476,10 @@ form.addEventListener("submit", async e => {
     expect_off: document.querySelector('input[name="schedMode"][value="ondemand"]').checked,
     grace: +document.getElementById("schedGrace").value || 0,
     no_alerts: document.getElementById("fNoAlerts").checked, critical: document.getElementById("fCritical").checked && !document.getElementById("fNoAlerts").checked};
-  body.ha_device = linkedDev ? linkedDev.id : ""; body.ha_device_name = linkedDev ? linkedDev.name : "";
+  body.ha_device = linkedDevs.length ? linkedDevs[0].id : ""; body.ha_device_name = linkedDevs.length ? linkedDevs[0].name : "";
+  body.ha_more = linkedDevs.slice(1).map(x => ({id: x.id, name: x.name}));
   body.checks = body.checks.filter(c => c.toLowerCase() !== "hadev:device");
-  if (linkedDev) body.checks.push("hadev:device");
+  if (linkedDevs.length) body.checks.push("hadev:device");
   const commIn = document.getElementById("fSnmpComm").value;
   if (!document.getElementById("snmpBox").hidden) {
     if (commIn) body.snmp_community = commIn;

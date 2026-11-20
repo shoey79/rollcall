@@ -50,7 +50,7 @@ JSONFILTER = r'''#!/usr/bin/env python3
 # Stand-in for OpenWrt's jsonfilter: the expressions the Rollcall agent uses
 import json, re, sys
 args = sys.argv[1:]; expr = args[args.index("-e") + 1]
-data = json.load(sys.stdin)
+data = json.load(open(args[args.index("-i") + 1]) if "-i" in args else sys.stdin)
 toks = re.findall(r'\.\*|\.[A-Za-z_][\w-]*|\["[^"]+"\]|\[\d+\]|\[\*\]|\[@\.[\w-]+="[^"]*"\]', expr[1:])
 cur = [data]
 for t in toks:
@@ -131,7 +131,7 @@ def test_report(openwrt):
     assert p.returncode == 0, p.stderr
     r = json.loads(p.stdout)
     assert "agent_token" not in r                                     # --report never shows the token
-    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.2"
+    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.3"
     assert r["hostname"] == "Lab-Router" and r["os"].startswith("OpenWrt 23.05.5 r24106") and r["os_id"] == "openwrt"
     assert r["hw_model"] == "Test Router Model X" and r["roles"] == ["Router (OpenWrt)"] and r["errors"] == []
     assert isinstance(r["cpu_pct"], float) and r["mem_total_mb"] > 0 and len(r["load"]) == 3 and r["uptime_s"] > 0
@@ -320,3 +320,79 @@ def test_nothing_written_to_flash_after_joining_and_runs_dont_pile_up(openwrt):
         assert (tmp / "agent.log").stat().st_size < 32768
     finally:
         srv.shutdown()
+
+
+# --- Rollcall's own HTTPS (router agent 1.0.3) ------------------------------------------------------------------
+def _addon(tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_update_signing_e2e import HAVE_ADDON_DEPS, Addon
+    if not HAVE_ADDON_DEPS:
+        pytest.skip("needs the add-on's packages (aiohttp, cryptography)")
+    return Addon(tmp_path / "addon", https=True)
+
+
+def test_router_moves_to_rollcalls_own_https(openwrt):
+    """Against the real add-on with HTTPS on: the first report hands over the certificate, kept on flash only when it
+    changes; the next one goes over HTTPS trusting only that certificate (curl here; uclient-fetch on OpenWrt)."""
+    env, tmp = openwrt
+    curl = shutil.which("curl")
+    if not curl:
+        pytest.skip("needs curl")
+    (tmp / "shims" / "curl").symlink_to(curl)
+    addon = _addon(tmp).start()
+    try:
+        script = tmp / "agent.sh"
+        script.write_text(AGENT.read_text().replace('SERVER="__PM_SERVER__"', f'SERVER="{addon.agent_url}"', 1)
+                          .replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{addon.enrol_key("windows", addon.agent_url)}"', 1))
+        run(env, script=script)                       # asks to join
+        addon.approve_all()
+        run(env, script=script)                       # reports over HTTP; gets the certificate
+        pem = tmp / "rollcall" / "rollcall.pem"
+        assert pem.exists() and (tmp / "rollcall" / "tls_port").read_text().strip() == str(addon.https_port), (tmp / "agent.log").read_text()
+        stamp = pem.stat().st_mtime_ns
+        run(env, script=script)
+        log = (tmp / "agent.log").read_text()
+        assert f"Report sent to https://127.0.0.1:{addon.https_port}" in log, log
+        assert addon.agent()["sent_to"] == f"https://127.0.0.1:{addon.https_port}"
+        assert pem.stat().st_mtime_ns == stamp        # not written again: unchanged
+        addon.api("/api/agents/tls", {"https": False}, "POST")
+        run(env, script=script)                       # over HTTPS this time fails (off): HTTP; told it's off
+        run(env, script=script)
+        assert not pem.exists() and "Rollcall's HTTPS was turned off" in (tmp / "agent.log").read_text()
+        assert addon.agent()["sent_to"] == addon.agent_url
+    finally:
+        addon.stop()
+
+
+@needs_openwrt
+def test_real_openwrt_moves_to_https_when_it_can(tmp_path):
+    """In the real OpenWrt image, against the real add-on: with uclient-fetch's TLS library present it moves to HTTPS
+    (the certificate lists host.docker.internal once the router has reported from it); without one it carries on over
+    HTTP. Either way every report gets through."""
+    addon = _addon(tmp_path).start()
+    try:
+        url = f"http://host.docker.internal:{addon.agent_port}"
+        script = AGENT.read_text().replace('SERVER="__PM_SERVER__"', f'SERVER="{url}"', 1) \
+            .replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{addon.enrol_key("windows", url)}"', 1)
+        (tmp_path / "a.sh").write_text(script)
+        shell = ("cp /w/a.sh /tmp/a.sh; sh /tmp/a.sh; touch /w/go; i=0; while [ ! -f /w/approved ] && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; "
+                 "for n in 1 2 3 4; do sh /tmp/a.sh; sleep 2; done; ls /lib/libustream* /usr/lib/libustream* 2>/dev/null | head -1; echo '<<LOG>>'; cat /tmp/rollcall-agent.log")
+        proc = subprocess.Popen([DOCKER, "run", "--rm", "-i", "--entrypoint", "/bin/sh", "--add-host", "host.docker.internal:host-gateway",
+                                 "-v", f"{tmp_path}:/w", IMAGE, "-c", shell], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(120):
+            if (tmp_path / "go").exists():
+                break
+            __import__("time").sleep(1)
+        addon.approve_all()
+        (tmp_path / "approved").write_text("1")
+        out, err = proc.communicate(timeout=300)
+        tls_lib, _, log = out.partition("<<LOG>>")
+        sent = addon.agent()["sent_to"]
+        print("TLS library:", tls_lib.strip() or "none", "| last report via", sent)
+        assert "ERROR" not in log, log
+        if tls_lib.strip():
+            assert sent == f"https://host.docker.internal:{addon.https_port}", log
+        else:
+            assert sent == url, log
+    finally:
+        addon.stop()

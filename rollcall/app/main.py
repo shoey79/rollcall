@@ -44,6 +44,8 @@ from aiohttp import ClientSession, ClientTimeout, web
 
 import agents as agentlib
 import updatesign
+import messages as msglib
+import agenttls
 import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
@@ -104,6 +106,7 @@ ICON_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "sv
 ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)$")
 ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$")
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
+AGENT_HTTPS_PORT = int(os.environ.get("PM_AGENT_HTTPS_PORT", "8101"))  # built-in HTTPS for agents (agenttls.py)
 AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
 SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a device yet
@@ -115,6 +118,8 @@ VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vu
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
+MESSAGES_PATH = Path(os.environ.get("PM_MESSAGES", str(DB_PATH.parent / "messages.json")))  # messages to screens
+AGENT_TLS = agenttls.AgentTLS(Path(os.environ.get("PM_AGENT_TLS", str(DB_PATH.parent / "agent_tls"))))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
 # Rollcall's own key for signing agent updates and the addresses agents report to (private: never leaves it)
 UPDATE_KEY_PATH = Path(os.environ.get("PM_UPDATE_KEY", str(DB_PATH.parent / "update_key.pem")))
@@ -198,6 +203,7 @@ DEFAULTS = {
     "agent_memory_crit": 95,
     "agent_cpu_warn": 90,
     "agent_cpu_reports": 3,
+    "messages": False,
     "agent_failed_logons": 20,
     "agent_laps_overdue_days": 3,
     "agent_bitlocker_require": "workstations",
@@ -815,11 +821,22 @@ def validate_entry(raw: dict) -> dict:
             raise ValueError("Unknown icon")
         entry["icon"] = icon
     if "ha_device" in raw:
+        HA_MORE_MAX = 5
         dev = str(raw.get("ha_device") or "").strip()
         if dev and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", dev):
             raise ValueError("Unknown Home Assistant device")
         entry["ha_device"] = dev
         entry["ha_device_name"] = str(raw.get("ha_device_name") or "").strip()[:100] if dev else ""
+        # More Home Assistant devices for the same thing (1.93.0), e.g. a myenergi hub and Harvi beside the Zappi
+        more, seen = [], {dev}
+        for x in (raw.get("ha_more") or [])[:HA_MORE_MAX] if dev and isinstance(raw.get("ha_more"), list) else []:
+            xid = str((x or {}).get("id") or "").strip() if isinstance(x, dict) else ""
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", xid):
+                raise ValueError("Unknown Home Assistant device")
+            if xid not in seen:
+                seen.add(xid)
+                more.append({"id": xid, "name": str(x.get("name") or "").strip()[:100]})
+        entry["ha_more"] = more
     if "group" in raw:
         group = " ".join(str(raw.get("group") or "").split())
         if len(group) > 40 or not group.isprintable():
@@ -1653,6 +1670,7 @@ class Host:
     px_base: str = ""                  # the address that last answered (https when Plex drops plain HTTP)
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
+    ha_more: list = field(default_factory=list)  # more linked HA devices: [{"id", "name"}] (1.93.0)
     ha_data: dict | None = None        # its entities as last read, with what Rollcall made of them
     parent: str = ""                   # the upstream device it's reached through (its key), e.g. a router; "" = none
     unreachable: bool = False          # not answering while a device upstream of it is down: shown, not alerted
@@ -1732,6 +1750,7 @@ class Monitor:
         self.hosts: dict[str, Host] = {}
         self.imported = 0  # hosts taken from the Configuration tab this start
         self.agents: AgentStore | None = None  # set by attach_agents()
+        self.messages = msglib.Messages(MESSAGES_PATH)  # messages to users' screens
         self.started = time.time()  # agents get a full stale period after a restart
         self.agent_settings = {"global_ignore": [], "hosts": {}}
         try:
@@ -1838,6 +1857,7 @@ class Monitor:
                 **({"group": h.group} if h.group else {}),
                 **({"parent": h.parent} if h.parent else {}),
                 **({"ha_device": h.ha_device, "ha_device_name": h.ha_device_name} if h.ha_device else {}),
+                **({"ha_more": h.ha_more} if h.ha_device and h.ha_more else {}),
                 **({"snmp_community": h.snmp_community} if h.snmp_community else {}),
                 **({"snmp_version": "3", "snmp_v3": h.snmp_v3} if h.snmp_version == "3" else
                                {"snmp_version": "1"} if h.snmp_version == "1" else {}),
@@ -1875,6 +1895,8 @@ class Monitor:
         h.parent = str(entry.get("parent") or "")[:80]
         h.ha_device = str(entry.get("ha_device") or "")[:64]
         h.ha_device_name = str(entry.get("ha_device_name") or "")[:100]
+        h.ha_more = [{"id": str(x.get("id"))[:64], "name": str(x.get("name") or "")[:100]} for x in (entry.get("ha_more") or [])
+                     if isinstance(x, dict) and x.get("id")][:5] if h.ha_device else []
         h.snmp_version = entry.get("snmp_version") if entry.get("snmp_version") in ("1", "3") else "2c"
         h.snmp_v3 = dict(entry.get("snmp_v3") or {})
         h.snmp_watch = [int(x) for x in entry.get("snmp_watch") or [] if str(x).isdigit()]
@@ -1970,9 +1992,10 @@ class Monitor:
                 h.unreachable, h.upstream_down = False, ""
             h.next_due = 0
         if "ha_device" in entry:
-            if entry["ha_device"] != h.ha_device:
+            if entry["ha_device"] != h.ha_device or entry.get("ha_more", []) != h.ha_more:
                 h.ha_data = None
             h.ha_device, h.ha_device_name = entry["ha_device"], entry.get("ha_device_name", "")
+            h.ha_more = list(entry.get("ha_more") or []) if h.ha_device else []
         if "snmp_version" in entry:
             h.snmp_version = entry["snmp_version"]
             if h.snmp_version == "3":
@@ -2703,10 +2726,19 @@ class Monitor:
         if not dev:
             h.ha_data = None
             return False, None, f"the linked device ({h.ha_device_name or h.ha_device}) is no longer in Home Assistant", "warn"
-        d = hadevice.read(dev, reg["entities"].get(h.ha_device, []), states)
+        parts, missing = [(dev, reg["entities"].get(h.ha_device, []))], []
+        for x in h.ha_more:
+            more = reg["devices"].get(x["id"])
+            if more:
+                parts.append((more, reg["entities"].get(x["id"], [])))
+            else:
+                missing.append(x.get("name") or x["id"])
+        d = hadevice.read_many(parts, states, missing)
         d["read"] = now
         h.ha_data = d
-        h.ha_device_name = d["device"]["name"] or h.ha_device_name
+        h.ha_device_name = d["devices"][0]["device"]["name"] or h.ha_device_name
+        for x, part in zip([y for y in h.ha_more if reg["devices"].get(y["id"])], d["devices"][1:]):
+            x["name"] = part["device"]["name"] or x.get("name") or ""
         worst = "crit" if any(i["level"] == "crit" for i in d["items"]) else "warn" if any(i["level"] == "warn" for i in d["items"]) else "ok"
         if worst == "ok":
             return True, None, d["summary"]
@@ -3141,6 +3173,67 @@ class Monitor:
     # -- Agents ------------------------------------------------------------
     LEVEL_STATUS = {agentlib.OK: GREEN, agentlib.WARN: AMBER, agentlib.CRIT: RED}
 
+    # -- Built-in HTTPS for agents (agenttls.py) ----------------------------------
+    def tls_builtin(self) -> bool:
+        """Rollcall's own HTTPS is on (and the agent port isn't HTTPS with your own certificate instead)."""
+        return AGENT_TLS.on and not self.opts.get("agent_ssl")
+
+    def tls_hosts(self) -> set[str]:
+        """The addresses agents reach Rollcall by over plain HTTP: the certificate lists them (for the router agent,
+        which checks names; the others check the key)."""
+        out = set()
+        urls = list(self.agent_servers() or [])
+        r = self.agent_route() or {}
+        urls += [r.get("inside") or "", r.get("outside") or ""]
+        urls += [a.get("sent_to") or "" for a in (self.agents.agents.values() if self.agents else [])]
+        for u in urls:
+            try:
+                p = urlparse(str(u))
+            except ValueError:
+                continue
+            if p.scheme == "http" and p.hostname:
+                out.add(p.hostname.lower())
+        return out
+
+    async def tls_refresh(self) -> None:
+        """New addresses turned up: remake the certificate (same key) and restart the HTTPS listener."""
+        try:
+            if self.tls_builtin() and await asyncio.to_thread(AGENT_TLS.ensure_cert, self.tls_hosts()) and getattr(self, "agent_listener", None):
+                log.info("Agent HTTPS certificate now lists: %s", ", ".join(AGENT_TLS.names()))
+                await self.agent_listener.set_builtin(True)
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't update the agent HTTPS certificate: %s", err)
+
+    def tls_reply(self, agent: dict) -> dict:
+        """For the reply to a report: the HTTPS port and key, signed with the update key agents already trust, so
+        it can't be changed on the way; the router agent (which can't check either) gets the certificate itself."""
+        port = getattr(self, "tls_public_port", AGENT_HTTPS_PORT)
+        if not self.tls_builtin() or not port:
+            return {}  # off, or its port isn't mapped (Configuration → Network): agents stay as they are
+        out = {"tls": {"port": int(port), "pin": AGENT_TLS.pin()}}
+        try:
+            out["tls_sig"] = SIGNER.sign(agenttls.tls_text(int(port), AGENT_TLS.pin()))
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't sign the agent HTTPS details: %s", err)
+            return {}
+        if agent.get("agent_kind") == "sh":
+            out["tls_cert"] = AGENT_TLS.cert_pem()
+        return out
+
+    # -- Messages to users' screens (messages.py) ---------------------------------
+    def messages_for(self, agent: dict) -> list[dict]:
+        """What this agent's device should show now, signed, for the reply to its report (empty unless the
+        messages option is on and an admin has included the device)."""
+        if not self.opts.get("messages") or agent.get("os_family") not in ("windows", "linux") or agent.get("agent_kind") == "sh":
+            return []
+        out = []
+        for m in self.messages.pending(agent.get("host_key") or ""):
+            try:
+                out.append({"id": m["id"], "text": m["text"], "expires": int(m["expires"]), "sig": SIGNER.sign(msglib.signed_text(m))})
+            except Exception as err:  # noqa: BLE001
+                log.warning("Couldn't sign a message: %s", err)
+        return out[:3]
+
     async def attach_agents(self, store: AgentStore) -> None:
         """Link approved agents to dashboard entries and restore their last reports."""
         self.agents = store
@@ -3338,10 +3431,17 @@ class Monitor:
 
     async def receive_report(self, agent: dict, report: dict, source_ip: str | None, forwarded_for: str | None = None) -> None:
         now = time.time()
+        acks = report.pop("messages_shown", None) if isinstance(report, dict) else None  # which messages it showed
+        if acks is not None and agent.get("host_key"):
+            self.messages.record(agent["host_key"], acks, now)
         raw_sec = report.get("secrets") if isinstance(report, dict) else None
         findings = raw_sec.get("findings") if isinstance(raw_sec, dict) else None  # kept apart: the tidy-up below drops them
         report = agentlib.normalize_report(report)
         sent_to = str(report.get("sent_to") or "")[:200]
+        if sent_to.startswith("http://") and self.tls_builtin():
+            host = (urlparse(sent_to).hostname or "").lower()
+            if host and host not in AGENT_TLS.names():
+                asyncio.create_task(self.tls_refresh())
         if sent_to and sent_to != agent.get("sent_to") and agent.get("sent_to"):
             log.info("%s now reports via %s (was %s)", agent.get("hostname"), sent_to, agent.get("sent_to"))
         agent.update(last_report=now, source_ip=source_ip, sent_to=sent_to or agent.get("sent_to"),
@@ -5013,7 +5113,7 @@ class Monitor:
                 "starting_until": startup_until(h, time.time()),
                 "checks": h.checks,
                 "snmp": any(s.kind == "snmp" for s in h.services), "snmp_community_set": bool(h.snmp_community),
-                "ha_device": h.ha_device, "ha_device_name": h.ha_device_name,
+                "ha_device": h.ha_device, "ha_device_name": h.ha_device_name, "ha_more": h.ha_more,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
                 "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
@@ -5156,6 +5256,79 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             return await handler(req)
         return wrapped
 
+    def admin_only(handler):
+        """Home Assistant admins only (not editors): e.g. messages to users' screens."""
+        async def wrapped(req):
+            if not await access.is_admin(req):
+                user = await access.who(req)
+                log.info("Blocked %s (admins only): %s %s", user["display"] or "unknown user", req.method, req.path)
+                raise web.HTTPForbidden(text=json.dumps({"error": "Only Home Assistant admins can do this."}), content_type="application/json")
+            return await handler(req)
+        return wrapped
+
+    def _msg_devices():
+        out = []
+        for h in monitor.hosts.values():
+            a = next((x for x in (monitor.agents.agents.values() if monitor.agents else []) if x.get("host_key") == h.key), None)
+            if a and a.get("os_family") in ("windows", "linux") and a.get("agent_kind") != "sh":
+                out.append({"key": h.key, "name": h.name, "os": a.get("os_family"), "version": a.get("agent_version") or "",
+                            "included": h.key in monitor.messages.included})
+        return sorted(out, key=lambda x: x["name"].lower())
+
+    async def _json_body(req) -> dict:
+        try:
+            b = await req.json()
+        except ValueError:
+            b = None
+        if not isinstance(b, dict):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "expected a JSON object"}), content_type="application/json")
+        return b
+
+    async def messages_list(req):
+        names = {h.key: h.name for h in monitor.hosts.values()}
+        now = time.time()
+        sent = []
+        for m in reversed(monitor.messages.sent):
+            st = m.get("status") or {}
+            rows = [{"key": k, "name": names.get(k, k), **(st.get(k) or {})} for k in m["to"]]
+            sent.append({"id": m["id"], "text": m["text"], "by": m.get("by"), "at": m["at"], "expires": m["expires"], "label": m.get("label"),
+                         "cancelled": m.get("cancelled"), "live": not m.get("cancelled") and m["expires"] > now, "devices": rows})
+        return web.json_response({"enabled": bool(monitor.opts.get("messages")), "heading": msglib.HEADING, "max_chars": msglib.MAX_CHARS,
+                                  "hours": list(msglib.EXPIRY_HOURS), "devices": _msg_devices(), "sent": sent[:30]})
+
+    async def messages_send(req):
+        if not monitor.opts.get("messages"):
+            return web.json_response({"error": "Messages are turned off (Manage → Settings → Messages)"}, status=400)
+        body = await _json_body(req)
+        user = await access.who(req)
+        try:
+            keys = [str(k) for k in body.get("keys") or []][:2000]
+            m = monitor.messages.send(body.get("text"), user["display"] or "an admin", keys, int(body.get("hours") or 0), str(body.get("label") or ""))
+        except (ValueError, TypeError) as err:
+            return web.json_response({"error": str(err)}, status=400)
+        log.info("%s sent a message to %d device(s)%s: %s", user["display"] or "an admin", len(m["to"]),
+                 f" ({m['label']})" if m["label"] else "", m["text"][:120].replace("\n", " / "))
+        return web.json_response({"ok": True, "id": m["id"], "to": len(m["to"])})
+
+    async def messages_included(req):
+        body = await _json_body(req)
+        known = {d["key"] for d in _msg_devices()}
+        keys = [str(k) for k in body.get("keys") or [] if str(k) in known]
+        user = await access.who(req)
+        before = set(monitor.messages.included)
+        monitor.messages.set_included(keys)
+        added, removed = set(keys) - before, before - set(keys)
+        if added or removed:
+            log.info("%s changed who can receive messages: %d added, %d removed (%d in all)", user["display"] or "an admin", len(added), len(removed), len(keys))
+        return web.json_response({"ok": True, "included": len(keys)})
+
+    async def messages_cancel(req):
+        user = await access.who(req)
+        if not monitor.messages.cancel(req.match_info["id"]):
+            raise web.HTTPNotFound()
+        log.info("%s withdrew a message", user["display"] or "an admin")
+        return web.json_response({"ok": True})
+
     async def addon_log(req):
         """The add-on's log (Manage > Log), newest last, with secrets masked."""
         try:
@@ -5176,6 +5349,10 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         snap["user"] = user["display"] or None
         snap["can_edit"] = user["can_edit"]
         snap["edit_blocked"] = not user["can_edit"] and access.blocked()  # the user list can't be read: say why
+        snap["can_admin"] = await access.is_admin(req)  # Messages, HTTPS for agents
+        snap["messages_on"] = bool(monitor.opts.get("messages"))
+        # Agents report over plain HTTP and Rollcall's own HTTPS isn't on: admins are offered it
+        snap["tls_prompt"] = bool(not AGENT_TLS.on and not monitor.opts.get("agent_ssl") and monitor.agents and monitor.agents.agents)
         snap["networks"] = await monitor.network_view()
         if user["can_edit"] and monitor.agents:
             snap["agents_pending"] = len(monitor.agents.pending)
@@ -5378,7 +5555,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
             raise web.HTTPNotFound()
-        return web.json_response({"name": h.name, "device_id": h.ha_device, "device_name": h.ha_device_name, "data": h.ha_data})
+        return web.json_response({"name": h.name, "device_id": h.ha_device, "device_name": h.ha_device_name, "more": h.ha_more, "data": h.ha_data})
 
     async def host_ha_action(req):
         """Press a button or turn a switch on or off on the device linked to this device. Only its
@@ -5641,7 +5818,52 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "servers": monitor.agent_settings.get("servers") or {},
             "internal_networks": monitor.internal_networks(),
             "suggested_networks": await _suggested_networks(),
+            "tls": _tls_info(),
         })
+
+    def _tls_info() -> dict:
+        rows = [a for a in monitor.agents.agents.values()] if monitor.agents else []
+        tp = getattr(monitor, "tls_public_port", AGENT_HTTPS_PORT) or AGENT_HTTPS_PORT
+        https = [a for a in rows if str(a.get("sent_to") or "").startswith("https://") and str(a.get("sent_to") or "").rstrip("/").endswith(f":{tp}")]
+        plain = [a for a in rows if str(a.get("sent_to") or "").startswith("http://")]
+        port = getattr(monitor, "tls_public_port", AGENT_HTTPS_PORT)
+        return {"on": AGENT_TLS.on, "builtin": monitor.tls_builtin(), "own_cert": bool(monitor.opts.get("agent_ssl")),
+                "plain_http": AGENT_TLS.plain_http, "port": port or AGENT_HTTPS_PORT, "port_off": not port, "http_port": AGENT_PORT,
+                "pin": AGENT_TLS.pin() if AGENT_TLS.on else "", "names": AGENT_TLS.names() if AGENT_TLS.on else [],
+                "agents_https": len(https), "agents_http": sorted(a.get("hostname") or "?" for a in plain)}
+
+    async def agents_tls(req):
+        """Turn Rollcall's own HTTPS for agents on or off, or plain HTTP off once agents have moved (admins only)."""
+        body = await _json_body(req)
+        user = await access.who(req)
+        listener = getattr(monitor, "agent_listener", None)
+        if not listener:
+            return web.json_response({"error": "The agent port isn't running (see the log)"}, status=503)
+        if monitor.opts.get("agent_ssl"):
+            return web.json_response({"error": "The agent port already uses HTTPS with your own certificate (Settings → Agent port)"}, status=400)
+        try:
+            if "https" in body:
+                on = body["https"] is True
+                if on:
+                    await asyncio.to_thread(AGENT_TLS.ensure_cert, monitor.tls_hosts())
+                    AGENT_TLS.set(https=True)
+                    await listener.set_builtin(True)
+                else:
+                    AGENT_TLS.set(https=False, plain_http=True)
+                    await listener.set_plain(True)
+                    await listener.set_builtin(False)
+                log.info("%s turned Rollcall's own HTTPS for agents %s", user["display"] or "an admin", "on" if on else "off")
+            if "plain_http" in body:
+                keep = body["plain_http"] is not False
+                if not keep and not AGENT_TLS.on:
+                    return web.json_response({"error": "Turn on HTTPS first"}, status=400)
+                AGENT_TLS.set(plain_http=keep)
+                await listener.set_plain(keep)
+                log.info("%s turned plain HTTP for agents %s", user["display"] or "an admin", "back on" if keep else "off")
+        except Exception as err:  # noqa: BLE001
+            log.exception("Changing agent HTTPS failed")
+            return web.json_response({"error": f"That didn't work: {err}"}, status=500)
+        return web.json_response({"ok": True, "tls": _tls_info()})
 
     async def _suggested_networks() -> list[str]:
         """Home Assistant's own networks, offered as a starting point for the internal networks."""
@@ -6471,6 +6693,11 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/sec-filter", editor_only(agent_sec_filter))
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/resources", editor_only(agent_resources))
+    app.router.add_post("/api/agents/tls", admin_only(agents_tls))
+    app.router.add_get("/api/messages", admin_only(messages_list))
+    app.router.add_post("/api/messages", admin_only(messages_send))
+    app.router.add_post("/api/messages/included", admin_only(messages_included))
+    app.router.add_post("/api/messages/{id}/cancel", admin_only(messages_cancel))
     app.router.add_post("/api/hosts/{key}/agent/nic", editor_only(agent_nic))
     app.router.add_post("/api/hosts/{key}/agent/secret-scan", editor_only(agent_secret_scan))
     app.router.add_get("/api/software", software_search)
@@ -6599,7 +6826,9 @@ def backup_files() -> dict[str, Path]:
     return {"hosts.json": HOSTS_PATH, "maintenance.json": MAINT_PATH, "agents.json": AGENTS_PATH,
             "agent_settings.json": AGENT_SETTINGS, "views.json": VIEWS_PATH, "imported_options.json": IMPORT_MARK,
             # the key that signs agent updates: restored with everything else, agents keep trusting updates
-            "update_key.pem": UPDATE_KEY_PATH}
+            "update_key.pem": UPDATE_KEY_PATH,
+            # built-in HTTPS: the same key, so agents keep trusting it after a restore
+            "agent_tls_key.pem": AGENT_TLS.key_path, "agent_tls_cert.pem": AGENT_TLS.cert_path, "agent_tls.json": AGENT_TLS.state_path}
 
 
 def make_backup(version: str | None) -> bytes:
@@ -6768,6 +6997,8 @@ def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: b
         text = text.replace('SERVER = "__PM_SERVER__"', f'SERVER = "{server}"', 1)
         text = text.replace('ENROL_KEY = "__PM_ENROL_KEY__"', f'ENROL_KEY = "{enrol_key}"', 1)
         text = text.replace('UPDATE_KEY = "__PM_UPDATE_KEY__"', f'UPDATE_KEY = "{update_public_key()}"', 1)
+        if AGENT_TLS.on:  # pinned to Rollcall's own HTTPS key from the first report
+            text = text.replace('TLS_PIN = "__PM_TLS_PIN__"', f'TLS_PIN = "{AGENT_TLS.pin()}"', 1).replace('TLS_PORT = 0', f'TLS_PORT = {AGENT_HTTPS_PORT}', 1)
         if ignore_cert:
             text = text.replace("IGNORE_CERT = False", "IGNORE_CERT = True", 1)
         return text.encode("utf-8")
@@ -6775,6 +7006,8 @@ def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: b
     text = text.replace("[string]$Server = '__PM_SERVER__'", f"[string]$Server = '{server}'", 1)
     text = text.replace("[string]$EnrolKey = '__PM_ENROL_KEY__'", f"[string]$EnrolKey = '{enrol_key}'", 1)
     text = text.replace("$UpdateKey = '__PM_UPDATE_KEY__'", f"$UpdateKey = '{update_public_key()}'", 1)
+    if AGENT_TLS.on:  # pinned to Rollcall's own HTTPS key from the first report
+        text = text.replace("$TlsPin = '__PM_TLS_PIN__'", f"$TlsPin = '{AGENT_TLS.pin()}'", 1).replace("$TlsPort = 0", f"$TlsPort = {AGENT_HTTPS_PORT}", 1)
     if ignore_cert:
         text = text.replace("[switch]$IgnoreCertificate,", "[switch]$IgnoreCertificate = $true,", 1)
     # Windows PowerShell 5.1 reads BOM-less scripts as ANSI; add a BOM so it's read as UTF-8.
@@ -6896,6 +7129,10 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         offer = monitor.agent_update_offer(agent, body)
         if offer:
             resp["agent_update"] = offer
+        resp.update(monitor.tls_reply(agent))  # Windows 1.0.54, Linux 1.0.22, router 1.0.3 on move to HTTPS
+        shown = monitor.messages_for(agent)
+        if shown:
+            resp["messages"] = shown  # Windows 1.0.54, Linux 1.0.22 on show them; each is signed
         return web.json_response(resp)
 
     async def update(req):
@@ -6959,6 +7196,34 @@ class AgentListener:
         self.runner = web.AppRunner(build_agent_app(monitor), access_log=None)
         self.site: web.TCPSite | None = None
         self.ctx: ssl.SSLContext | None = None
+        self.tls_site: web.TCPSite | None = None  # built-in HTTPS (agenttls.py), beside the agent port
+        self.plain_on = True
+        monitor.agent_listener = self
+
+    async def set_builtin(self, on: bool) -> None:
+        """Start (or restart, with a new certificate) or stop Rollcall's own HTTPS for agents."""
+        if not self.runner.server:
+            await self.runner.setup()
+        if self.tls_site:
+            await self.tls_site.stop()
+            self.tls_site = None
+        if on:
+            site = web.TCPSite(self.runner, "0.0.0.0", AGENT_HTTPS_PORT, ssl_context=AGENT_TLS.context(), reuse_address=True)
+            await site.start()
+            self.tls_site = site
+            log.info("Agent API listening on port %d (HTTPS, Rollcall's own certificate; key %s)", AGENT_HTTPS_PORT, AGENT_TLS.pin()[:12])
+
+    async def set_plain(self, on: bool) -> None:
+        """Plain HTTP on the agent port can be turned off once agents use HTTPS (not when the port itself is HTTPS)."""
+        if self.ctx is not None or on == self.plain_on:
+            return
+        if on:
+            await self.start(None)
+        elif self.site:
+            await self.site.stop()
+            self.site = None
+            log.info("Agent API: plain HTTP on port %d turned off; agents use HTTPS on port %d", AGENT_PORT, AGENT_HTTPS_PORT)
+        self.plain_on = on
 
     @property
     def https(self) -> bool:
@@ -7136,6 +7401,7 @@ async def main() -> None:
     watchdog = watchdoglib.Watchdog(log)
     watchdog_task = watchdog.start()  # says where the add-on is stuck if something holds it up  # noqa: F841
     apply_pending_restore()
+    new_install = not HOSTS_PATH.exists() and not AGENTS_PATH.exists()  # for defaults that differ for new installs
     try:  # made once (the first start of 1.92.1), then kept; a few seconds to make, so not on the first download
         fresh = not UPDATE_KEY_PATH.exists()
         await asyncio.to_thread(SIGNER.public)
@@ -7170,11 +7436,23 @@ async def main() -> None:
         else:
             log.info("admin_only_changes is off: anyone who can open the panel can make changes")
         agent_listener: AgentListener | None = AgentListener(monitor)
+        if not AGENT_TLS.decided():  # first start of 1.93.0: on for a new install, asked about (dashboard) otherwise
+            AGENT_TLS.set(https=new_install, plain_http=True)
+            log.info("Built-in HTTPS for agents: %s", "on (a new install)" if new_install else "off until an admin turns it on (Manage → Agents)")
         try:
-            await agent_listener.start(agent_ssl_context(opts))
+            plain = not (monitor.tls_builtin() and not AGENT_TLS.plain_http)
+            if plain or opts.get("agent_ssl"):
+                await agent_listener.start(agent_ssl_context(opts))
+            agent_listener.plain_on = plain or bool(opts.get("agent_ssl"))
         except Exception as err:  # noqa: BLE001
             log.error("Windows agent API could not start on port %d: %s", AGENT_PORT, err)
             agent_listener = None
+        if agent_listener and monitor.tls_builtin():
+            try:
+                await asyncio.to_thread(AGENT_TLS.ensure_cert, monitor.tls_hosts())
+                await agent_listener.set_builtin(True)
+            except Exception as err:  # noqa: BLE001
+                log.error("Agent HTTPS could not start on port %d: %s", AGENT_HTTPS_PORT, err)
         live = LiveSettings(monitor, access, agent_listener)
         monitor._settings_watch = asyncio.create_task(live.watch())
         runner = web.AppRunner(build_app(monitor, access, live), access_log=None)
@@ -7186,6 +7464,8 @@ async def main() -> None:
             await loop.create_datagram_endpoint(lambda: sysloglib.Receiver(monitor.on_syslog), local_addr=("0.0.0.0", SYSLOG_PORT))
             net = await ha.addon_network()
             monitor.syslog_port = net.get(f"{SYSLOG_PORT}/udp") if net else None
+            if net:  # where agents reach Rollcall's own HTTPS from outside the add-on (None: the port isn't mapped)
+                monitor.tls_public_port = net.get(f"{AGENT_HTTPS_PORT}/tcp")
             if net and not monitor.syslog_port:
                 log.info("Syslog: receiver ready, but its port isn't mapped (add-on Configuration > Network)")
             else:

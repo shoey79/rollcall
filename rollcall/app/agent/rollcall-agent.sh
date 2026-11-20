@@ -14,7 +14,7 @@
 # The first report asks to join; approve it in the Rollcall dashboard (Manage > Agents).
 # Downloaded from the dashboard, the add-on's address and enrolment key are already filled in.
 
-AGENT_VERSION="1.0.2"
+AGENT_VERSION="1.0.3"
 SERVER="__PM_SERVER__"
 ENROL_KEY="__PM_ENROL_KEY__"
 IGNORE_CERT=0
@@ -22,6 +22,7 @@ IGNORE_CERT=0
 R="${RC_ROOT:-}"   # tests only: a folder standing in for / (OpenWrt's files under it)
 DIR="${RC_DIR:-/etc/rollcall}"
 STATE="$DIR/token"
+PEM="$DIR/rollcall.pem"; TLSPORT="$DIR/tls_port"   # Rollcall's own HTTPS: its certificate and port (1.0.3)
 LOG="${RC_LOG:-/tmp/rollcall-agent.log}"
 RUN="${RC_RUN:-/tmp}"            # RAM: the run lock, and where the system log was read up to
 SINCE="$RUN/rollcall-since"      # in RAM, not flash: written every run, and the log it marks is in RAM too
@@ -213,6 +214,7 @@ post() {
     if have curl; then
         set -- -sS -o "$TMP.reply" -w '%{http_code}' -m 30 -H 'Content-Type: application/json' --data-binary "@$2"
         [ "$IGNORE_CERT" = 1 ] && set -- "$@" -k
+        [ -n "$CA" ] && set -- "$@" --cacert "$CA"
         code=$(curl "$@" "$url" 2>"$TMP.err"); echo "${code:-000}" | tail -c 4 | head -c 3; echo
         return
     fi
@@ -220,6 +222,7 @@ post() {
     w=wget; have uclient-fetch && w=uclient-fetch
     set -- -T 30 -O "$TMP.reply" --post-file="$2"   # not -q: uclient-fetch would hide "HTTP error 401"
     [ "$IGNORE_CERT" = 1 ] && set -- "$@" --no-check-certificate
+    [ -n "$CA" ] && set -- "$@" --ca-certificate="$CA"
     if "$w" "$@" "$url" 2>"$TMP.err"; then
         grep -q '"pending"' "$TMP.reply" 2>/dev/null && echo 202 || echo 200
     else
@@ -228,19 +231,49 @@ post() {
     fi
 }
 
+# Rollcall's own HTTPS: kept on flash only when it changes (the certificate lasts years), removed when it's off.
+tls_reply() {
+    have jsonfilter || return 0
+    port=$(jsonfilter -i "$TMP.reply" -e '@.tls.port' 2>/dev/null)
+    if [ -n "$port" ]; then
+        jsonfilter -i "$TMP.reply" -e '@.tls_cert' 2>/dev/null > "$TMP.pem"
+        grep -q 'BEGIN CERTIFICATE' "$TMP.pem" || return 0
+        cmp -s "$TMP.pem" "$PEM" || { cp "$TMP.pem" "$PEM"; chmod 600 "$PEM"; log "Rollcall's HTTPS is on: reports go to port $port from the next run, trusting only its certificate"; }
+        [ "$(cat "$TLSPORT" 2>/dev/null)" = "$port" ] || echo "$port" > "$TLSPORT"
+    elif [ -f "$PEM" ] && grep -q '"config_sig"' "$TMP.reply" 2>/dev/null; then
+        rm -f "$PEM" "$TLSPORT"; log "Rollcall's HTTPS was turned off; reports go over the address this agent has"
+    fi
+}
+
 send() {
     [ -s "$STATE" ] || { mkdir -p "$DIR"; tr -dc 'a-f0-9' < /dev/urandom | head -c 64 > "$STATE"; chmod 600 "$STATE"; }
     token=$(cat "$STATE")
     build_report > "$TMP.body"   # not in a pipe: it sets HOSTNAME
     { printf '{"agent_token":"%s",' "$token"; tail -c +2 "$TMP.body"; } > "$TMP.json"
+    # With Rollcall's own HTTPS on, each http:// address's HTTPS twin (same address, its port) is tried first,
+    # trusting only Rollcall's certificate; the http:// address stays as the fallback.
+    list=""
     for SRV in $(echo "$SERVER" | tr ',;' '  '); do
         SRV=${SRV%/}
-        code=$(post /agent/report "$TMP.json")
+        case "$SRV" in http://*)
+            if [ -s "$PEM" ] && [ -s "$TLSPORT" ] && { have curl || have uclient-fetch; }; then
+                h=${SRV#http://}; h=${h%%/*}; case "$h" in \[*) h=${h%%]*}]; ;; *) h=${h%%:*} ;; esac
+                list="$list https://$h:$(cat "$TLSPORT")"
+            fi ;;
+        esac
+        list="$list $SRV"
+    done
+    for SRV in $list; do
+        CA=""; case "$SRV" in https://*:"$(cat "$TLSPORT" 2>/dev/null)") CA="$PEM" ;; esac
+        # which address this went to, as the other agents say (Rollcall shows it, and lists it in its certificate)
+        { printf '{"sent_to":%s,' "$(js "$SRV" 200)"; tail -c +2 "$TMP.json"; } > "$TMP.send"
+        code=$(post /agent/report "$TMP.send")
         [ "$code" = 000 ] && { log "WARN $SRV didn't answer: $(head -c 200 "$TMP.err" 2>/dev/null)"; continue; }
         break
-    done
+    done   # CA stays set for the enrolment below, which goes to the same address
     case "$code" in
         200) log "Report sent to $SRV"
+             tls_reply
              last=$("$LOGREAD" -t 2>/dev/null | tail -1 | stamp); [ "${last:-0}" -gt 0 ] && [ "$last" != "$(cat "$SINCE" 2>/dev/null)" ] && echo "$last" > "$SINCE" ;;
         202) log "Waiting for approval in the Rollcall dashboard" ;;
         401) log "Not enrolled yet: asking to join"

@@ -69,15 +69,19 @@ def call(url, data=None, headers=None, method=None, timeout=30):
 class Addon:
     """The real add-on (main.py), on free ports, with its data in a folder of its own."""
 
-    def __init__(self, data: Path):
+    def __init__(self, data: Path, https: bool | None = False):
         self.data, self.proc = data, None
         data.mkdir(parents=True, exist_ok=True)
         (data / "options.json").write_text("{}")
-        self.ui_port, self.agent_port = free_port(), free_port()
+        self.ui_port, self.agent_port, self.https_port = free_port(), free_port(), free_port()
+        if https is not None:  # Rollcall's own HTTPS (1.93.0); None: as a new install decides (on)
+            (data / "agent_tls").mkdir(exist_ok=True)
+            (data / "agent_tls" / "state.json").write_text(json.dumps({"https": https, "plain_http": True}))
 
     def start(self, app: Path = APP):
         env = {**os.environ, "PM_OPTIONS": str(self.data / "options.json"), "PM_DB": str(self.data / "ping_monitor.db"),
-               "PM_PORT": str(self.ui_port), "PM_AGENT_PORT": str(self.agent_port), "PM_SYSLOG_PORT": str(free_port()),
+               "PM_PORT": str(self.ui_port), "PM_AGENT_PORT": str(self.agent_port), "PM_AGENT_HTTPS_PORT": str(self.https_port),
+               "PM_SYSLOG_PORT": str(free_port()),
                "PM_SSL_DIR": str(self.data / "ssl"), "PM_HA_API": "http://127.0.0.1:9/api",
                "PM_SUPERVISOR_API": "http://127.0.0.1:9", "PM_HA_WS": "ws://127.0.0.1:9/ws", "PYTHONUNBUFFERED": "1"}
         env.pop("SUPERVISOR_TOKEN", None)  # outside Home Assistant: the test is the admin
@@ -367,7 +371,7 @@ def scenario(agent, tmp: Path, made: list):
     made.remove(addon)
     later = "1.0.99"
     nxt = Addon.__new__(Addon)
-    nxt.data, nxt.proc, nxt.ui_port, nxt.agent_port = data, None, addon.ui_port, addon.agent_port
+    nxt.data, nxt.proc, nxt.ui_port, nxt.agent_port, nxt.https_port = data, None, addon.ui_port, addon.agent_port, addon.https_port
     nxt.start(raised_copy(tmp, agent.kind, later))
     made.append(nxt)
     addon = nxt

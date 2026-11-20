@@ -18,7 +18,7 @@ PWSH = WIN_PS or os.environ.get("PWSH") or shutil.which("pwsh")
 SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $ast = [Management.Automation.Language.Parser]::ParseFile('__AGENT__', [ref]$null, [ref]$null)
-foreach ($n in 'Test-InNetwork', 'Get-OwnIPv4', 'Get-RouteSide', 'Get-ServerList') {
+foreach ($n in 'Test-InNetwork', 'Get-OwnIPv4', 'Get-RouteSide', 'Get-ServerList', 'Get-ServerListPlain') {
     $f = $ast.Find({ param($x) $x -is [Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true)
     . ([scriptblock]::Create($f.Extent.Text))
 }
