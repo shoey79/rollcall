@@ -204,6 +204,10 @@ def parse_response(buf: bytes) -> dict:
         "disabled": DISABLED.get(_int(s, 1024) or 0, ""),
         "outage": None,
     }
+    # proto3 leaves out a number that's 0: in a status, a missing drop rate, throughput or obstruction is 0
+    for k in ("drop_rate", "down_bps", "up_bps", "obstructed_fraction", "obstructed_time"):
+        if d[k] is None:
+            d[k] = 0
     if outage_m:
         cause = _int(outage_m, 1) or 0
         start = _int(outage_m, 2)

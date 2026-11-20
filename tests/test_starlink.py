@@ -77,6 +77,15 @@ def test_what_the_dish_says_decides_the_colour(dish, change, ok, level, words):
     assert got[0] is ok and got[3] == level and words in got[2], got
 
 
+def test_zeros_the_dish_leaves_out_count_as_zero(dish):
+    """proto3 omits 0: a clear sky and no dropped pings must still show as 0, not as unknown (seen on a Mini)."""
+    dish.status = {**fk.healthy(), "pop_ping_drop_rate": 0.0, "downlink_throughput_bps": 0.0, "uplink_throughput_bps": 0.0,
+                   "obstruction_stats": {}}
+    d = read(dish.addr)
+    assert (d["drop_rate"], d["down_bps"], d["up_bps"], d["obstructed_time"], d["obstructed_fraction"]) == (0, 0, 0, 0, 0)
+    assert sl.evaluate(d)[2] == "Starlink online, 31.5 ms, 0.0% drops, ↓ 0.0 Mb/s ↑ 0.0 Mb/s"
+
+
 def test_update_and_restart_details(dish):
     dish.status = {**fk.healthy(), "software_update_state": 6, "swupdate_reboot_ready": True, "reboot_reason": 3}
     d = read(dish.addr)
