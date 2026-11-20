@@ -768,6 +768,20 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           </div>
           <p class="hint">To find the token, open any film or episode in Plex Web, choose <b>Get Info</b>, then <b>View XML</b>: it's at the very end of the <b>address</b> of the tab that opens (<code>…&amp;X-Plex-Token=<i>token</i></code>), not in the page itself. Or, on the Plex server, it's <code>PlexOnlineToken</code> in Plex's <code>Preferences.xml</code> (Linux, Docker) or, on Windows, in the registry under <code>HKEY_CURRENT_USER\Software\Plex, Inc.\Plex Media Server</code>. Rollcall reads the version, an update (amber, no alert) and what's playing, by whom; it goes red, with an alert, if Plex stops answering. The token is only ever sent to this address, and isn't shown again; moving the address to another machine means entering it again (switching to https, the port or its name is fine). Leave the address blank for port 32400 on this device; if Plex only accepts secure connections, HTTPS is used.</p>
         </div>
+        <div id="starlinkBox" hidden class="snmpbox">
+          <div class="fields">
+            <label class="field">Read the dish<select id="fSlSrc"><option value="local">From the dish, on the local network</option><option value="account">Through the Starlink account</option></select></label>
+            <label class="field" id="slAddrF">Dish address<input id="fSlAddr" maxlength="300" autocomplete="off" spellcheck="false" placeholder="192.168.100.1:9200"></label>
+          </div>
+          <div id="slAcct" hidden>
+            <div class="fields">
+              <label class="field">starlink.com cookie<input id="fSlCookie" type="password" maxlength="16000" autocomplete="new-password" spellcheck="false"></label>
+              <label class="field">Dish<span style="display:flex;gap:6px;align-items:center"><select id="fSlDish" style="flex:1;min-width:0"><option value="">Find the account's dishes first</option></select><button type="button" class="mini" id="slFind">Find dishes</button></span></label>
+            </div>
+            <p class="hint" id="slFindMsg" role="status"></p>
+          </div>
+          <p class="hint" id="slHint"></p>
+        </div>
         <div id="snmpBox" hidden class="snmpbox">
           <div class="fields">
             <label class="field">SNMP version<select id="fSnmpVer"><option value="2c">v2c (community)</option><option value="1">v1 (community; older kit)</option><option value="3">v3 (user and passwords)</option></select></label>
@@ -2392,7 +2406,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -2430,7 +2444,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 // "Up for" from the last report would freeze, and a device that's been off since yesterday kept saying "Up
 // for 2 h". Down (or unreachable): since when. Up but its agent silent: since its last report. Up and
@@ -3545,6 +3559,7 @@ function deviceSources(h) {
   if (h && h.ilo) out.push(["ilo", "iLO"]);
   if (h && h.services.some(x => x.kind === "jellyfin")) out.push(["jellyfin", "Jellyfin"]);
   if (h && h.services.some(x => x.kind === "plex")) out.push(["plex", "Plex"]);
+  if (h && h.services.some(x => x.kind === "starlink")) out.push(["starlink", "Starlink"]);
   if (h && h.ha_device) out.push(["ha", "Home Assistant"]);
   return out;
 }
@@ -3556,7 +3571,7 @@ function srcBadge(h, kind) {
 function showSourceTabs(key, active) {
   const h = data && data.hosts.find(x => x.key === key), src = deviceSources(h), nav = document.getElementById("detTabs");
   if (src.length < 2) { nav.hidden = true; return; }
-  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : ""}</button>`).join("");
+  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : ""}</button>`).join("");
   nav.hidden = false;
 }
 // In agent view: SNMP and Logs added after the agent's tabs.
@@ -3565,14 +3580,14 @@ function appendSourceTabs(key) {
   const extra = deviceSources(h).filter(([k]) => k !== "agent");
   if (!extra.length) return;
   nav.insertAdjacentHTML("beforeend", `<span class="tabsep"></span>` + extra.map(([k, n]) =>
-    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : srcBadge(h, "syslog")}</button>`).join(""));
+    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : srcBadge(h, "syslog")}</button>`).join(""));
 }
 document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dsrc]");
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
   if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey);
-  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "plex") openPlex(detKey); else openLogs(detKey);
+  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "plex") openPlex(detKey); else if (k === "starlink") openStarlink(detKey); else openLogs(detKey);
 });
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
@@ -3715,6 +3730,51 @@ function openPlex(key) {
     `<tr><td><b>${esc(a.title)}</b>${a.subtitle ? `<br><small class="muted">${esc(a.subtitle)}</small>` : ""}</td><td>${a.progress == null ? "—" : `<div class="bar" style="width:110px"><i style="width:${Math.min(100, a.progress)}%"></i></div><small class="muted">${a.progress}%</small>`}</td></tr>`)));
   if ((px.library || []).length) html += sect("Libraries", `<div class="kv">${px.library.map(l => kv(esc(l.name),
     `${Number(l.count).toLocaleString()} ${({movie: "films", show: "series", artist: "artists", photo: "items"})[l.type] || "items"}${l.episodes != null ? `<br><small class="muted">${Number(l.episodes).toLocaleString()} episodes</small>` : ""}`)).join("")}</div>`);
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+// ---- Starlink (starlink.py): the dish's status, from the dish or the account ----
+const slMb = bps => bps == null ? "—" : (bps / 1e6 < 100 ? (bps / 1e6).toFixed(1) : Math.round(bps / 1e6)) + " Mb/s";
+function slTiles(sl) {
+  if (!sl) return [];
+  const t = [], o = sl.outage;
+  t.push(["Starlink", sl.disabled ? "Disabled" : o ? "Offline" : "Online", sl.disabled || (o ? o.cause + (o.for_s ? " · " + fmtUp(o.for_s) : "") : sl.uptime_s != null ? "up " + fmtUp(sl.uptime_s) : ""), sl.disabled || o ? "hot" : ""]);
+  if (sl.latency_ms != null) t.push(["Latency", Math.round(sl.latency_ms) + " ms", sl.drop_rate == null ? "" : (sl.drop_rate * 100).toFixed(1) + "% pings dropped", sl.drop_rate > 0.05 ? "warm" : ""]);
+  t.push(["Download now", slMb(sl.down_bps), "upload " + slMb(sl.up_bps)]);
+  if (sl.obstructed_time != null) t.push(["Obstructed", (sl.obstructed_time * 100).toFixed(1) + "%", sl.obstructed_now ? "obstructed right now" : "of the time", sl.obstructed_time > 0.01 ? "warm" : ""]);
+  return t;
+}
+function openStarlink(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  document.getElementById("detTitle").textContent = h.name;
+  detMode = "starlink"; detKey = key; renderDetActions();
+  showSourceTabs(key, "starlink");
+  if (!detDlg.open) detDlg.showModal();
+  const sl = h.starlink, chk = h.services.find(x => x.kind === "starlink"), body = document.getElementById("detBody"), top = body.scrollTop;
+  const via = h.starlink_source === "account" ? "through the Starlink account" : "from the dish at " + (h.starlink_addr || "192.168.100.1:9200");
+  document.getElementById("detSub").textContent = ["Starlink", sl && sl.hardware, h.starlink_source === "account" ? h.starlink_dish_name : ""].filter(Boolean).join(" · ");
+  if (!sl) { body.innerHTML = sect("Starlink", `<p class="empty-note">${esc(chk && chk.detail ? "Couldn't read the dish: " + chk.detail : "Not read yet: it's read at each check.")}</p><p class="hint">Read ${esc(via)}.</p>`); return; }
+  const now = data.now || Date.now() / 1000;
+  const tiles = slTiles(sl).map(([l, v, sub, cls]) => `<div class="tile ${cls || ""}"><span class="lbl">${esc(l)}</span><b${/^[\d.,\s%]+(ms|Mb\/s)?%?$/.test(v) ? "" : ' style="font-size:19px;padding:4px 0 3px"'}>${esc(v)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`).join("");
+  const al = sl.alerts || [], probs = al.filter(a => a.level !== "info");
+  if (sl.obstructed_time > 0.01) probs.push({what: "Obstructed " + (sl.obstructed_time * 100).toFixed(1) + "% of the time", level: "warn",
+    detail: "Something is blocking part of the dish's view of the sky. The Starlink app's Obstructions view shows where."});
+  if (sl.stowed) probs.push({what: "Stowed", level: "warn"});
+  const lvl = a => a.level === "crit" ? "red" : "amber";
+  let html = `<div class="tiles" style="margin-bottom:14px">${tiles}</div>`;
+  html += sect("Checks", sl.outage || sl.disabled || probs.length
+    ? `<div class="checklist">${sl.disabled ? `<div><span class="dot red" style="margin-top:4px"></span><span><b>Service disabled</b><small>${esc(sl.disabled)}</small></span></div>` : ""}${sl.outage ? `<div><span class="dot red" style="margin-top:4px"></span><span><b>Outage: ${esc(sl.outage.cause)}</b><small>${sl.outage.for_s ? "for " + esc(fmtUp(sl.outage.for_s)) : ""}</small></span></div>` : ""}${probs.map(a => `<div><span class="dot ${lvl(a)}" style="margin-top:4px"></span><span><b>${esc(a.what.charAt(0).toUpperCase() + a.what.slice(1))}</b>${a.detail ? `<small>${esc(a.detail)}</small>` : ""}</span></div>`).join("")}</div>`
+    : `<p class="empty-note">✓ Online, nothing needs attention.</p>`);
+  const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+  const notes = al.filter(a => a.level === "info").map(a => a.what);
+  html += sect("Dish", `<div class="kv">${[kv("Hardware", esc(sl.hardware || "")), kv("Software", esc(sl.software || "")),
+    kv("Update", sl.update_ready ? "Installed; the dish restarts itself to finish it" : esc(sl.update ? sl.update.charAt(0).toUpperCase() + sl.update.slice(1) : "")),
+    kv("Up since", sl.since ? esc(new Date(sl.since * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})) + (sl.reboot_reason ? ` <small class="muted">${esc(sl.reboot_reason)}</small>` : "") : ""),
+    kv("Ethernet", sl.eth_mbps ? sl.eth_mbps + " Mb/s" : ""), kv("Signal", sl.snr_ok === false || sl.snr_low ? `<b class="old">weak</b>` : sl.snr_ok ? "above the noise" : ""),
+    kv("Obstruction map", sl.obstructed_fraction != null ? (sl.obstructed_fraction * 100).toFixed(2) + "% of the sky blocked" + (sl.obstruction_window_s ? ` <small class="muted">over ${esc(fmtUp(sl.obstruction_window_s))}</small>` : "") : ""),
+    kv("Also", esc(notes.join(", "))), kv("Country", esc(sl.country || "")),
+    kv("Read", esc(via) + (sl.read_at ? ` <small class="muted">${ago(sl.read_at, now)}${sl.ms != null ? ", answered in " + sl.ms + " ms" : ""}</small>` : ""))].join("")}</div>`);
   body.innerHTML = html;
   body.scrollTop = top;
 }
@@ -3904,6 +3964,7 @@ function renderOverview(h, sn, lg, ha) {
   for (const r of ((rd && rd.sensors) || []).slice(0, 4))
     tiles.push(tile(esc(r.label.replace(/^Temperature \((\w+)\)$/, "Temp $1")), `${esc(String(r.value))} ${esc(r.unit)}`, spark(r.series) || (r.min === r.max ? "steady" : `${r.min}–${r.max}`),
       r.level === "crit" ? "hot" : r.level === "warn" ? "warm" : "", "logs"));
+  for (const t of slTiles(h.starlink)) tiles.push(tile(esc(t[0]), esc(t[1]), esc(t[2] || ""), t[3] || "", "starlink"));
   const hd = ha && ha.data;
   for (const t of (hd && hd.tiles) || [])
     tiles.push(tile(esc(t.label), typeof t.value === "number" ? t.value.toLocaleString() + (t.unit ? esc(t.unit) : "") : esc(String(t.value)), esc(t.sub || ""),
@@ -3975,6 +4036,7 @@ document.getElementById("detBody").addEventListener("click", e => {
   const j = e.target.closest("[data-ovjump]");
   if (!j || detMode !== "overview" || !detKey) return;
   if (j.dataset.ovjump === "snmp") openSnmp(detKey); else if (j.dataset.ovjump === "logs") openLogs(detKey);
+  else if (j.dataset.ovjump === "starlink") openStarlink(detKey);
   else if (j.dataset.ovjump === "ha") { const el = document.getElementById("ovHa"); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); }
 });
 document.getElementById("detBody").addEventListener("keydown", e => {
@@ -5094,6 +5156,28 @@ function syncCritical() { const n = document.getElementById("fNoAlerts"), c = do
 document.getElementById("fNoAlerts").addEventListener("change", syncCritical);
 fHost.addEventListener("input", hostViaHint);
 let PRESETS = null, ALIASES = {}, editing = null;
+function slShow() {
+  const acct = document.getElementById("fSlSrc").value === "account";
+  document.getElementById("slAcct").hidden = !acct;
+  document.getElementById("slAddrF").hidden = acct;
+  document.getElementById("slHint").innerHTML = acct
+    ? `For a dish Home Assistant can't reach, e.g. at another site. Sign in at <b>starlink.com</b> in a <b>private window</b>, open the browser's developer tools (F12), <b>Network</b>, click any request to starlink.com and copy the whole <b>cookie</b> request header, then paste it here and choose <b>Find dishes</b>. The cookie is only ever sent to starlink.com, and isn't shown again. Rollcall only reads: it can't restart or stow the dish. Signing in again in the same browser ends this sign-in (amber, "sign-in expired", no alert): close the private window instead of signing out. This uses starlink.com's unofficial API, which may change.`
+    : `Reads the dish's own status, with no sign-in. The dish always answers on <b>192.168.100.1:9200</b>; with the Starlink router in bypass mode, your router needs a route to it (see the add-on's documentation). Leave the address blank unless your router maps the dish somewhere else. Goes red, with an alert, while the dish reports an outage or can't be reached; its own warnings (obstructions, motors, heat, Ethernet) are amber, without an alert.`;
+}
+document.getElementById("fSlSrc").addEventListener("change", slShow);
+document.getElementById("slFind").addEventListener("click", async () => {
+  const msg = document.getElementById("slFindMsg"), sel = document.getElementById("fSlDish"), cookie = document.getElementById("fSlCookie").value.trim();
+  msg.textContent = "Asking starlink.com…";
+  try {
+    const r = await fetch("api/starlink/dishes", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({cookie, key: editing ? editing.key : ""})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = j.error || ("HTTP " + r.status); return; }
+    const was = sel.value;
+    sel.innerHTML = (j.dishes || []).map(d => `<option value="${esc(d.id)}"${d.id === was ? " selected" : ""}>${esc(d.name)}</option>`).join("") || `<option value="">No dishes on this account</option>`;
+    msg.textContent = (j.dishes || []).length ? `${j.dishes.length} dish${j.dishes.length === 1 ? "" : "es"} on the account.` : "The account has no dishes.";
+  } catch (e) { msg.textContent = "Couldn't ask: " + e.message; }
+});
 
 async function loadPresets() {
   if (PRESETS) return;
@@ -5151,6 +5235,7 @@ function updatePicked() {
   document.getElementById("iloBox").hidden = !form.querySelector('.preset input[value="hpilo"]:checked');
   document.getElementById("jellyfinBox").hidden = !form.querySelector('.preset input[value="jellyfin-api"]:checked');
   document.getElementById("plexBox").hidden = !form.querySelector('.preset input[value="plex-api"]:checked');
+  document.getElementById("starlinkBox").hidden = !form.querySelector('.preset input[value="starlink"]:checked');
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -5444,6 +5529,13 @@ async function openDialog(h) {
   const jfKey = document.getElementById("fJfKey"); jfKey.value = ""; jfKey.placeholder = h && h.jellyfin_key_set ? "Unchanged (type to replace)" : "";
   document.getElementById("fPxUrl").value = h ? (h.plex_url || "") : "";
   const pxKey = document.getElementById("fPxKey"); pxKey.value = ""; pxKey.placeholder = h && h.plex_token_set ? "Unchanged (type to replace)" : "";
+  document.getElementById("fSlSrc").value = h ? (h.starlink_source || "local") : "local";
+  document.getElementById("fSlAddr").value = h ? (h.starlink_addr || "") : "";
+  const slCk = document.getElementById("fSlCookie"); slCk.value = ""; slCk.placeholder = h && h.starlink_cookie_set ? "Unchanged (paste to replace)" : "";
+  document.getElementById("fSlDish").innerHTML = h && h.starlink_dish
+    ? `<option value="${esc(h.starlink_dish)}">${esc(h.starlink_dish_name || h.starlink_dish)}</option>` : `<option value="">Find the account's dishes first</option>`;
+  document.getElementById("slFindMsg").textContent = "";
+  slShow();
   document.getElementById("presetFilter").value = "";
   document.getElementById("haSearch").value = h ? h.name : "";
   document.getElementById("haResults").innerHTML = "";
@@ -5510,6 +5602,18 @@ form.addEventListener("submit", async e => {
     const k = document.getElementById("fPxKey").value.trim();
     if (k) body.plex_token = k;
     if (!k && !(editing && editing.plex_token_set)) { err.textContent = "Enter the Plex token, or untick Plex (token)."; return document.getElementById("fPxKey").focus(); }
+  }
+  if (!document.getElementById("starlinkBox").hidden) {
+    body.starlink_source = document.getElementById("fSlSrc").value;
+    body.starlink_addr = body.starlink_source === "local" ? document.getElementById("fSlAddr").value.trim() : "";
+    if (body.starlink_source === "account") {
+      const c = document.getElementById("fSlCookie").value.trim(), sel = document.getElementById("fSlDish");
+      if (c) body.starlink_cookie = c;
+      if (!c && !(editing && editing.starlink_cookie_set)) { err.textContent = "Paste the starlink.com cookie, or read the dish from the local network."; return document.getElementById("fSlCookie").focus(); }
+      if (!sel.value) { err.textContent = "Choose the dish (Find dishes lists the account's)."; return document.getElementById("slFind").focus(); }
+      body.starlink_dish = sel.value;
+      body.starlink_dish_name = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : "";
+    }
   }
   if (!document.getElementById("syslogBox").hidden) {
     body.syslog_alert = +document.getElementById("fSysAlert").value;

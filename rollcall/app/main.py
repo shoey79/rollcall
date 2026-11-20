@@ -63,6 +63,7 @@ import ilo as ilolib
 import iprange
 import jellyfin as jflib
 import plex as pxlib
+import starlink as sllib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
@@ -319,6 +320,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("onvif", "ONVIF camera", _NET, [("RTSP", "tcp:554"), ("ONVIF", "tcp:2020")]),
     ("voip", "VoIP / SIP", _NET, [("SIP", "sip:5060")]),
     ("ata2", "Two-line ATA", _NET, [("Line 1", "sip:5060"), ("Line 2", "sip:5061")]),
+    ("starlink", "Starlink dish", _NET, [("Starlink", "starlink:device")]),
     # Home & automation
     ("homeassistant", "Home Assistant", _HOME, [("Home Assistant", "http:8123/")]),
     ("nodered", "Node-RED", _HOME, [("Node-RED", "http:1880/")]),
@@ -378,6 +380,7 @@ PRESET_NOTES = {
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
     "jellyfin-api": "Version, pending restart, updates, failed scheduled tasks and active streams (needs a Jellyfin API key)",
     "plex-api": "Version, updates and what's playing, by whom (needs a Plex token)",
+    "starlink": "Starlink dish: online, outages, obstructions, latency, drops, throughput and the dish's own alerts",
     "printer": "Network printer (raw printing on 9100)",
     "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
     "cert": "Warns before the HTTPS certificate on 443 expires",
@@ -406,7 +409,7 @@ ALIASES = {
     "mosquitto": "mqtt", "bitwarden": "vaultwarden", "kuma": "uptimekuma",
     "jellyseerr": "overseerr", "forgejo": "gitea", "pi-hole": "pihole",
     "sip": "voip", "ata": "voip", "pbx": "voip", "phone": "voip", "asterisk": "voip", "freepbx": "voip", "3cx": "voip",
-    "spa112": "ata2", "spa122": "ata2",
+    "spa112": "ata2", "spa122": "ata2", "dishy": "starlink", "satellite": "starlink",
 }
 
 
@@ -426,6 +429,8 @@ def preset_summary(name: str) -> str:
             return "health and tasks, with an API key"
         if spec == "plex:device":
             return "what's playing, with a Plex token"
+        if spec == "starlink:device":
+            return "status, outages and alerts"
         if kind == "tcp":
             return f"TCP {rest}"
         if kind == "cert":
@@ -567,6 +572,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "Jellyfin", "kind": "jellyfin", "port": None, "url": None, "desc": "jellyfin api"}]
     if low == "plex:device":
         return [{"label": label or "Plex", "kind": "plex", "port": None, "url": None, "desc": "plex api"}]
+    if low == "starlink:device":
+        return [{"label": label or "Starlink", "kind": "starlink", "port": None, "url": None, "desc": "starlink"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -884,6 +891,21 @@ def validate_entry(raw: dict) -> dict:
             if not pxlib.TOKEN_RE.match(key):
                 raise ValueError("That doesn't look like a Plex token (letters, numbers, - and _, usually 20)")
             entry["plex_token"] = key
+    if "starlink_source" in raw:
+        src = str(raw.get("starlink_source") or "local")
+        if src not in ("local", "account"):
+            raise ValueError("Read the Starlink dish locally or through the account")
+        entry["starlink_source"] = src
+        addr = str(raw.get("starlink_addr") or "").strip()
+        entry["starlink_addr"] = sllib.clean_addr(addr) if addr else ""
+        cookie = str(raw.get("starlink_cookie") or "").strip()
+        if cookie:
+            entry["starlink_cookie"] = sllib.clean_cookie(cookie)
+        dish = str(raw.get("starlink_dish") or "").strip()
+        if dish and not re.match(r"^[A-Za-z0-9._\-]{4,100}$", dish):
+            raise ValueError("That isn't a Starlink dish from the account")
+        entry["starlink_dish"] = dish
+        entry["starlink_dish_name"] = str(raw.get("starlink_dish_name") or "").strip()[:100]
     comm = raw.get("snmp_community")
     if comm not in (None, ""):
         comm = str(comm)
@@ -1695,6 +1717,13 @@ class Host:
     px_key: str = ""                   # Plex token: only ever sent to px_url, never shown again
     px_data: dict | None = None        # its latest reading
     px_base: str = ""                  # the address that last answered (https when Plex drops plain HTTP)
+    sl_source: str = "local"           # Starlink: read the dish itself ("local") or through the account ("account")
+    sl_addr: str = ""                  # the dish's local API ("" = 192.168.100.1:9200)
+    sl_cookie: str = ""                # starlink.com session cookie: only ever sent to starlink.com, never shown again
+    sl_dish: str = ""                  # the account's dish to read (its id, "ut...")
+    sl_dish_name: str = ""
+    sl_data: dict | None = None        # its latest reading
+    sl_state: dict = field(default_factory=dict)  # the short-lived starlink.com token (not saved)
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
     ha_more: list = field(default_factory=list)  # more linked HA devices: [{"id", "name"}] (1.93.0)
@@ -1901,6 +1930,10 @@ class Monitor:
                 **({"jellyfin_key": h.jf_key} if h.jf_key else {}),
                 **({"plex_url": h.px_url} if h.px_url else {}),
                 **({"plex_token": h.px_key} if h.px_key else {}),
+                **({"starlink_source": h.sl_source} if h.sl_source != "local" else {}),
+                **({"starlink_addr": h.sl_addr} if h.sl_addr else {}),
+                **({"starlink_cookie": h.sl_cookie} if h.sl_cookie else {}),
+                **({"starlink_dish": h.sl_dish, "starlink_dish_name": h.sl_dish_name} if h.sl_dish else {}),
                             **({"readings_cfg": h.readings_cfg} if h.readings_cfg else {}),
                             **({"syslog_alert": h.syslog_alert} if h.syslog_alert != 3 else {}),
                             **({"syslog_keywords": h.syslog_keywords} if h.syslog_keywords else {}),
@@ -1939,6 +1972,10 @@ class Monitor:
         h.jf_key = str(entry.get("jellyfin_key") or "")[:128]
         h.px_url = str(entry.get("plex_url") or "")[:300]
         h.px_key = str(entry.get("plex_token") or "")[:128]
+        h.sl_source = "account" if entry.get("starlink_source") == "account" else "local"
+        h.sl_addr = str(entry.get("starlink_addr") or "")[:300]
+        h.sl_cookie = str(entry.get("starlink_cookie") or "")[:16000]
+        h.sl_dish, h.sl_dish_name = str(entry.get("starlink_dish") or "")[:100], str(entry.get("starlink_dish_name") or "")[:100]
         try:
             h.snmp_restart_ack = float(entry.get("snmp_restart_ack") or 0)
             h.snmp_acks = ({str(k)[:200]: v for k, v in entry["snmp_acks"].items() if v in ("warn", "crit")}
@@ -2002,6 +2039,15 @@ class Monitor:
                 h.px_key = ""  # a token only goes to the server it was given for: enter it again for a new one
                 log.info("%s: Plex address changed, so its token was cleared", h.name)
             h.px_url, h.px_data = new_url, None
+        if "starlink_source" in entry:
+            new = (entry["starlink_source"], entry.get("starlink_addr", ""), entry.get("starlink_dish", ""))
+            if new != (h.sl_source, h.sl_addr, h.sl_dish):
+                h.sl_data = None
+            h.sl_source, h.sl_addr, h.sl_dish = new
+            h.sl_dish_name = entry.get("starlink_dish_name", "") or (h.sl_dish_name if h.sl_dish else "")
+            if entry.get("starlink_cookie"):              # blank keeps the one already set
+                h.sl_cookie, h.sl_state = entry["starlink_cookie"], {}
+                h.sl_data = None
         if "check_by" in entry:
             h.check_by = entry["check_by"]
             h.next_due = 0
@@ -2659,6 +2705,8 @@ class Monitor:
                 return await self.jellyfin_check(h)
             if s.kind == "plex":
                 return await self.plex_check(h)
+            if s.kind == "starlink":
+                return await self.starlink_check(h)
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -2970,6 +3018,33 @@ class Monitor:
         h.px_base = d.pop("base", "") or ""
         h.px_data = d
         return pxlib.evaluate(d)
+
+    async def starlink_check(self, h: Host) -> tuple:
+        """A Starlink dish (starlink.py): from the dish's local API, or through the Starlink account."""
+        try:
+            if h.sl_source == "account":
+                if not h.sl_cookie:
+                    h.sl_data = None
+                    return False, None, "paste the starlink.com sign-in under Edit", "warn"
+                if not h.sl_dish:
+                    h.sl_data = None
+                    return False, None, "choose the dish under Edit", "warn"
+                acct = sllib.Account(h.sl_cookie, h.sl_state, health_tls_context())
+                try:
+                    async with ClientSession() as session:
+                        d = await acct.status(session, h.sl_dish)
+                finally:
+                    if acct.changed and acct.cookie != h.sl_cookie:  # starlink.com renewed part of it: keep that
+                        h.sl_cookie = acct.cookie
+                        self._save_hosts()
+            else:
+                d = await sllib.read_local(h.sl_addr or sllib.DEFAULT_ADDR, timeout=max(self.svc_timeout, 10))
+        except sllib.StarlinkError as err:
+            h.sl_data = None
+            return (False, None, str(err), "warn") if err.login else (False, None, str(err))
+        d["read_at"] = int(time.time())
+        h.sl_data = d
+        return sllib.evaluate(d)
 
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
@@ -5144,6 +5219,8 @@ class Monitor:
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
                 "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
+                "starlink_source": h.sl_source, "starlink_addr": h.sl_addr, "starlink_cookie_set": bool(h.sl_cookie),
+                "starlink_dish": h.sl_dish, "starlink_dish_name": h.sl_dish_name, "starlink": h.sl_data,
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
                 "ip_range": ranges.name_of(h.ip), "parent": h.parent if h.parent in self.hosts else "", "unreachable": h.unreachable,
                 "upstream_down": self.hosts[h.upstream_down].name if h.upstream_down in self.hosts else None,
@@ -6225,6 +6302,30 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         except ValueError as err:
             raise web.HTTPBadRequest(text=json.dumps({"error": str(err)}), content_type="application/json")
 
+    async def starlink_dishes(req):
+        """The dishes on a Starlink account, for the Edit form: from the cookie typed in, or the one a device has."""
+        try:
+            raw = await req.json()
+        except ValueError:
+            raw = {}
+        cookie, h = str((raw or {}).get("cookie") or "").strip(), monitor.hosts.get(str((raw or {}).get("key") or ""))
+        try:
+            cookie = sllib.clean_cookie(cookie) if cookie else (h.sl_cookie if h else "")
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        if not cookie:
+            return web.json_response({"error": "Paste the starlink.com cookie first."}, status=400)
+        acct = sllib.Account(cookie, h.sl_state if h and cookie == h.sl_cookie else {}, health_tls_context())
+        try:
+            async with ClientSession() as session:
+                dishes = await acct.dishes(session)
+        except sllib.StarlinkError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        if h and cookie == h.sl_cookie and acct.changed:
+            h.sl_cookie = acct.cookie
+            monitor._save_hosts()
+        return web.json_response({"dishes": dishes})
+
     async def add_host(req):
         entry = await read_entry(req)
         check_v3(entry, None)
@@ -6700,6 +6801,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_get("/api/settings", editor_only(settings_get))
     app.router.add_post("/api/settings", editor_only(settings_post))
     app.router.add_get("/api/export", editor_only(export_data))
+    app.router.add_post("/api/starlink/dishes", editor_only(starlink_dishes))
     app.router.add_post("/api/import", editor_only(import_data))
     app.router.add_post("/api/import/chunk", editor_only(import_chunk))
     app.router.add_get("/api/ha/entities", editor_only(ha_entities))

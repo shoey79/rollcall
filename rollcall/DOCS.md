@@ -27,7 +27,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding devices, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
+4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, Starlink, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
@@ -318,6 +318,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `onvif` (or `tapo`) | ONVIF camera: IP camera with RTSP and ONVIF, e.g. TP-Link Tapo | RTSP 554 · ONVIF 2020 |
 | `voip` (or `sip`, `ata`, `pbx`, `phone`, `asterisk`, `freepbx`, `3cx`) | VoIP / SIP: VoIP phone, ATA or PBX (SIP on UDP 5060) | sip:5060 |
 | `ata2` (or `spa112`, `spa122`) | Two-line ATA: Two-line ATA, e.g. Cisco SPA112/122 (SIP lines 1 and 2) | Line 1 sip:5060 · Line 2 sip:5061 |
+| `starlink` (or `dishy`, `satellite`) | Starlink dish: online, outages, obstructions, latency, drops, throughput and the dish's own alerts; see [Starlink](#starlink) | starlink:device |
 | **Home & automation** | | |
 | `homeassistant` (or `ha`) | Home Assistant | http:8123/ |
 | `nodered` (or `node-red`) | Node-RED | http:1880/ |
@@ -597,6 +598,40 @@ The `plex` preset only checks that Plex's `/identity` page answers. For more, ti
   - **Busy with:** what Plex is doing in the background, such as a library scan, and how far it's got;
   - **Libraries:** each one's size (films, series and their episodes, artists...).
 - **The token** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Plex's `X-Plex-Token` header (not the address, so it doesn't end up in logs). Redirects aren't followed. Moving the address to another machine needs it entering again; switching to https, changing the port, or using the server's name instead of its IP keeps it.
+
+### Starlink
+
+Tick **Starlink dish** (`starlink`, under Network) to watch a Starlink dish. Rollcall reads the dish's own status, the same figures the Starlink app shows, in one of two ways, chosen under **Edit**:
+
+- **From the dish, on the local network** (the default, no sign-in). The dish always answers on **192.168.100.1**, port **9200** (gRPC, the same local API Home Assistant's own Starlink integration uses). Leave the address blank to use that, or enter another if your router maps the dish somewhere else.
+- **Through the Starlink account**, for a dish Home Assistant can't reach, such as at another site. See [Through the Starlink account](#through-the-starlink-account) below.
+
+What it shows, at each check:
+- **Red, with an alert:** the dish reports an **outage** (with the reason Starlink gives: obstructed, no satellites, starting up, stowed, too hot...), it has **shut down because it's too hot**, its **service is disabled** (e.g. no active account), or it can't be reached at all. Like a port check, it's amber at the first miss and red if it's still failing at the next check.
+- **Amber, never an alert:** the dish's own warnings: **motors stuck**, **mast not vertical**, **too hot, slowed down**, **slow Ethernet link**, a weaker signal than expected, water detected; **obstructions** cutting it off for more than 1% of the time; **stowed**; and, through the account, the sign-in having expired.
+- **Shown only:** heating (melting snow), power-save idle, roaming, and an update downloading or installed (the dish restarts itself for updates).
+- Green says what it's doing, e.g. *Starlink online, 31.5 ms, 0.2% drops, ↓ 48.2 Mb/s ↑ 5.1 Mb/s*; the latency also goes in the device's response-time chart.
+- **The Starlink tab** in Details: status and how long it's been up, latency and pings dropped, throughput now, how much of the time it's been obstructed, anything that needs attention, then the hardware and software versions, an update waiting, when and why it last restarted, the Ethernet link speed, the signal, and how much of the sky is blocked. The same tiles appear on the device's Overview.
+- Rollcall only reads: it never asks the dish to restart, stow or change anything.
+
+**Reaching the dish's address.** With the Starlink router in its normal mode, devices on its network reach 192.168.100.1 directly. With the router in **bypass mode** (your own router or firewall doing the routing), your router needs to send 192.168.100.1 out of its Starlink connection, with that connection's address as the source (NAT/masquerade), which most do already for anything not on the local network. Then allow Home Assistant to reach 192.168.100.1 on TCP 9200. To test from Home Assistant's terminal: `curl -v telnet://192.168.100.1:9200` should connect.
+
+- **If one of your own networks is 192.168.100.0/24**, it clashes with the dish's address: your router sends 192.168.100.1 to that network instead. Either renumber that network, or, if nothing there uses .1 (its gateway is another address), add a **host route** for 192.168.100.1/32 out of the Starlink connection, with NAT on that connection. A /32 is more specific than the /24, so only the dish's address is sent to Starlink. On some firewalls, VPN routes are used before static routes (on Sophos Firewall, see `system route_precedence show` on the console): put static routes first, or use a policy route for 192.168.100.1 instead.
+- **A dish at another site**: reach it over a site-to-site VPN with a route to 192.168.100.1 at that site (and the same care if 192.168.100.0/24 is used anywhere), or read it through the account.
+
+#### Through the Starlink account
+
+For a dish Home Assistant can't reach. Rollcall reads the same status through starlink.com, signed in as you, the way the community integration *ha-starlink-remote* does:
+
+1. Open a **private (incognito) window** and sign in at **starlink.com**.
+2. Open the browser's developer tools (**F12**), choose **Network**, and click any request to `starlink.com`.
+3. Under **Request headers**, copy the whole value of **cookie** (it includes `Starlink.Com.Sso`).
+4. In Rollcall, **Edit** the device, choose **Through the Starlink account**, paste it, choose **Find dishes** and pick the dish.
+5. Close the private window; don't sign out, which would end this sign-in too.
+
+- **The cookie** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to starlink.com** (redirects aren't followed). Parts of it that starlink.com renews are kept. Rollcall only reads; nothing it sends can restart or stow the dish.
+- **It expires** if you sign in again in the same browser, or after a while: the check turns amber with *Starlink sign-in expired: paste a new cookie under Edit*, without an alert. A private window avoids the first.
+- **This is starlink.com's unofficial API**, used by its own website, so it may change without notice; if it stops working, Rollcall says so rather than guessing. Starlink Business accounts also have an official API with service accounts, which Rollcall doesn't use (yet).
 
 ### Upstream devices
 
