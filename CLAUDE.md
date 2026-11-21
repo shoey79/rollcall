@@ -42,7 +42,4 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-- LAPS "hasn't been on the domain network since <date>" (issue 16).
-- Manage → Database: sizes, what takes the room, daily integrity check, disk space, Compact now, Rollcall tile.
-- Hints for errors (issue 16): built-in table, and optional hints from Claude (off by default, redacted, cached,
-  daily limit).
+(none)
