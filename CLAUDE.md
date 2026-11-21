@@ -54,5 +54,4 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-- Starlink alignment (compass, elevation gauge, amber when well off) and obstruction map on the Starlink tab;
-  checked against the owner's dish (local). Account mode's map not confirmed yet.
+(none)
