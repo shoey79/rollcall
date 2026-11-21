@@ -28,35 +28,21 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- LAPS (issue 16, tomvining): when a device hasn't been able to reach a domain controller (Group Policy / time sync
-  failing too, or it's been off/away), say "hasn't been on the domain network since <date>" instead of a bare LAPS
-  error code, and don't alert for LAPS alone in that case.
+(none)
 
 ## Requested features (not started)
 
 Features the owner has asked for, to build when they say (he'll say once there's a reasonable number to build
 together). Remove each once it's released.
 
-- Database details and health (owner asked 20 Nov): Manage → Database. Details: database size, Rollcall's whole
-  data folder, free space on Home Assistant's disk; what takes the room (check history, readings, syslog messages,
-  agent metrics...) with size, row count, oldest entry, and how long each is kept. Health: SQLite quick_check daily
-  and on demand (damage = red with an alert, say to restore from an export/backup); free disk amber below 10%, red
-  below 5%; "Compact now" (VACUUM, admins only; check there's free space about the database's size first; it
-  briefly pauses writes). Health shown in the window and on a small Rollcall card on the Overview.
-
-- Hints for errors (issue 16, tomvining; owner asked 21 Nov). Two parts, the table first:
-  1. Built-in "what this usually means" table for well-known codes (LAPS events, Group Policy failures, Windows
-     Update HRESULTs, backup results...), shown under the error. Free, offline.
-  2. Claude hints, OFF by default (add-on setting, admins only): the admin's own Anthropic API key, kept like the
-     Plex token (never shown again, only sent to Anthropic's API). A 💡 by an amber/red check; clicking asks a small
-     fast model for a few sentences, marked as a suggestion from Claude; advice only. On request only, cached per
-     error, daily limit. Send only the check, error text/code and basic context; replace computer/account/domain
-     names and IPs with stand-ins first; never send security events, account lists or password-scan results.
-     Docs: what's sent, cost, privacy. Tests against a stand-in API, including the redaction.
+(none)
 
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-(none)
+- LAPS "hasn't been on the domain network since <date>" (issue 16).
+- Manage → Database: sizes, what takes the room, daily integrity check, disk space, Compact now, Rollcall tile.
+- Hints for errors (issue 16): built-in table, and optional hints from Claude (off by default, redacted, cached,
+  daily limit).
