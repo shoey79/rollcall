@@ -30,6 +30,9 @@ Remove each line once it's released.
 
 - SNMP: "Check now" also re-reads the port list (names/descriptions, normally every 6 hours in snmp.py's discovery),
   so a port description just changed on the switch shows straight away (owner asked 20 Nov, GS748). Say so in the docs.
+- Details: move the "Domain security" section (privileged groups, KRBTGT, accounts to review; PDC emulator only)
+  from the Security tab to the Domain tab (owner asked 21 Nov). Update the jump map (domain: ["security", ...] in
+  index.html) and the docs.
 
 ## Requested features (not started)
 
