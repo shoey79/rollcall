@@ -1692,6 +1692,7 @@ class Host:
     snmp_data: dict | None = None      # latest SNMP poll
     snmp_items: list[dict] = field(default_factory=list)  # problems found in it
     snmp_polled: float | None = None
+    snmp_rediscover: bool = False      # Check now: re-read the port list (names, descriptions) at the next poll
     snmp_restart_ack: float = 0        # start time of an acknowledged restart (not flagged)
     snmp_acks: dict = field(default_factory=dict)  # acknowledged problems: what -> its level (warn / crit) then
     snmp_vpn_ignore: list[str] = field(default_factory=list)  # Sophos VPN connections that never alert
@@ -2863,7 +2864,8 @@ class Monitor:
                 v3 = snmplib.V3(c.get("user", ""), c.get("auth"), c.get("auth_pass", ""), c.get("priv"), c.get("priv_pass", ""))
             d = await snmplib.poll(h.ip or h.host, h.snmp_community or "public", timeout=max(1.0, min(self.svc_timeout, 3.0)),
                                   v3=v3, version=1 if h.snmp_version == "1" else 2,
-                                  per=self._snmp_per(prev), discovery=(prev or {}).get("discovery"),
+                                  per=self._snmp_per(prev),
+                                  discovery=None if h.snmp_rediscover else (prev or {}).get("discovery"),
                                   ask_hr=(prev or {}).get("hr") is not False,  # stop asking a device that didn't answer
                                   port=int(os.environ.get("PM_SNMP_PORT", "161")))  # port: for testing
         except (snmplib.SnmpError, OSError) as err:
@@ -2876,6 +2878,7 @@ class Monitor:
             d["per_cap"], d["per_cap_at"] = prev["per_cap"], prev.get("per_cap_at")  # retried after 6 hours
         snmplib.red_activity(d, prev)
         h.snmp_data, h.snmp_polled = d, now
+        h.snmp_rediscover = False
         worst, items = self.snmp_eval(h, d, prev, prune=True)
         h.snmp_items = items
         if worst == "ok":
@@ -6139,6 +6142,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not h:
             raise web.HTTPNotFound()
         h.next_due = 0
+        h.snmp_rediscover = True     # someone wants it fresh: re-read the port names too (normally every 6 hours)
         return web.json_response({"queued": h.key})
 
     async def host_metrics(req):

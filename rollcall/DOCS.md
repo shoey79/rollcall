@@ -460,7 +460,7 @@ Whichever version you use, the device must allow Home Assistant's IP address. AP
 
 Rollcall reads the device at every check while it answers ping. The **SNMP** tab in Details shows what it found:
 
-- **Ports** (any switch): every physical port, with its description, speed and error counts. Tick **Alert** for ports that should always be up (uplinks, servers, access points): they go red if they drop, and amber if someone disables them. Other ports are just shown, so desktops going off at night don't alert.
+- **Ports** (any switch): every physical port, with its description, speed and error counts. Tick **Alert** for ports that should always be up (uplinks, servers, access points): they go red if they drop, and amber if someone disables them. Other ports are just shown, so desktops going off at night don't alert. The list of ports, with their names and descriptions, is re-read every 6 hours (each check only fetches the live values, which older switches cope with better); after renaming or describing a port on the switch, press **Check now** in Details to see it straight away.
 - **PoE** (switches with the standard PoE MIB, e.g. Netgear GS516TP): power used against the budget, amber at the switch's own alert threshold. A port in a PoE fault is red. A port's overload, short-circuit or power-denied count going up is amber. A PoE supply that's off or faulty is red.
 - **Buffalo TeraStation** (detected automatically): each disk's status and SMART health, RAID arrays and how full they are (amber at 90%, red at 97%), and the errors the NAS reports itself. A degraded or removed disk is red; a removed hot spare or a SMART warning is amber.
 - **UPS**: APC Network Management Cards are detected automatically. Other makes' network cards (Eaton, CyberPower, Riello, Socomec, Vertiv, Tripp Lite…) are read through the standard UPS-MIB. It shows output status, battery charge, runtime left, load, input and output voltage, battery temperature, when the battery was last replaced, the last self-test and runtime calibration, model, serial and firmware.
@@ -826,7 +826,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 **Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker, certificates and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
 
-In Details, **Group Policy** and **Time** are on their own **Domain** tab. **Microsoft Defender** (Security tab) shows when the last quick and full scans finished (agent 1.0.52 or later). While a device is down, off schedule or its agent has stopped reporting, **Signed in** says nobody (it's off) or not known (no recent report), rather than showing who was signed in at its last report; the same goes for the **Signed-in user** line under the name.
+In Details, **Group Policy** and **Time** are on their own **Domain** tab (and, from 1.94.2, **Domain security** on the PDC emulator). **Microsoft Defender** (Security tab) shows when the last quick and full scans finished (agent 1.0.52 or later). While a device is down, off schedule or its agent has stopped reporting, **Signed in** says nobody (it's off) or not known (no recent report), rather than showing who was signed in at its last report; the same goes for the **Signed-in user** line under the name.
 
 ### LAPS
 
@@ -960,7 +960,7 @@ The agent (1.0.23 or later) lists the certificates with a private key in the dev
 
 ### Domain security
 
-The domain-wide checks run on one domain controller only: the one holding the **PDC emulator** role (agent 1.0.28 or later). They're read from Active Directory once an hour, as the DC's own account, and are on its **Security** tab. Like security events, they're shown to admins and editors only.
+The domain-wide checks run on one domain controller only: the one holding the **PDC emulator** role (agent 1.0.28 or later). They're read from Active Directory once an hour, as the DC's own account, and are on its **Domain** tab, with Group Policy and Time. Like security events, they're shown to admins and editors only.
 
 - **Privileged groups:** the members of Domain Admins, Enterprise Admins, Schema Admins, Administrators, Account Operators, Server Operators, Backup Operators, Print Operators, DnsAdmins and Group Policy Creator Owners. Rollcall remembers who was there; anyone added later is highlighted with the time, and the check is **amber for 24 hours**. Removals are listed too. Members there when Rollcall first looked show as *before monitoring*. The DC's security log still reports each change as it happens (events 4728/4732/4756); this check covers changes made on any DC and gives the full picture.
 - **KRBTGT:** **amber** once its password is over 180 days old. Reset it twice, some hours apart, so tickets issued with the old key expire in between.
