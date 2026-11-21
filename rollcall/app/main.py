@@ -3033,6 +3033,10 @@ class Monitor:
                 try:
                     async with ClientSession() as session:
                         d = await acct.status(session, h.sl_dish)
+                except sllib.StarlinkError as err:
+                    # What starlink.com answered, step by step: status codes and cookie names only, never values
+                    log.warning("Starlink account for %s: %s [%s]", h.name, err, "; ".join(acct.trace[-12:]))
+                    raise
                 finally:
                     if acct.changed and acct.cookie != h.sl_cookie:  # starlink.com renewed part of it: keep that
                         h.sl_cookie = acct.cookie

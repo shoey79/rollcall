@@ -134,10 +134,15 @@ class FakeStarlinkCom:
     Reached through PM_STARLINK_TEST_BASE (http://127.0.0.1:port), each real host as the first path part."""
 
     SSO = "sso-made-up-0001"
+    IDLE = 600            # a session lapses 10 minutes after it was last kept alive (a visit to the account pages)
 
     def __init__(self):
         self.status: dict | None = healthy()
         self.expired = False
+        self.clock = 0.0                                  # the stand-in's own time: tests move it on
+        self.sessions = {self.SSO: self.IDLE}             # session cookie value -> when it lapses
+        self.revoked_access: set[str] = set()             # short-lived access cookies it has deleted
+        self.rotations = 0
         self.seen: list[tuple[str, str, dict]] = []      # (method, path, headers) of everything it was sent
         self.port = 0
         self._loop = asyncio.new_event_loop()
@@ -155,9 +160,25 @@ class FakeStarlinkCom:
 
         async def any_route(req):
             self.seen.append((req.method, req.path, dict(req.headers)))
-            cookie = req.headers.get("Cookie", "")
-            if self.expired or f"Starlink.Com.Sso={self.SSO}" not in cookie:
+            jar = dict(p.strip().partition("=")[::2] for p in req.headers.get("Cookie", "").split(";") if "=" in p)
+            sso = jar.get("Starlink.Com.Sso", "")
+            if self.expired or self.sessions.get(sso, -1) < self.clock:
                 return web.json_response({"error": "authenticated_user_required"}, status=401)
+            if jar.get("Starlink.Com.Access") in self.revoked_access:
+                return web.json_response({"error": "token_expired"}, status=401)
+            if req.path in ("/www.starlink.com/account/home", "/api.starlink.com/auth-rp/auth/user"):
+                # Keeping the session alive: a new session cookie (the old one lasts a minute more) and the
+                # short-lived access cookie from the browser deleted
+                self.rotations += 1
+                new = f"sso-made-up-{self.rotations + 1:04d}"
+                self.sessions[new] = self.clock + self.IDLE
+                self.sessions[sso] = min(self.sessions[sso], self.clock + 60)
+                if jar.get("Starlink.Com.Access"):
+                    self.revoked_access.add(jar["Starlink.Com.Access"])
+                resp = web.Response(text="<html>account</html>", content_type="text/html")
+                resp.headers.add("Set-Cookie", f"Starlink.Com.Sso={new}; Path=/; Domain=.starlink.com; Secure; HttpOnly; SameSite=None")
+                resp.headers.add("Set-Cookie", "Starlink.Com.Access=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+                return resp
             if req.path == "/starlink.com/api/auth/auth/refresh-token":
                 resp = web.json_response({"accessToken": "bearer-made-up-" + "x" * 30, "expiresIn": 3600})
                 resp.set_cookie("XSRF-TOKEN", "xsrf-rotated")
@@ -201,4 +222,8 @@ class FakeStarlinkCom:
 
     @classmethod
     def cookie(cls) -> str:
-        return f"_ga=GA1.1.made-up; Starlink.Com.Sso={cls.SSO}; XSRF-TOKEN=xsrf-first"
+        return f"_ga=GA1.1.made-up; Starlink.Com.Sso={cls.SSO}; Starlink.Com.Access=access-made-up; XSRF-TOKEN=xsrf-first"
+
+    def stale_browser_cookie_revoked(self):
+        """The browser's short-lived access cookie has expired on the server (it does within minutes)."""
+        self.revoked_access.add("access-made-up")

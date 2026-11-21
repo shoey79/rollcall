@@ -39,6 +39,8 @@ GRPC_PATH = "/SpaceX.API.Device.Device/Handle"
 ACCOUNT_API = "https://www.starlink.com/api/SpaceX.API.Device.Device/Handle"
 TOKEN_URL = "https://starlink.com/api/auth/auth/refresh-token"
 SERVICE_LINES_URL = "https://api.starlink.com/webagg/v2/accounts/service-lines"
+PORTAL_HOME_URL = "https://www.starlink.com/account/home"
+AUTH_USER_URL = "https://api.starlink.com/auth-rp/auth/user"
 STARLINK_HOSTS = ("starlink.com", "www.starlink.com", "api.starlink.com")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 ADDR_RE = re.compile(r"^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.\-]+)(:\d{1,5})?$")
@@ -402,6 +404,8 @@ class Account:
         self.state = state if state is not None else {}
         self.tls = tls
         self.changed = False
+        self.primed = False
+        self.trace: list[str] = []      # what each request did, for the log: status and cookie NAMES, never values
 
     @property
     def cookie(self) -> str:
@@ -413,13 +417,41 @@ class Account:
             h["X-XSRF-TOKEN"] = self.jar["XSRF-TOKEN"]
         if self.state.get("token") and time.time() < self.state.get("until", 0):
             h["Authorization"] = f"Bearer {self.state['token']}"
-        return {**h, **(extra or {})}
+        return {**h, **{k: v for k, v in (extra or {}).items() if not k.startswith("_")}}
 
-    def _keep(self, r: aiohttp.ClientResponse) -> None:
-        for k, morsel in r.cookies.items():
-            if morsel.value and self.jar.get(k) != morsel.value:
-                self.jar[k] = morsel.value
-                self.changed = True
+    def _keep(self, r: aiohttp.ClientResponse) -> list[str]:
+        """Take what starlink.com sets, as a browser would: new values, and cookies it deletes (empty, or
+        already expired) dropped, so a stale short-lived access cookie isn't sent back. The names it touched."""
+        touched = []
+        for line in r.headers.getall("Set-Cookie", ()):
+            first, _, attrs = line.partition(";")
+            name, sep, value = first.strip().partition("=")
+            name, value = name.strip(), value.strip()
+            if not sep or not name:
+                continue
+            gone = not value
+            for a in attrs.split(";"):
+                k, _, v = a.strip().partition("=")
+                k = k.strip().lower()
+                try:
+                    if k == "max-age" and int(v) <= 0:
+                        gone = True
+                    elif k == "expires":
+                        from email.utils import parsedate_to_datetime
+                        if parsedate_to_datetime(v.strip()).timestamp() < time.time():
+                            gone = True
+                except (ValueError, TypeError, OverflowError):
+                    pass
+            if gone:
+                if self.jar.pop(name, None) is not None:
+                    self.changed = True
+                touched.append(name + " (removed)")
+            else:
+                if self.jar.get(name) != value:
+                    self.jar[name] = value
+                    self.changed = True
+                touched.append(name)
+        return touched
 
     async def _request(self, session, method: str, url: str, *, data: bytes | None = None, extra: dict | None = None,
                        timeout: float = 15) -> tuple[int, bytes]:
@@ -428,10 +460,13 @@ class Account:
         try:
             async with session.request(method, url, data=data, headers=self._headers(extra), ssl=self.tls,
                                        allow_redirects=False, timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-                self._keep(r)
+                touched = self._keep(r)
+                self.trace.append(f"{method} {urlparse(url).path[-40:]} -> {r.status}" + (f" sets {', '.join(touched)}" if touched else ""))
                 body = await r.content.read(MAX_BYTES + 1)
                 if len(body) > MAX_BYTES:
                     raise StarlinkError("starlink.com's answer was too big")
+                if r.status in (301, 302, 303, 307, 308) and extra and extra.get("_follow"):
+                    return r.status, (r.headers.get("Location") or "").encode()
                 return r.status, body
         except asyncio.TimeoutError:
             raise StarlinkError("starlink.com didn't answer in time") from None
@@ -448,6 +483,17 @@ class Account:
             return
         status, body = await self._request(session, "GET", TOKEN_URL, extra={
             "Accept": "application/json", "Origin": "https://starlink.com", "Referer": "https://starlink.com/account/home"})
+        if status != 200 and self._signed_out(status, body):
+            # A pasted cookie has no expiry dates: the browser's short-lived access cookies may already be dead
+            # on starlink.com's side, and sending them spoils the request. Drop them and ask once more.
+            stale = [k for k in self.jar if k.startswith("Starlink.Com.") and "access" in k.lower()]
+            if stale:
+                for k in stale:
+                    self.jar.pop(k)
+                self.changed = True
+                self.trace.append(f"dropped {', '.join(stale)} and asked again")
+                status, body = await self._request(session, "GET", TOKEN_URL, extra={
+                    "Accept": "application/json", "Origin": "https://starlink.com", "Referer": "https://starlink.com/account/home"})
         if status != 200:
             if self._signed_out(status, body) or 300 <= status < 400:
                 raise StarlinkError("Starlink sign-in expired: paste a new cookie under Edit", login=True)
@@ -462,7 +508,30 @@ class Account:
             raise StarlinkError("Starlink sign-in expired: paste a new cookie under Edit", login=True)
         self.state["token"], self.state["until"] = token, time.time() + max(life - 60, 30)
 
+    async def prime(self, session) -> None:
+        """Visit the account pages, as the browser does: this keeps the starlink.com session alive (it renews
+        and rotates its cookies here) and drops the short-lived ones it has replaced. Without it the session
+        lapses within minutes of the pasted cookie's access part expiring. Redirects are followed only while they
+        stay on starlink.com. Best effort: whether the sign-in still works is decided by the token after it."""
+        self.primed = True
+        for url in (PORTAL_HOME_URL, AUTH_USER_URL):
+            try:
+                for _hop in range(5):
+                    status, body = await self._request(session, "GET", url, extra={
+                        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8", "_follow": "1"})
+                    if status not in (301, 302, 303, 307, 308):
+                        break
+                    from urllib.parse import urljoin
+                    url = urljoin(url, body.decode("latin-1"))
+                    if urlparse(url).hostname not in STARLINK_HOSTS and not (TEST_BASE and url.startswith(TEST_BASE)):
+                        self.trace.append("redirected away from starlink.com: not followed")
+                        break
+            except StarlinkError as err:
+                self.trace.append(f"{urlparse(url).path}: {err}")
+
     async def _call(self, session, method: str, url: str, **kw) -> tuple[int, bytes]:
+        if not self.primed:
+            await self.prime(session)
         await self._token(session)
         status, body = await self._request(session, method, url, **kw)
         if self._signed_out(status, body):

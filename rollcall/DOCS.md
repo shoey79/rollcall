@@ -630,7 +630,8 @@ For a dish Home Assistant can't reach. Rollcall reads the same status through st
 5. Close the private window; don't sign out, which would end this sign-in too.
 
 - **The cookie** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to starlink.com** (redirects aren't followed). Parts of it that starlink.com renews are kept. Rollcall only reads; nothing it sends can restart or stow the dish.
-- **It expires** if you sign in again in the same browser, or after a while: the check turns amber with *Starlink sign-in expired: paste a new cookie under Edit*, without an alert. A private window avoids the first.
+- **Rollcall keeps the session alive** the way an open browser tab does: at each check it visits the account pages, keeps the cookies starlink.com renews there and drops the ones it deletes, then asks for a short-lived token.
+- **It expires** if you sign in again in the same browser, or if starlink.com ends the session: the check turns amber with *Starlink sign-in expired: paste a new cookie under Edit*, without an alert. A private window, closed straight after copying, avoids the first. When it happens, the add-on's log says what starlink.com answered at each step (status codes and cookie names, never their values), which helps if it keeps happening.
 - **This is starlink.com's unofficial API**, used by its own website, so it may change without notice; if it stops working, Rollcall says so rather than guessing. Starlink Business accounts also have an official API with service accounts, which Rollcall doesn't use (yet).
 
 ### Upstream devices

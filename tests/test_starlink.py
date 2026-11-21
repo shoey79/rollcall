@@ -154,9 +154,36 @@ def test_account_lists_dishes_and_reads_one(com):
     assert dishes == [{"id": TARGET, "name": "KIT000000000 · Garage"}]
     a, d = asyncio.run(_acct(lambda a, s: a.status(s, TARGET)))
     assert sl.evaluate(d)[0] is True and d["latency_ms"] == 31.5
-    assert a.changed and "XSRF-TOKEN=xsrf-rotated" in a.cookie and f"Starlink.Com.Sso={com.SSO}" in a.cookie
+    assert a.changed and "XSRF-TOKEN=xsrf-rotated" in a.cookie and "Starlink.Com.Sso=sso-made-up-" in a.cookie
     # only starlink.com hosts were sent anything
     assert {path.split("/")[1] for _m, path, _h in com.seen} <= set(sl.STARLINK_HOSTS)
+
+
+def test_account_stays_signed_in_by_keeping_the_session_alive(com):
+    """Issue 15: the sign-in lapsed within minutes. starlink.com keeps a session alive only through its account
+    pages, rotating the session cookie there, and soon rejects the browser's short-lived access cookie: Rollcall
+    visits those pages at each check, keeps what they set, and drops what they delete."""
+    state, cookie = {}, fk.FakeStarlinkCom.cookie()
+    com.stale_browser_cookie_revoked()
+    for _ in range(12):                                   # an hour of checks, 5 minutes apart
+        a = sl.Account(cookie, state)
+        a2, d = asyncio.run(_acct(lambda acct, s: acct.status(s, TARGET), cookie))
+        assert sl.evaluate(d)[0] is True, a2.trace
+        cookie = a2.cookie
+        assert "Starlink.Com.Access" not in cookie        # the deleted cookie isn't sent back
+        com.clock += 300
+        state.clear()                                     # a new token each time, as when it expires
+    assert com.rotations >= 12 and "sso-made-up-0001" not in cookie
+    assert any("account/home -> 200 sets Starlink.Com.Sso" in t for t in a2.trace)
+    assert not any("made-up-0" in t for t in a2.trace)    # the log trace has cookie names, never values
+
+
+def test_without_keeping_it_alive_the_session_lapses(com):
+    """What happened before: the pasted cookie alone stops working once the session's idle time passes."""
+    com.clock += fk.FakeStarlinkCom.IDLE + 1
+    with pytest.raises(sl.StarlinkError, match="sign-in expired") as e:
+        asyncio.run(_acct(lambda a, s: a.status(s, TARGET)))
+    assert e.value.login
 
 
 def test_account_offline_dish_and_expired_sign_in(com):
@@ -238,7 +265,7 @@ def test_end_to_end_local_and_account(tmp_path, monkeypatch, dish):
         h, s = check("Remote dish")
         assert s["status"] == "green" and h["starlink_cookie_set"] is True and h["starlink_dish_name"] == "KIT000000000 · Garage"
         everything = json.dumps(addon.api("/api/status"))
-        assert com.SSO not in everything and "xsrf" not in everything     # the cookie is never shown again
+        assert "sso-made-up" not in everything and "xsrf" not in everything     # the cookie is never shown again
 
         # Editing without pasting it again keeps the cookie; the renewed part was kept too
         addon.api(f"/api/hosts/{h['key']}", {"name": "Remote dish", "host": "127.0.0.1", "checks": ["starlink"],
