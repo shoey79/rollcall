@@ -49,18 +49,10 @@ together). Remove each once it's released.
   checks; the answer says which provider wrote it. Docs and changelog name the provider in use; migrate the existing
   claude_* settings. Tests against stand-in APIs for each provider.
 
-- Starlink alignment and obstruction map (owner asked 21 Nov). Alignment: read the dish status's alignment stats
-  (current and desired boresight azimuth/elevation, tilt) that starlink.py currently skips; draw a compass and tilt
-  gauge in Rollcall's own style; "Pointing 292°, wants 300°"; amber when well off (knocked or mount moved).
-  Obstruction map: one more read-only request (get obstruction map: grid of SNR cells, clear / obstructed / no data),
-  read when the Starlink tab opens, not every check; draw a sky plot with N/E/S/W and say which directions are
-  blocked. Note the map builds up over time and resets on reboot. Confirm field numbers against a real dish first
-  (owner's local dish, test script like out/starlink-test.py), and whether account mode (starlink.com) offers both.
-  Still never changes anything on the dish; update starlink.py's "only request" note and the docs. FakeDish tests.
-
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-(none)
+- Starlink alignment (compass, elevation gauge, amber when well off) and obstruction map on the Starlink tab;
+  checked against the owner's dish (local). Account mode's map not confirmed yet.
