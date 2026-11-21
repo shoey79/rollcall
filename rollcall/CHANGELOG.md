@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Starlink account: the sign-in expired after a few minutes.** Rollcall now keeps the starlink.com session alive the way an open browser tab does: at each check it visits the account pages, keeps the cookies starlink.com renews there and drops the ones it deletes (including the browser's short-lived access cookie, which spoiled requests once it had expired). If the sign-in does lapse, the add-on's log now says what starlink.com answered at each step, with cookie names but never their values ([#15](https://github.com/shoey79/rollcall/issues/15), thanks to [tomvining](https://github.com/tomvining) for the report).
+
 ## 1.94.1 - 2026-11-20
 
 ### Fixed
