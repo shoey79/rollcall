@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.94.2 - 2026-11-21
+
+### Changed
+- **Domain security moved to the Domain tab.** On the domain controller holding the PDC emulator role, the privileged groups, KRBTGT password age and accounts to review are now on the **Domain** tab with Group Policy and Time, instead of the Security tab.
+
+- **SNMP: Check now re-reads the port list.** Port names and descriptions are normally re-read every 6 hours; pressing **Check now** in Details now fetches them straight away, so a port you've just described on the switch shows at once.
+
+### Fixed
+- **Starlink account: the sign-in expired after a few minutes.** Rollcall now keeps the starlink.com session alive the way an open browser tab does: at each check it visits the account pages, keeps the cookies starlink.com renews there and drops the ones it deletes (including the browser's short-lived access cookie, which spoiled requests once it had expired). If the sign-in does lapse, the add-on's log now says what starlink.com answered at each step, with cookie names but never their values ([#15](https://github.com/shoey79/rollcall/issues/15), thanks to [tomvining](https://github.com/tomvining) for the report).
+
 ## 1.94.1 - 2026-11-20
 
 ### Fixed
