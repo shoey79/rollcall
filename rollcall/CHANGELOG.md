@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.95.0 - 2026-11-21
+
+### Added
+- **Manage → Database.** How big Rollcall's database and data folder are, what takes the room (check history, agent readings, syslog messages, with entries, the oldest and how long each is kept), and the free space on Home Assistant's disk. SQLite's integrity check runs daily and on **Check now**: damage goes red with an alert, saying to restore from an export or backup. Free disk below 10% is amber, below 5% red with an alert. **Compact now** (admins only) gives back the space old history leaves behind, after checking there's room. A new **Rollcall** tile on the Overview shows the database's size and health.
+
+- **Hints for errors.** Amber and red checks with a well-known error now show 💡 *What this usually means*, with what to try: domain sign-in and RPC errors, Group Policy, LAPS, time, Windows Update and WSUS codes, certificates, DFS Replication and backups. Built in, so it's free and nothing leaves your network ([#16](https://github.com/shoey79/rollcall/issues/16), thanks to [tomvining](https://github.com/tomvining) for the idea).
+
+- **Hints from Claude (optional, off by default).** An admin can turn on **Ask Claude** under **Settings → Error hints** with their own Anthropic API key, for a few sentences on any amber or red error. Only on request, cached per error, with a daily limit. Only the check and its error are sent, with device, account and domain names and addresses replaced by stand-ins first (**What's sent?** shows it); security events, account lists and password-scan results are never sent ([#16](https://github.com/shoey79/rollcall/issues/16), thanks to [tomvining](https://github.com/tomvining)).
+
+### Changed
+- **LAPS on devices away from the domain network.** When a device can't reach a domain controller (LAPS says so, Group Policy and time sync can't either, or Group Policy hasn't applied for days), the LAPS check says *Hasn't been on the domain network since <date>* instead of a bare error code, and stays amber rather than alerting for LAPS alone. A device that's only just started gets the same allowance ([#16](https://github.com/shoey79/rollcall/issues/16), thanks to [tomvining](https://github.com/tomvining) for the report).
+
 ## 1.94.2 - 2026-11-21
 
 ### Changed
