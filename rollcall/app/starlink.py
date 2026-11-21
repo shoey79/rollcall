@@ -13,7 +13,7 @@ browser after signing in, reads the same status through starlink.com's gRPC-web 
 integration ha-starlink-remote does. It's an unofficial API and may change. The cookie is only ever sent to
 starlink.com hosts (redirects aren't followed), is kept with the device and never shown again; it expires when the
 account signs in again in the same browser, so a private window is best. Read only: nothing here can reboot or
-stow the dish (only get_status is ever built).
+stow the dish, or clear its obstruction map (only get_status and get_obstruction_map are ever built).
 
 The status message (DishGetStatusResponse, field numbers from SpaceX's protobuf definitions):
   device_info 1 {id 1, hardware_version 2, software_version 3, country_code 4, bootcount 8}
@@ -21,11 +21,18 @@ The status message (DishGetStatusResponse, field numbers from SpaceX's protobuf 
   pop_ping_drop_rate 1003 (float)   downlink_throughput_bps 1007, uplink_throughput_bps 1008, pop_ping_latency_ms 1009
   obstruction_stats 1004 {fraction_obstructed 1, valid_s 4, currently_obstructed 5, time_obstructed 9}
   stow_requested 1010  eth_speed_mbps 1016  is_snr_above_noise_floor 1018  software_update_state 1021
-  is_snr_persistently_low 1022  disablement_code 1024  swupdate_reboot_ready 1030  reboot_reason 1032
+  is_snr_persistently_low 1022  disablement_code 1024  alignment_stats 1027 {tilt_angle_deg 3,
+  boresight_azimuth_deg 4, boresight_elevation_deg 5, desired_boresight_azimuth_deg 8,
+  desired_boresight_elevation_deg 9}  swupdate_reboot_ready 1030  reboot_reason 1032
+
+The obstruction map (Request.dish_get_obstruction_map 2008, Response.dish_get_obstruction_map 2008): num_rows 1,
+num_cols 2, snr 3 (packed floats: -1 no data yet, 0 blocked to 1 clear), max_theta_deg 5, map_reference_frame 6
+(1 earth: north up; 2 the dish's own frame). It's read when someone opens the Starlink tab, not at each check.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 import struct
@@ -105,9 +112,16 @@ def _field(num: int, wire: int, payload: bytes = b"") -> bytes:
 
 
 def status_request(target_id: str = "") -> bytes:
-    """Request{target_id 13, get_status 1004 = {}}: the only request this module ever builds."""
+    """Request{target_id 13, get_status 1004 = {}}."""
     out = _field(13, 2, target_id.encode()) if target_id else b""
     return out + _field(1004, 2, b"")
+
+
+def map_request(target_id: str = "") -> bytes:
+    """Request{target_id 13, dish_get_obstruction_map 2008 = {}}. With get_status, the only two requests this
+    module ever builds: both only read."""
+    out = _field(13, 2, target_id.encode()) if target_id else b""
+    return out + _field(2008, 2, b"")
 
 
 def decode(buf: bytes) -> dict[int, list]:
@@ -217,9 +231,88 @@ def parse_response(buf: bytes) -> dict:
         d["outage"] = {"cause": OUTAGE_CAUSES.get(cause, f"cause {cause}"), "code": cause,
                        "since": round(start / 1e9) if start and start > 0 else None,
                        "for_s": round(dur / 1e9) if dur else None}
+    al = _sub(s, 1027)
+    if al:  # alignment_stats: where the dish points, and where it would like to (proto3: a missing number is 0)
+        g = lambda n: _round(_float(al, n) or 0.0, 1)  # noqa: E731
+        az = lambda n: _round((_float(al, n) or 0.0) % 360, 1) % 360  # noqa: E731 - the dish says -40.0 for 320.0
+        d["alignment"] = {"tilt": g(3), "az": az(4), "el": g(5), "want_az": az(8), "want_el": g(9)}
     if d["uptime_s"] is not None:
         d["since"] = int(time.time() - d["uptime_s"])
     return d
+
+
+def parse_map(buf: bytes) -> dict:
+    """A Response holding dish_get_obstruction_map (2008): {rows, cols, max_theta, frame, cells}. cells is one
+    character per cell, row by row: "-" no data yet, otherwise 0 (blocked) to 9 (clear) from the cell's SNR."""
+    try:
+        resp = decode(buf)
+        if 2008 not in resp:
+            msg = _str(_sub(resp, 2), 2)
+            raise StarlinkError(f"the dish answered without its obstruction map{': ' + msg if msg else ''}")
+        m = _sub(resp, 2008)
+        rows, cols = _int(m, 1) or 0, _int(m, 2) or 0
+        raw = b"".join(v for v in m.get(3, []) if isinstance(v, (bytes, bytearray)))  # packed floats (or one each)
+    except ValueError as err:
+        raise StarlinkError(f"couldn't read the dish's obstruction map ({err})") from None
+    n = len(raw) // 4
+    if not rows or not cols or rows * cols != n or rows > 1000 or cols > 1000:
+        raise StarlinkError("the dish's obstruction map wasn't the expected shape")
+    snr = struct.unpack(f"<{n}f", raw[:n * 4])
+    cells = "".join("-" if v != v or v < 0 else str(min(9, max(0, round(v * 9)))) for v in snr)
+    return {"rows": rows, "cols": cols, "max_theta": _round(_float(m, 5) or 90.0, 1),
+            "frame": {1: "earth", 2: "dish"}.get(_int(m, 6) or 0, "unknown"), "cells": cells}
+
+
+SECTORS = ("north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west")
+BLOCKED = 4  # a cell this clear or worse (0-9) counts as blocked
+
+
+def map_summary(m: dict, az_offset: float = 0.0) -> dict:
+    """What the map says, in words: how much of the sky it has seen, how much is blocked, and where.
+
+    The map is a view of the sky from the dish: the centre is straight up, the edge max_theta degrees from it
+    (the lowest the dish looks), north at the top and east to the right (in the earth frame; a dish-frame map is
+    turned by the dish's own heading, az_offset)."""
+    rows, cols, cells = m["rows"], m["cols"], m["cells"]
+    cy, cx, r_max = (rows - 1) / 2, (cols - 1) / 2, min(rows, cols) / 2
+    seen = blocked = 0
+    by_sector = [0] * 8
+    elev = []
+    for i, c in enumerate(cells):
+        if c == "-":
+            continue
+        seen += 1
+        if int(c) > BLOCKED:
+            continue
+        blocked += 1
+        y, x = cy - i // cols, i % cols - cx
+        r = math.hypot(x, y)
+        az = (math.degrees(math.atan2(x, y)) + az_offset) % 360
+        by_sector[int(((az + 22.5) % 360) // 45)] += 1
+        elev.append(90 - min(r / r_max, 1) * m["max_theta"])
+    where = [SECTORS[i] for i in sorted(range(8), key=lambda i: -by_sector[i]) if blocked and by_sector[i] >= 0.15 * blocked][:3]
+    low = sorted(elev)[len(elev) // 2] if elev else None
+    return {"seen_pct": round(100 * seen / len(cells), 1) if cells else 0, "blocked_pct": round(100 * blocked / seen, 1) if seen else 0,
+            "where": where, "elevation": None if low is None else round(low),
+            "height": None if low is None else "low, near the horizon" if low < 35 else "partway up" if low < 60 else "high, near overhead"}
+
+
+def alignment_off(a: dict | None) -> str:
+    """Words for a dish noticeably off where it wants to point (knocked, or the mount moved), else ''."""
+    if not a or not (a.get("want_az") or a.get("want_el")):
+        return ""
+    turn = (a["want_az"] - a["az"] + 180) % 360 - 180
+    tilt = a["want_el"] - a["el"]
+    out = []
+    if abs(turn) >= ALIGN_TURN_WARN:
+        out.append(f"turn it {abs(turn):.0f}° {'clockwise' if turn > 0 else 'anticlockwise'}")
+    if abs(tilt) >= ALIGN_TILT_WARN:
+        out.append(f"tilt it {abs(tilt):.0f}° {'flatter' if tilt > 0 else 'more upright'}")
+    return "out of alignment: " + " and ".join(out) if out else ""
+
+
+ALIGN_TURN_WARN = 20.0   # degrees of rotation off where the dish wants to point before it's amber
+ALIGN_TILT_WARN = 10.0
 
 
 def _round(v, n):
@@ -326,7 +419,7 @@ async def grpc_call(host: str, port: int, path: str, message: bytes, timeout: fl
                     if flags & 0x1:                           # END_STREAM
                         break
             if len(body) < 5:
-                raise StarlinkError("the dish answered without a status (it may not be a Starlink dish, or it refused the request)")
+                raise StarlinkError("the dish sent back nothing (it may not be a Starlink dish, or it refused the request)")
             if body[0]:
                 raise StarlinkError("the dish sent a compressed answer, which Rollcall can't read")
             n = int.from_bytes(body[1:5], "big")
@@ -341,6 +434,11 @@ async def grpc_call(host: str, port: int, path: str, message: bytes, timeout: fl
         raise StarlinkError("the dish closed the connection without answering") from None
     except OSError as err:
         raise StarlinkError(f"couldn't reach the dish at {host}:{port} ({err.strerror or err})") from None
+
+
+async def read_map_local(addr: str, timeout: float = 15) -> dict:
+    host, port = split_addr(addr or DEFAULT_ADDR)
+    return parse_map(await grpc_call(host, port, GRPC_PATH, map_request(), timeout))
 
 
 async def read_local(addr: str, timeout: float = 10) -> dict:
@@ -565,28 +663,33 @@ class Account:
         return out
 
     async def status(self, session, target: str) -> dict:
-        msg = status_request(target)
         t0 = time.monotonic()
+        d = await self._handle(session, status_request(target), parse_response, "the dish's status")
+        d["ms"] = round((time.monotonic() - t0) * 1000)
+        return d
+
+    async def obstruction_map(self, session, target: str) -> dict:
+        return await self._handle(session, map_request(target), parse_map, "the dish's obstruction map")
+
+    async def _handle(self, session, msg: bytes, parse, what: str) -> dict:
         status, body = await self._call(session, "POST", ACCOUNT_API, data=b"\x00" + len(msg).to_bytes(4, "big") + msg, extra={
             "Content-Type": "application/grpc-web+proto", "X-Grpc-Web": "1", "Accept": "application/grpc-web+proto",
             "Origin": "https://www.starlink.com", "Referer": "https://www.starlink.com/account/home"})
         if status != 200:
-            raise StarlinkError(f"starlink.com answered HTTP {status} for the dish's status")
+            raise StarlinkError(f"starlink.com answered HTTP {status} for {what}")
         i = 0
         while i + 5 <= len(body):                            # gRPC-web: [flag][length][bytes]..., 0x80 = trailers
             flag, n = body[i], int.from_bytes(body[i + 1:i + 5], "big")
             chunk = body[i + 5:i + 5 + n]
             if flag == 0:
-                d = parse_response(chunk)
-                d["ms"] = round((time.monotonic() - t0) * 1000)
-                return d
+                return parse(chunk)
             if flag & 0x80:
                 text = chunk.decode("utf-8", "replace")
                 m = re.search(r"grpc-message:\s*([^\r\n]+)", text)
                 raise StarlinkError("starlink.com couldn't read the dish" + (f": {m.group(1)[:200]}" if m else
                                     " (it may be offline)"))
             i += 5 + n
-        raise StarlinkError("starlink.com answered without the dish's status (it may be offline)")
+        raise StarlinkError(f"starlink.com answered without {what} (it may be offline)")
 
 
 # ---- what it means ----------------------------------------------------------------------------------------------
@@ -621,6 +724,8 @@ def evaluate(d: dict) -> tuple[bool, float | None, str, str | None]:
         warn.append(f"obstructed {d['obstructed_time'] * 100:.1f}% of the time")
     if d.get("stowed"):
         warn.append("stowed")
+    elif alignment_off(d.get("alignment")):
+        warn.append(alignment_off(d.get("alignment")))
     text = "Starlink " + ", ".join(bits)
     if warn:
         return False, lat, text + "; " + "; ".join(warn), "warn"

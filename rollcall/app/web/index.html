@@ -408,6 +408,18 @@ body.home-on .wrap,body.home-on #sortMobile{display:none!important}
 .alertwrap .alert.sev0,.alertwrap .alert.sev1{background:transparent}
 .ackmini{flex:none;margin-right:14px;font-size:12px;padding:4px 10px}
 .hintmini{flex:none;margin-right:8px;font-size:12px;padding:4px 8px}
+.slcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.slcard{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;align-items:center;background:var(--card)}
+.slcard .lbl{align-self:flex-start;font-size:12px;color:var(--muted);font-weight:600}
+.slcard b{font-size:18px;margin-top:2px}.slcard small{color:var(--muted);font-size:12px}
+.slgauge{width:170px;height:170px}
+.slgauge .tick line{stroke:var(--line);stroke-width:1.2}.slgauge .lbl text{fill:var(--muted);font:600 10px system-ui,sans-serif;text-anchor:middle}
+.slgauge .now{stroke:var(--text);stroke-width:2.5;stroke-linecap:round}.slgauge .want{stroke:var(--accent);stroke-width:2;stroke-dasharray:4 3;stroke-linecap:round}
+.slgauge .gap{fill:color-mix(in srgb,var(--accent) 18%,transparent)}.slgauge .dish{fill:var(--card);stroke:var(--text);stroke-width:2}
+.slgauge .panel{stroke:var(--text);stroke-width:5;stroke-linecap:round}
+.slmapwrap{display:flex;flex-wrap:wrap;gap:16px;align-items:center}.slmapwrap canvas{flex:none}
+.slmapside{flex:1 1 220px;min-width:0}.slmapside p{margin:0 0 8px;font-size:13px}
+.sllegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px}.sllegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
 .hintpanel{padding:4px 14px 12px 40px;border-bottom:1px solid var(--line)}
 .hintbox{display:block;margin-top:6px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 6%,var(--card));border:1px solid color-mix(in srgb,var(--accent) 25%,var(--line));font-size:12.5px;line-height:1.45;color:var(--text)}
 .hintbox p{margin:0 0 6px}.hintbox p:last-child{margin-bottom:0}
@@ -3841,7 +3853,9 @@ function openStarlink(key) {
   const tiles = slTiles(sl).map(([l, v, sub, cls]) => `<div class="tile ${cls || ""}"><span class="lbl">${esc(l)}</span><b${/^[\d.,\s%]+(ms|Mb\/s)?%?$/.test(v) ? "" : ' style="font-size:19px;padding:4px 0 3px"'}>${esc(v)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`).join("");
   const al = sl.alerts || [], probs = al.filter(a => a.level !== "info");
   if (sl.obstructed_time > 0.01) probs.push({what: "Obstructed " + (sl.obstructed_time * 100).toFixed(1) + "% of the time", level: "warn",
-    detail: "Something is blocking part of the dish's view of the sky. The Starlink app's Obstructions view shows where."});
+    detail: "Something is blocking part of the dish's view of the sky. The obstruction map below shows where."});
+  const alOff = slAlignOff(sl.alignment);
+  if (alOff && !sl.stowed) probs.push({what: "Out of alignment", level: "warn", detail: alOff + ". Usually it's been knocked or the mount has moved."});
   if (sl.stowed) probs.push({what: "Stowed", level: "warn"});
   const lvl = a => a.level === "crit" ? "red" : "amber";
   let html = `<div class="tiles" style="margin-bottom:14px">${tiles}</div>`;
@@ -3854,12 +3868,115 @@ function openStarlink(key) {
     kv("Update", sl.update_ready ? "Installed; the dish restarts itself to finish it" : esc(sl.update ? sl.update.charAt(0).toUpperCase() + sl.update.slice(1) : "")),
     kv("Up since", sl.since ? esc(new Date(sl.since * 1000).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})) + (sl.reboot_reason ? ` <small class="muted">${esc(sl.reboot_reason)}</small>` : "") : ""),
     kv("Ethernet", sl.eth_mbps ? sl.eth_mbps + " Mb/s" : ""), kv("Signal", sl.snr_ok === false || sl.snr_low ? `<b class="old">weak</b>` : sl.snr_ok ? "above the noise" : ""),
-    kv("Obstruction map", sl.obstructed_fraction != null ? (sl.obstructed_fraction * 100).toFixed(2) + "% of the sky blocked" + (sl.obstruction_window_s ? ` <small class="muted">over ${esc(fmtUp(sl.obstruction_window_s))}</small>` : "") : ""),
+    kv("Sky blocked", sl.obstructed_fraction != null ? (sl.obstructed_fraction * 100).toFixed(2) + "% of the sky blocked" + (sl.obstruction_window_s ? ` <small class="muted">over ${esc(fmtUp(sl.obstruction_window_s))}</small>` : "") : ""),
     kv("Also", esc(notes.join(", "))), kv("Country", esc(sl.country || "")),
     kv("Read", esc(via) + (sl.read_at ? ` <small class="muted">${ago(sl.read_at, now)}${sl.ms != null ? ", answered in " + sl.ms + " ms" : ""}</small>` : ""))].join("")}</div>`);
+  if (sl.alignment) html += sect("Alignment", slAlignHtml(sl.alignment));
+  html += sect("Obstructions", `<div id="slMap">${slMapHtml(key)}</div>`);
   body.innerHTML = html;
   body.scrollTop = top;
+  slMapDraw(key);
+  const m = slMaps[key];
+  if (!m || (!m.loading && Date.now() - m.at > 300000)) slMapLoad(key);
 }
+// Alignment: where the dish points (azimuth, elevation) and where it would like to
+const slDir = az => ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"][Math.round(((az % 360) + 360) % 360 / 22.5) % 16];
+function slAlignOff(a) {
+  if (!a || !(a.want_az || a.want_el)) return "";
+  const turn = ((a.want_az - a.az + 540) % 360) - 180, tilt = a.want_el - a.el, out = [];
+  if (Math.abs(turn) >= 20) out.push(`turn it ${Math.round(Math.abs(turn))}° ${turn > 0 ? "clockwise" : "anticlockwise"}`);
+  if (Math.abs(tilt) >= 10) out.push(`tilt it ${Math.round(Math.abs(tilt))}° ${tilt > 0 ? "flatter" : "more upright"}`);
+  return out.length ? out.join(" and ").replace(/^./, c => c.toUpperCase()) : "";
+}
+function slAlignHtml(a) {
+  const want = a.want_az || a.want_el, R = 62, cx = 80, cy = 80;
+  const pt = (deg, r) => [cx + r * Math.sin(deg * Math.PI / 180), cy - r * Math.cos(deg * Math.PI / 180)];
+  const ticks = Array.from({length: 72}, (_, i) => { const [x1, y1] = pt(i * 5, R), [x2, y2] = pt(i * 5, i % 18 ? R - 3 : R - 7); return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`; }).join("");
+  const lbl = ["N", "E", "S", "W"].map((t, i) => { const [x, y] = pt(i * 90, R + 11); return `<text x="${x}" y="${y + 4}">${t}</text>`; }).join("");
+  const arm = (deg, cls) => { const [x, y] = pt(deg, R - 10); return `<line class="${cls}" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`; };
+  // the gap between where it points and where it wants to: a shaded wedge
+  const wedge = (from, to) => { let d = ((to - from + 540) % 360) - 180; if (Math.abs(d) < 1) return ""; const [x1, y1] = pt(from, R - 10), [x2, y2] = pt(from + d, R - 10);
+    return `<path class="gap" d="M${cx} ${cy} L${x1} ${y1} A${R - 10} ${R - 10} 0 0 ${d > 0 ? 1 : 0} ${x2} ${y2} Z"/>`; };
+  const dishRot = `<rect class="dish" x="${cx - 9}" y="${cy - 12}" width="18" height="24" rx="3" transform="rotate(${a.az} ${cx} ${cy})"/>`;
+  const comp = `<svg class="slgauge" viewBox="0 0 160 160" role="img" aria-label="Pointing ${Math.round(a.az)} degrees${want ? ", wants " + Math.round(a.want_az) : ""}"><g class="tick">${ticks}</g><g class="lbl">${lbl}</g>${want ? wedge(a.az, a.want_az) + arm(a.want_az, "want") : ""}${arm(a.az, "now")}${dishRot}</svg>`;
+  // elevation: a quarter circle from the horizon (0°) to overhead (90°)
+  const ex = 22, ey = 138, ER = 112, ept = (deg, r) => [ex + r * Math.cos(deg * Math.PI / 180), ey - r * Math.sin(deg * Math.PI / 180)];
+  const eticks = Array.from({length: 19}, (_, i) => { const [x1, y1] = ept(i * 5, ER), [x2, y2] = ept(i * 5, i % 9 ? ER - 4 : ER - 9); return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`; }).join("");
+  const earm = (deg, cls) => { const [x, y] = ept(deg, ER - 12); return `<line class="${cls}" x1="${ex}" y1="${ey}" x2="${x}" y2="${y}"/>`; };
+  const egap = (from, to) => { if (Math.abs(to - from) < 1) return ""; const [x1, y1] = ept(from, ER - 12), [x2, y2] = ept(to, ER - 12); return `<path class="gap" d="M${ex} ${ey} L${x1} ${y1} A${ER - 12} ${ER - 12} 0 0 ${to > from ? 0 : 1} ${x2} ${y2} Z"/>`; };
+  const [p1x, p1y] = ept(a.el - 90, 14), [p2x, p2y] = ept(a.el + 90, 14);
+  const elev = `<svg class="slgauge" viewBox="0 0 160 160" role="img" aria-label="Elevation ${Math.round(a.el)} degrees${want ? ", wants " + Math.round(a.want_el) : ""}"><g class="tick">${eticks}</g><g class="lbl"><text x="${ex + ER + 2}" y="${ey + 14}">0°</text><text x="${ex - 4}" y="${ey - ER - 6}">90°</text></g>${want ? egap(a.el, a.want_el) + earm(a.want_el, "want") : ""}${earm(a.el, "now")}<line class="panel" x1="${p1x}" y1="${p1y}" x2="${p2x}" y2="${p2y}"/></svg>`;
+  const off = slAlignOff(a);
+  const card = (title, svg, main, sub) => `<div class="slcard"><span class="lbl">${title}</span>${svg}<b>${main}</b><small>${sub}</small></div>`;
+  return `<div class="slcards">${card("Rotation", comp, `${Math.round(a.az)}° ${slDir(a.az)}`, want ? `wants ${Math.round(a.want_az)}° ${slDir(a.want_az)}` : "")}` +
+    `${card("Elevation", elev, `${Math.round(a.el)}°`, (want ? `wants ${Math.round(a.want_el)}° · ` : "") + `panel tilted ${Math.round(a.tilt)}°`)}</div>` +
+    `<p class="hint">${off ? `<b class="old">${esc(off)}.</b> ` : want ? "✓ Pointing where it wants to. " : ""}The solid line is where the dish points now; the dashed line, where it would like to.</p>`;
+}
+// The obstruction map: the sky as the dish sees it, straight up in the middle, the horizon at the edge
+const slMaps = {};
+async function slMapLoad(key, fresh) {
+  slMaps[key] = {...(slMaps[key] || {}), loading: true};
+  const el = document.getElementById("slMap");
+  if (el && fresh) el.innerHTML = slMapHtml(key);
+  try {
+    const r = await fetch(`api/hosts/${encodeURIComponent(key)}/starlink/map${fresh ? "?fresh=1" : ""}`, {cache: "no-store"});
+    const j = await r.json();
+    slMaps[key] = r.ok ? {map: j, at: Date.now()} : {...slMaps[key], error: j.error || "HTTP " + r.status, at: Date.now()};
+  } catch (e) { slMaps[key] = {...slMaps[key], error: e.message, at: Date.now()}; }
+  slMaps[key].loading = false;
+  if (detDlg.open && detMode === "starlink" && detKey === key && document.getElementById("slMap")) {
+    document.getElementById("slMap").innerHTML = slMapHtml(key); slMapDraw(key);
+  }
+}
+function slMapHtml(key) {
+  const c = slMaps[key];
+  if (!c || (!c.map && c.loading)) return `<p class="empty-note">Reading the obstruction map…</p>`;
+  if (!c.map) return `<p class="empty-note">${esc("Couldn't read the obstruction map: " + (c.error || ""))}</p>`;
+  const m = c.map, su = m.summary || {};
+  const where = su.where && su.where.length ? su.where.join(", ").replace(/, ([^,]*)$/, " and $1") : "";
+  const words = !su.blocked_pct ? "✓ Nothing blocking the dish in the sky it has seen so far."
+    : `<b>${su.blocked_pct}%</b> of the sky it has seen is blocked${where ? `, mostly to the <b>${esc(where)}</b>` : ""}${su.height ? `, ${esc(su.height)}` : ""}.`;
+  return `<div class="slmapwrap"><canvas id="slMapCanvas" width="340" height="340" role="img" aria-label="Obstruction map"></canvas>
+    <div class="slmapside"><p>${words}</p>
+      <p class="muted">The dish has seen ${su.seen_pct}% of its sky so far. The map fills in as satellites pass, and starts again when the dish restarts.</p>
+      <p class="sllegend"><span><i style="background:var(--grey)"></i>Clear</span><span><i style="background:var(--amber)"></i>Partly blocked</span><span><i style="background:var(--red)"></i>Blocked</span></p>
+      <p class="muted"><small>Straight up is the middle, the horizon the edge${m.frame === "dish" ? "; turned to the dish's own heading" : ""}. Read ${ago(m.read_at, Date.now() / 1000)}.</small> <button type="button" class="mini" id="slMapAgain"${c.loading ? " disabled" : ""}>${c.loading ? "Reading…" : "Read again"}</button></p></div></div>`;
+}
+function slMapDraw(key) {
+  const c = slMaps[key], cv = document.getElementById("slMapCanvas");
+  if (!c || !c.map || !cv) return;
+  const m = c.map, css = getComputedStyle(document.documentElement), col = v => css.getPropertyValue(v).trim();
+  const dpr = window.devicePixelRatio || 1, S = 340;
+  cv.width = S * dpr; cv.height = S * dpr; cv.style.width = S + "px"; cv.style.maxWidth = "100%"; cv.style.height = "auto";
+  const g = cv.getContext("2d"); g.scale(dpr, dpr);
+  const cx = S / 2, cy = S / 2, R = S / 2 - 32, rot = m.frame === "dish" && data ? (((data.hosts.find(x => x.key === key) || {}).starlink || {}).alignment || {}).az || 0 : 0;
+  // compass ring
+  g.strokeStyle = col("--grey"); g.lineWidth = 1;
+  for (let i = 0; i < 72; i++) { const a = (i * 5) * Math.PI / 180, r1 = R + 6, r2 = R + (i % 18 ? 10 : 14);
+    g.beginPath(); g.moveTo(cx + r1 * Math.sin(a), cy - r1 * Math.cos(a)); g.lineTo(cx + r2 * Math.sin(a), cy - r2 * Math.cos(a)); g.stroke(); }
+  g.fillStyle = col("--muted"); g.font = "600 12px system-ui, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+  [["N", 0], ["E", 90], ["S", 180], ["W", 270]].forEach(([t, d]) => { const a = d * Math.PI / 180; g.fillText(t, cx + (R + 22) * Math.sin(a), cy - (R + 22) * Math.cos(a)); });
+  const cell = R * 2 / Math.min(m.rows, m.cols), dot = Math.max(1, cell * 0.36);
+  const clear = col("--grey"), part = col("--amber"), bad = col("--red");
+  const ccx = (m.cols - 1) / 2, ccy = (m.rows - 1) / 2, ra = rot * Math.PI / 180, cs = Math.cos(ra), sn = Math.sin(ra);
+  for (let i = 0; i < m.cells.length; i++) {
+    const ch = m.cells[i], x0 = (i % m.cols - ccx) * cell, y0 = (Math.floor(i / m.cols) - ccy) * cell;
+    const x = cx + x0 * cs - y0 * sn, y = cy + x0 * sn + y0 * cs;
+    if (ch === "-") {  // not seen yet: a faint dot, so the whole sky shows and the seen part stands out
+      if (Math.hypot(x0, y0) > R) continue;
+      g.globalAlpha = 0.22; g.fillStyle = clear; g.beginPath(); g.arc(x, y, dot * 0.6, 0, 2 * Math.PI); g.fill(); g.globalAlpha = 1;
+      continue;
+    }
+    const v = +ch;
+    g.fillStyle = v <= 4 ? bad : v <= 7 ? part : clear;
+    g.beginPath(); g.arc(x, y, v <= 7 ? dot * 1.25 : dot, 0, 2 * Math.PI); g.fill();
+  }
+  // 30° and 60° above the horizon, as faint rings over the dots
+  g.strokeStyle = col("--muted"); g.globalAlpha = 0.5; g.setLineDash([3, 4]);
+  [30, 60].forEach(e => { const r = R * (90 - e) / m.max_theta; if (r < R) { g.beginPath(); g.arc(cx, cy, r, 0, 2 * Math.PI); g.stroke(); } });
+  g.setLineDash([]); g.globalAlpha = 1;
+}
+document.addEventListener("click", e => { if (e.target.id === "slMapAgain" && detKey) slMapLoad(detKey, true); });
 function renderJellyfin(h) {
   const jf = h.jellyfin, chk = h.services.find(x => x.kind === "jellyfin"), body = document.getElementById("detBody"), top = body.scrollTop;
   document.getElementById("detSub").textContent = jf ? [jf.name, "Jellyfin " + (jf.version || ""), jf.health].filter(Boolean).join(" · ") : "Jellyfin";

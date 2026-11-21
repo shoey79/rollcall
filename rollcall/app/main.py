@@ -1732,6 +1732,8 @@ class Host:
     sl_dish: str = ""                  # the account's dish to read (its id, "ut...")
     sl_dish_name: str = ""
     sl_data: dict | None = None        # its latest reading
+    sl_map: dict | None = None         # its obstruction map, read when the Starlink tab opens (not saved)
+    sl_map_at: float = 0.0
     sl_state: dict = field(default_factory=dict)  # the short-lived starlink.com token (not saved)
     ha_device: str = ""                # linked Home Assistant device id ("" = none)
     ha_device_name: str = ""
@@ -3064,6 +3066,32 @@ class Monitor:
         d["read_at"] = int(time.time())
         h.sl_data = d
         return sllib.evaluate(d)
+
+    async def starlink_map(self, h: Host, fresh: bool = False) -> dict:
+        """The dish's obstruction map, read at most every few minutes (it's a bigger answer than the status, and
+        changes slowly), with a summary in words. Raises StarlinkError."""
+        if h.sl_map and not fresh and time.time() - h.sl_map_at < self.SL_MAP_EVERY:
+            return h.sl_map
+        if h.sl_source == "account":
+            if not h.sl_cookie or not h.sl_dish:
+                raise sllib.StarlinkError("the Starlink account isn't set up under Edit")
+            acct = sllib.Account(h.sl_cookie, h.sl_state, health_tls_context())
+            try:
+                async with ClientSession() as session:
+                    m = await acct.obstruction_map(session, h.sl_dish)
+            finally:
+                if acct.changed and acct.cookie != h.sl_cookie:
+                    h.sl_cookie = acct.cookie
+                    self._save_hosts()
+        else:
+            m = await sllib.read_map_local(h.sl_addr or sllib.DEFAULT_ADDR, timeout=max(self.svc_timeout, 15))
+        al = (h.sl_data or {}).get("alignment") or {}
+        m["summary"] = sllib.map_summary(m, al.get("az", 0.0) if m["frame"] == "dish" else 0.0)
+        m["read_at"] = int(time.time())
+        h.sl_map, h.sl_map_at = m, time.time()
+        return m
+
+    SL_MAP_EVERY = 300
 
     async def ha_check(self, s: Service) -> tuple[bool, None, str]:
         """A Home Assistant entity: OK while available and, if a condition is set, not breaching it.
@@ -6677,6 +6705,17 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             if svc and svc.status != UNKNOWN:
                 h.next_due = 0
 
+    async def host_starlink_map(req):
+        """The dish's obstruction map, for the Starlink tab: read when it's opened (at most every 5 minutes)."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h or not any(s.kind == "starlink" for s in h.services):
+            raise web.HTTPNotFound()
+        try:
+            m = await monitor.starlink_map(h, fresh=req.query.get("fresh") == "1")
+        except sllib.StarlinkError as err:
+            return web.json_response({"error": str(err)}, status=502)
+        return web.json_response(m, headers={"Cache-Control": "no-store"})
+
     async def host_ilo(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -6968,6 +7007,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_get("/api/hosts/{key}/ilo", host_ilo)
+    app.router.add_get("/api/hosts/{key}/starlink/map", host_starlink_map)
     app.router.add_post("/api/hosts/{key}/ilo/ack", editor_only(host_ilo_ack))
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))

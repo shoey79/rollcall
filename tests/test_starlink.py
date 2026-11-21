@@ -149,6 +149,77 @@ async def _acct(fn, cookie=None):
         return a, await fn(a, s)
 
 
+# ---- alignment and the obstruction map ---------------------------------------------------------------------------
+def test_alignment_is_read_and_close_enough_is_fine(dish):
+    d = read(dish.addr)
+    assert d["alignment"] == {"tilt": 24.5, "az": 291.6, "el": 65.4, "want_az": 297.0, "want_el": 66.0}
+    assert sl.alignment_off(d["alignment"]) == "" and sl.evaluate(d)[0] is True
+
+
+@pytest.mark.parametrize("al, words", [
+    ({"boresight_azimuth_deg": 250.0, "desired_boresight_azimuth_deg": 300.0}, "turn it 50° clockwise"),
+    ({"boresight_azimuth_deg": 10.0, "desired_boresight_azimuth_deg": 340.0}, "turn it 30° anticlockwise"),   # across north
+    ({"boresight_elevation_deg": 50.0, "desired_boresight_elevation_deg": 66.0}, "tilt it 16° flatter"),
+])
+def test_a_dish_knocked_out_of_alignment_is_amber(dish, al, words):
+    dish.status = {**fk.healthy(), "alignment_stats": {**fk.healthy()["alignment_stats"], **al}}
+    ok, _ms, text, level = sl.evaluate(read(dish.addr))
+    assert not ok and level == "warn" and "out of alignment: " + words in text
+
+
+def test_alignment_west_of_north_comes_as_negative_degrees(dish):
+    # A dish facing north-west says e.g. -40°, wanting -44°: shown as 320° and 316°, close enough
+    dish.status = {**fk.healthy(), "alignment_stats": {"tilt_angle_deg": 25.0, "boresight_azimuth_deg": -40.0,
+                   "boresight_elevation_deg": 65.0, "desired_boresight_azimuth_deg": -44.0, "desired_boresight_elevation_deg": 66.0}}
+    d = read(dish.addr)
+    assert d["alignment"]["az"] == 320.0 and d["alignment"]["want_az"] == 316.0 and sl.evaluate(d)[0] is True
+
+
+def test_no_alignment_from_the_dish_is_fine(dish):
+    dish.status = {k: v for k, v in fk.healthy().items() if k != "alignment_stats"}
+    d = read(dish.addr)
+    assert "alignment" not in d and sl.evaluate(d)[0] is True
+
+
+def test_obstruction_map_says_where(dish):
+    dish.map = fk.sky(blocked=((30, 75, 0, 30),))         # trees to the north-east, low down
+    m = asyncio.run(sl.read_map_local(dish.addr))
+    assert (m["rows"], m["cols"], m["frame"], m["max_theta"]) == (123, 123, "earth", 80.0) and len(m["cells"]) == 123 * 123
+    assert set(m["cells"]) <= set("-0123456789")
+    su = sl.map_summary(m)
+    assert su["where"][0] == "north-east" and su["height"] == "low, near the horizon" and 0 < su["blocked_pct"] < 15
+    assert 40 < su["seen_pct"] < 70                       # a circle in a square, 80% of it seen
+    # Only ever read: the dish was asked for the map, nothing else
+    assert all(r.HasField("dish_get_obstruction_map") and not r.HasField("dish_clear_obstruction_map") for r in dish.requests)
+
+
+def test_obstruction_map_clear_sky_and_overhead(dish):
+    dish.map = fk.sky(blocked=())
+    su = sl.map_summary(asyncio.run(sl.read_map_local(dish.addr)))
+    assert su["blocked_pct"] == 0 and su["where"] == [] and su["height"] is None
+    dish.map = fk.sky(blocked=((160, 250, 70, 90),))      # a branch overhead, towards the south-west
+    su = sl.map_summary(asyncio.run(sl.read_map_local(dish.addr)))
+    assert su["height"] == "high, near overhead"
+
+
+def test_dish_frame_map_is_turned_by_the_heading(dish):
+    dish.map = fk.sky(frame=2, blocked=((30, 75, 0, 30),))  # north-east of the dish's own heading
+    m = asyncio.run(sl.read_map_local(dish.addr))
+    assert m["frame"] == "dish" and sl.map_summary(m, az_offset=90)["where"][0] in ("south-east", "east")
+
+
+def test_a_dish_without_the_map_says_so(dish):
+    dish.map = None
+    with pytest.raises(sl.StarlinkError, match="without its obstruction map: unimplemented"):
+        asyncio.run(sl.read_map_local(dish.addr))
+
+
+def test_account_reads_the_map_too(com):
+    com.map = fk.sky(blocked=((180, 220, 10, 40),))
+    _a, m = asyncio.run(_acct(lambda a, s: a.obstruction_map(s, TARGET)))
+    assert sl.map_summary(m)["where"][0] in ("south", "south-west")
+
+
 def test_account_lists_dishes_and_reads_one(com):
     a, dishes = asyncio.run(_acct(lambda a, s: a.dishes(s)))
     assert dishes == [{"id": TARGET, "name": "KIT000000000 · Garage"}]
@@ -246,6 +317,15 @@ def test_end_to_end_local_and_account(tmp_path, monkeypatch, dish):
         h, s = check("Dish")
         assert s["status"] == "green" and "Starlink online" in s["detail"], s
         assert h["starlink"]["latency_ms"] == 31.5 and h["starlink_addr"] == dish.addr
+
+        # The Starlink tab's obstruction map, read when it's opened, and kept for a few minutes
+        m = addon.api(f"/api/hosts/{h['key']}/starlink/map")
+        assert m["summary"]["where"][0] == "north-east" and m["rows"] == 123
+        asked = len(dish.requests)
+        assert addon.api(f"/api/hosts/{h['key']}/starlink/map")["read_at"] == m["read_at"] and len(dish.requests) == asked
+        addon.api(f"/api/hosts/{h['key']}/starlink/map?fresh=1")
+        assert len(dish.requests) == asked + 1
+        assert h["starlink"]["alignment"]["want_az"] == 297.0
 
         dish.status = {**fk.healthy(), "outage": {"cause": 6}}
         h, s = check("Dish", "red")

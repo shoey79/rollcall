@@ -27,9 +27,19 @@ def _messages():
 
     msg("GetStatusRequest", [])
     msg("RebootRequest", [])
+    msg("DishGetObstructionMapRequest", [])
+    msg("DishClearObstructionMapRequest", [])
     msg("Request", [("id", 1, F.TYPE_UINT64), ("target_id", 13, F.TYPE_STRING),
                     ("get_status", 1004, F.TYPE_MESSAGE, ".SpaceX.API.Device.GetStatusRequest"),
-                    ("reboot", 1001, F.TYPE_MESSAGE, ".SpaceX.API.Device.RebootRequest")])
+                    ("reboot", 1001, F.TYPE_MESSAGE, ".SpaceX.API.Device.RebootRequest"),
+                    ("dish_get_obstruction_map", 2008, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishGetObstructionMapRequest"),
+                    ("dish_clear_obstruction_map", 2017, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishClearObstructionMapRequest")])
+    msg("AlignmentStats", [("tilt_angle_deg", 3, F.TYPE_FLOAT), ("boresight_azimuth_deg", 4, F.TYPE_FLOAT),
+                           ("boresight_elevation_deg", 5, F.TYPE_FLOAT), ("desired_boresight_azimuth_deg", 8, F.TYPE_FLOAT),
+                           ("desired_boresight_elevation_deg", 9, F.TYPE_FLOAT)])
+    m = msg("DishGetObstructionMapResponse", [("num_rows", 1, F.TYPE_UINT32), ("num_cols", 2, F.TYPE_UINT32),
+                                              ("max_theta_deg", 5, F.TYPE_FLOAT), ("map_reference_frame", 6, F.TYPE_INT32)])
+    m.field.add(name="snr", number=3, type=F.TYPE_FLOAT, label=F.LABEL_REPEATED)  # proto3: packed
     msg("DeviceInfo", [("id", 1, F.TYPE_STRING), ("hardware_version", 2, F.TYPE_STRING),
                        ("software_version", 3, F.TYPE_STRING), ("country_code", 4, F.TYPE_STRING)])
     msg("DeviceState", [("uptime_s", 1, F.TYPE_UINT64)])
@@ -50,11 +60,13 @@ def _messages():
         ("outage", 1014, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishOutage"),
         ("eth_speed_mbps", 1016, F.TYPE_INT32), ("is_snr_above_noise_floor", 1018, F.TYPE_BOOL),
         ("software_update_state", 1021, F.TYPE_INT32), ("disablement_code", 1024, F.TYPE_INT32),
+        ("alignment_stats", 1027, F.TYPE_MESSAGE, ".SpaceX.API.Device.AlignmentStats"),
         ("swupdate_reboot_ready", 1030, F.TYPE_BOOL), ("reboot_reason", 1032, F.TYPE_INT32)])
     msg("Status", [("code", 1, F.TYPE_INT32), ("message", 2, F.TYPE_STRING)])
     msg("Response", [("id", 1, F.TYPE_UINT64), ("status", 2, F.TYPE_MESSAGE, ".SpaceX.API.Device.Status"),
                      ("api_version", 3, F.TYPE_UINT64),
-                     ("dish_get_status", 2004, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishGetStatusResponse")])
+                     ("dish_get_status", 2004, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishGetStatusResponse"),
+                     ("dish_get_obstruction_map", 2008, F.TYPE_MESSAGE, ".SpaceX.API.Device.DishGetObstructionMapResponse")])
     pool = descriptor_pool.DescriptorPool()
     pool.Add(fd)
     get = lambda n: message_factory.GetMessageClass(pool.FindMessageTypeByName("SpaceX.API.Device." + n))  # noqa: E731
@@ -75,12 +87,35 @@ def healthy() -> dict:
         "obstruction_stats": {"fraction_obstructed": 0.0012, "valid_s": 43200.0, "time_obstructed": 0.0005},
         "eth_speed_mbps": 1000, "is_snr_above_noise_floor": True, "software_update_state": 1,
         "alerts": {"is_heating": False},
+        "alignment_stats": {"tilt_angle_deg": 24.5, "boresight_azimuth_deg": 291.6, "boresight_elevation_deg": 65.4,
+                            "desired_boresight_azimuth_deg": 297.0, "desired_boresight_elevation_deg": 66.0},
     }
 
 
-def response_bytes(status: dict | None, error: str = "") -> bytes:
+def sky(rows: int = 123, cols: int = 123, max_theta: float = 80.0, frame: int = 1, blocked=((30, 75, 0, 30),),
+        seen: float = 0.8) -> dict:
+    """An obstruction map: the sky the dish has seen (a band of passes, the rest no data), clear except where
+    blocked: (from_az, to_az, min_elev, max_elev) in degrees, north up and east right."""
+    import math
+    snr = []
+    cy, cx, r_max = (rows - 1) / 2, (cols - 1) / 2, min(rows, cols) / 2
+    for i in range(rows * cols):
+        y, x = cy - i // cols, i % cols - cx
+        r = math.hypot(x, y)
+        if r > r_max or (math.sin(i * 12.9898) * 43758.5453) % 1 > seen:   # outside, or not seen yet
+            snr.append(-1.0)
+            continue
+        az, el = math.degrees(math.atan2(x, y)) % 360, 90 - r / r_max * max_theta
+        hit = any(a0 <= az <= a1 and e0 <= el <= e1 for a0, a1, e0, e1 in blocked)
+        snr.append(0.0 if hit else 1.0)
+    return {"num_rows": rows, "num_cols": cols, "snr": snr, "max_theta_deg": max_theta, "map_reference_frame": frame}
+
+
+def response_bytes(status: dict | None, error: str = "", obstruction_map: dict | None = None) -> bytes:
     r = Response(api_version=30)
-    if status is not None:
+    if obstruction_map is not None:
+        r.dish_get_obstruction_map.CopyFrom(_fill(Response.DESCRIPTOR.fields_by_name["dish_get_obstruction_map"].message_type, obstruction_map))
+    elif status is not None:
         r.dish_get_status.CopyFrom(_fill(Response.DESCRIPTOR.fields_by_name["dish_get_status"].message_type, status))
     if error:
         r.status.code, r.status.message = 2, error
@@ -94,6 +129,8 @@ def _fill(desc, d):
         f = desc.fields_by_name[k]
         if f.message_type is not None:
             getattr(m, k).CopyFrom(_fill(f.message_type, v))
+        elif isinstance(v, (list, tuple)):
+            getattr(m, k).extend(v)
         else:
             setattr(m, k, v)
     return m
@@ -105,6 +142,7 @@ class FakeDish:
     def __init__(self, port: int = 0):
         import grpc
         self.status: dict | None = healthy()
+        self.map: dict | None = sky()
         self.error = ""
         self.requests: list = []
         self.server = grpc.server(__import__("concurrent.futures").futures.ThreadPoolExecutor(4))
@@ -117,8 +155,10 @@ class FakeDish:
 
     def _handle(self, req, _ctx):
         self.requests.append(req)
-        if req.HasField("reboot"):
-            raise AssertionError("Rollcall asked the dish to reboot")
+        if req.HasField("reboot") or req.HasField("dish_clear_obstruction_map"):
+            raise AssertionError("Rollcall asked the dish to change something")
+        if req.HasField("dish_get_obstruction_map"):
+            return response_bytes(None, "" if self.map else "unimplemented", self.map)
         return response_bytes(self.status, self.error)
 
     @property
@@ -138,6 +178,7 @@ class FakeStarlinkCom:
 
     def __init__(self):
         self.status: dict | None = healthy()
+        self.map: dict | None = sky()
         self.expired = False
         self.clock = 0.0                                  # the stand-in's own time: tests move it on
         self.sessions = {self.SSO: self.IDLE}             # session cookie value -> when it lapses
@@ -193,7 +234,8 @@ class FakeStarlinkCom:
                 body = await req.read()
                 n = int.from_bytes(body[1:5], "big")
                 r = Request.FromString(body[5:5 + n])
-                assert r.HasField("get_status") and not r.HasField("reboot")
+                assert (r.HasField("get_status") or r.HasField("dish_get_obstruction_map")) and not r.HasField("reboot") \
+                    and not r.HasField("dish_clear_obstruction_map")
                 if r.target_id != "ut00000000-11111111-22222222":
                     trailer = b"grpc-status: 5\r\ngrpc-message: device not found\r\n"
                     return web.Response(body=b"\x80" + len(trailer).to_bytes(4, "big") + trailer,
@@ -202,7 +244,7 @@ class FakeStarlinkCom:
                     trailer = b"grpc-status: 14\r\ngrpc-message: device offline\r\n"
                     return web.Response(body=b"\x80" + len(trailer).to_bytes(4, "big") + trailer,
                                         content_type="application/grpc-web+proto")
-                msg = response_bytes(self.status)
+                msg = response_bytes(self.status, "", self.map if r.HasField("dish_get_obstruction_map") else None)
                 trailer = b"grpc-status: 0\r\n"
                 return web.Response(body=b"\x00" + len(msg).to_bytes(4, "big") + msg + b"\x80" + len(trailer).to_bytes(4, "big") + trailer,
                                     content_type="application/grpc-web+proto")
