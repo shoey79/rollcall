@@ -19,6 +19,7 @@ GROUPS = [
     ("logs", "Agent log alerts"),
     ("display", "Display and logging"),
     ("agent_port", "Agent port"),
+    ("hints", "Error hints"),
     ("access", "Who can make changes"),
 ]
 
@@ -102,6 +103,10 @@ _SPEC: dict[str, tuple] = {
     "agent_ssl": ("agent_port", "bool", None),
     "agent_certfile": ("agent_port", "file", None),
     "agent_keyfile": ("agent_port", "file", None),
+    "claude_hints": ("hints", "bool", None),
+    "claude_api_key": ("hints", "password", 300),
+    "claude_model": ("hints", "str", 100),
+    "claude_hints_per_day": ("hints", "int", (1, 500)),
     "admin_only_changes": ("access", "bool", None),
     "editors": ("access", "strs", None),
 }
@@ -187,9 +192,13 @@ LABELS: dict[str, tuple[str, str]] = {
     "agent_ssl": ("Agent port uses HTTPS", "Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder."),
     "agent_certfile": ("Agent HTTPS certificate", "The certificate file in Home Assistant's /ssl folder."),
     "agent_keyfile": ("Agent HTTPS private key", "The certificate's private key file in Home Assistant's /ssl folder."),
+    "claude_hints": ("Hints from Claude", "Adds an Ask Claude button to amber and red checks, for a few sentences on what the error usually means. Off by default. Only the check and its error are sent, with computer, account and domain names and addresses replaced; security events, account lists and password-scan results are never sent. Uses your own Anthropic API key, so you pay for what's asked (a fraction of a penny each)."),
+    "claude_api_key": ("Anthropic API key", "From console.anthropic.com. Stored with the add-on's settings, never shown again, and only ever sent to Anthropic's API."),
+    "claude_model": ("Claude model", "The model that writes the hints. A small, fast one keeps each hint cheap."),
+    "claude_hints_per_day": ("Hints from Claude per day", "At most this many questions to Claude a day. The same error is only asked about once (answers are kept for 30 days)."),
 }
 
-ACCESS_KEYS = ("admin_only_changes", "editors", "messages")  # only real Home Assistant admins may change these
+ACCESS_KEYS = ("admin_only_changes", "editors", "messages", "claude_hints", "claude_api_key", "claude_model", "claude_hints_per_day")  # only real Home Assistant admins may change these
 AGENT_PORT_KEYS = ("agent_ssl", "agent_certfile", "agent_keyfile")
 MAX_ITEMS, MAX_ITEM_LEN = 500, 200
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")

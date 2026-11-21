@@ -33,7 +33,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
 8. [Agent addresses and updates](#agent-addresses-and-updates): HTTPS, updates, messages to users' screens
 9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
-10. [Administration](#administration): settings, who can change things, export and import, security
+10. [Administration](#administration): settings, who can change things, the database, export and import, hints for errors, security
 11. [Reference](#reference): every option, ports, sensors and events, files
 12. [Troubleshooting](#troubleshooting)
 
@@ -61,8 +61,8 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 
 Rollcall opens on the **Overview**:
 
-- **Tiles** show how many devices are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open a list of just those devices, as a temporary tab with **×** to go back to All.
-- **Alerts** lists everything that isn't green, worst and newest first. That includes devices not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the device's Details on the right tab.
+- **Tiles** show how many devices are up, need attention, are down or are paused, and whether the agents are reporting. Click one to open a list of just those devices, as a temporary tab with **×** to go back to All. The **Rollcall** tile is Rollcall itself: its database's size and health, and the free space on Home Assistant's disk. Click it for [the database](#the-database).
+- **Alerts** lists everything that isn't green, worst and newest first. That includes devices not responding, failing checks, and agent problems such as stopped services, low disks, failed backups or security events. Click an alert to open the device's Details on the right tab. **💡** shows what a well-known error usually means and what to try (see [Hints for errors](#hints-for-errors)).
 - **At a glance** shows every device as a tile. Click one for its Details. The tiles can be sorted, and grouped with **group by**:
   - **Group** (the default): one section per group. A device's group is the one typed in its Edit form, or else its icon's type (Servers and PCs, Network, Lighting, Smart home, Heating and climate, Security and access, and so on). Your own groups come first.
   - **Your tabs**: one section per custom tab, in tab order, plus "Not in a tab". A device in two tabs appears in both.
@@ -836,6 +836,7 @@ On devices where a LAPS policy applies (agent 1.0.18 or later), Rollcall checks 
 - **The due date** comes from the password's expiry on the computer's own AD object (`msLAPS-PasswordExpirationTime`, or `ms-Mcs-AdmPwdExpirationTime` for legacy LAPS), which is what LAPS itself works from. The device can read the expiry; the password itself is never read. The lookup happens at most hourly.
 - **Without AD** (Entra ID backup, or a laptop away from the office), the due date is the last rotation plus the policy's password age. The last rotation comes from the managed account's password-last-set time and Windows LAPS' own events (10018/10029 backed up, 10020 account updated).
 - **Alerts:** amber once rotation is more than a day overdue, red once it's more than `agent_laps_overdue_days` (3) overdue. Also amber when the latest LAPS run failed (event 10005, with its error), the managed account doesn't exist, there's no password in AD yet, backup is disabled in the policy, or a legacy policy is set with no LAPS client installed.
+- **Away from the domain network:** a laptop that can't reach a domain controller can't rotate or back up its password, so LAPS failing there isn't news. When the LAPS error says it couldn't find a domain controller, or Group Policy and time sync can't reach one either, or Group Policy hasn't applied for over two days, the check says *Hasn't been on the domain network since 9 Nov* (the last time Group Policy applied) instead of the bare error, and stays amber: no alert for LAPS alone. It catches up once the device is back on the network. A device started less than two hours ago is amber rather than red too, since LAPS normally catches up within an hour.
 - **Domain controllers:** Windows LAPS manages the DSRM password there, if *Enable password backup for DSRM accounts* is on.
 - **Devices without LAPS** don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
 
@@ -1405,7 +1406,7 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 - **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each device's next check or agent report; turning **Agent port uses HTTPS** on or off switches the agent port over at once.
 - **Checked as you type.** A value out of range is marked and **Save** waits until it's fixed. If Home Assistant turns a change down, nothing is changed and the reason is shown.
-- **Who can make changes** (`admin_only_changes`, `editors`) can only be changed by Home Assistant admins, not by editors.
+- **Who can make changes** (`admin_only_changes`, `editors`), **Messages to users' screens** and **Error hints** can only be changed by Home Assistant admins, not by editors.
 - **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
 - Devices aren't listed here; add and edit them on the dashboard.
 
@@ -1422,6 +1423,15 @@ The add-on reads Home Assistant's user list to find out who's an admin. If it ca
 
 To hide the panel from some non-admins, remove it from their sidebar under their **Profile → Change the order and hide items from the sidebar**. That only hides it; anyone who can sign in could still open the view-only page by URL.
 
+### The database
+
+**Manage → Database** (admins and editors), or the **Rollcall** tile on the Overview, shows how much room Rollcall takes and whether its database is healthy.
+
+- **Sizes:** the database, Rollcall's whole data folder, and the free space on Home Assistant's disk.
+- **What takes the room:** check history, agent readings (for the graphs) and syslog messages, each with its size, how many entries, the oldest, and how long it's kept. History and syslog follow **History (days)** (`history_days`); agent readings are kept for every report for 2 days, hourly for a month and daily for **Agent graphs (days)** (`metrics_days`). Below that, every file and folder in the data folder with its size, biggest first. A `before_import_<date>` folder is what an import replaced, kept in case it was needed; you can delete it once you're happy.
+- **Health:** SQLite's integrity check (`quick_check`) runs once a day in the early hours, and on **Check now**. Damage is red, with an alert: restore from a Rollcall export (**Export / import**) or a Home Assistant backup of the add-on. Free space on Home Assistant's disk below 10% is amber, below 5% red with an alert (Home Assistant and Rollcall stop saving history once the disk is full; old Home Assistant backups are the usual culprit).
+- **Compact now** (admins only) rewrites the database without the free space that old history leaves behind, which SQLite otherwise keeps for reuse. It needs free space of about twice the database's size, and Rollcall holds its writes while it runs (seconds for most databases, a minute or so for a big one). Nothing is deleted. Usually it isn't needed: the space is reused.
+
 ### Export and import
 
 **Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
@@ -1432,6 +1442,21 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.
 
 **Reset all uptime** (Manage menu) clears the uptime history for every device. It asks you to type a 4-digit code first, so it can't be clicked by accident.
+
+### Hints for errors
+
+Amber and red checks with a well-known error show **💡**: on the Overview next to the alert, and in Details under the check. It explains what the error usually means and what to try.
+
+**Built-in hints** cover common codes and messages: finding or signing in to the domain (`0x8007054B`, `0x8007051F`, `0x800706BA`, wrong or expired passwords, locked or disabled accounts, access denied), Group Policy failures, LAPS (no password in AD, overdue rotation), the clock and the PDC emulator, Windows Update and WSUS (`0x80244022`, `0x8024401C`, `0x80073712`, `0x800F081F` and others), certificates, DFS Replication (4012, 2213) and backups (VSS). They're part of Rollcall: free, and nothing leaves your network.
+
+**Hints from Claude** are optional and **off by default**. An admin turns them on under **Manage → Settings → Error hints** and enters their own Anthropic API key (from console.anthropic.com). Then **💡** also offers **Ask Claude** for any amber or red check, including errors the built-in table doesn't know.
+
+- **On request only.** Nothing is sent until someone who can make changes clicks **Ask Claude**. The answer is marked as a suggestion from Claude: advice only. Claude can't change anything.
+- **What's sent:** the check's name, whether it's amber or red, its error text, the kind of device (e.g. *Microsoft Windows 11 Pro (workstation)*), whether it's on a domain, and how long ago its agent reported. **What's sent?** shows exactly that before you ask, and each answer keeps a copy.
+- **Names and addresses are replaced first:** every device name Rollcall knows, the domain's names, signed-in users, `DOMAIN\account` names, email addresses, IPv4 and IPv6 addresses, host names, UNC paths, SIDs, MAC addresses and user profile folders become stand-ins such as `PC01`, `CONTOSO\user1` and `192.0.2.1`. Windows' own names (`NT AUTHORITY\SYSTEM`, `C:\Windows\...`) and error codes are kept, since they're what the answer depends on.
+- **Never sent:** security events, domain security (privileged groups and accounts), agent file changes, known vulnerabilities and anything from password scanning. Those checks don't offer **Ask Claude** at all.
+- **Cost:** a small, fast model (`claude_model`, `claude-haiku-5-5` by default) answers in a few sentences, a fraction of a penny each, on your Anthropic account. The same error is only asked about once (answers are kept for 30 days in `claude_hints.json`), and **Hints from Claude per day** (`claude_hints_per_day`, 30) caps the rest.
+- **The key** is stored with the add-on's settings like the email password: never shown again, left out of exports, and only ever sent to Anthropic's API.
 
 ### Add-on security
 
@@ -1528,6 +1553,11 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_ssl` | false | Serve the agent port over HTTPS |
 | `agent_certfile` | fullchain.pem | Certificate in Home Assistant's `/ssl` folder |
 | `agent_keyfile` | privkey.pem | Its private key |
+| **Error hints** (admins only) | | |
+| `claude_hints` | false | Offer **Ask Claude** on amber and red checks; see [Hints for errors](#hints-for-errors) |
+| `claude_api_key` | | Your Anthropic API key; never shown again, only sent to Anthropic |
+| `claude_model` | claude-haiku-5-5 | The model that writes the hints |
+| `claude_hints_per_day` | 30 | At most this many questions to Claude a day (1 to 500) |
 | **Other** | | |
 | `log_level` | info | debug, info, warning or error |
 | `hosts` | `[]` | Optional bulk import; see [Adding and editing devices](#adding-and-editing-computers) |
@@ -1600,7 +1630,9 @@ In the add-on's data folder (included in Home Assistant backups):
 | `vulns/` | Downloaded vulnerability data (Microsoft, CISA, OSV.dev), refreshed daily |
 | `secrets/` | Where each agent's password scan found passwords: path, line, kind, setting name and length (never the passwords) |
 | `icons/` | Uploaded icons |
-| SQLite database | Uptime history and syslog messages |
+| `db_health.json` | The last database check and compaction |
+| `claude_hints.json` | Hints from Claude: answers (30 days) and today's count; never the API key |
+| SQLite database | Uptime history, agent readings and syslog messages (see [The database](#the-database)) |
 
 In the repository:
 
@@ -1618,6 +1650,8 @@ rollcall/              the add-on (its internal ID is ping_monitor)
     ├── syslogrx.py, syslogreadings.py   syslog receiver and readings
     ├── ilo.py         HPE iLO health over RIBCL
     ├── vulns.py       known vulnerabilities: Microsoft, OSV.dev and CISA data
+    ├── dbhealth.py    Manage > Database: sizes, integrity check, compacting
+    ├── hints.py       hints for errors: the built-in table, and Claude (optional)
     ├── certcheck.py, sipcheck.py, hadevice.py, msi.py
     ├── agent/PingMonitorAgent.ps1       the Windows agent
     ├── agent/pingmonitor-agent.py       the Linux agent

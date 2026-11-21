@@ -407,6 +407,14 @@ body.home-on .wrap,body.home-on #sortMobile{display:none!important}
 .alertwrap.sev0,.alertwrap.sev1{background:color-mix(in srgb,var(--red) 5%,transparent)}
 .alertwrap .alert.sev0,.alertwrap .alert.sev1{background:transparent}
 .ackmini{flex:none;margin-right:14px;font-size:12px;padding:4px 10px}
+.hintmini{flex:none;margin-right:8px;font-size:12px;padding:4px 8px}
+.hintpanel{padding:4px 14px 12px 40px;border-bottom:1px solid var(--line)}
+.hintbox{display:block;margin-top:6px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--accent) 6%,var(--card));border:1px solid color-mix(in srgb,var(--accent) 25%,var(--line));font-size:12.5px;line-height:1.45;color:var(--text)}
+.hintbox p{margin:0 0 6px}.hintbox p:last-child{margin-bottom:0}
+.hintbox .who{display:block;font-size:11px;color:var(--muted);margin-bottom:3px;font-weight:600}
+.hintbox pre{white-space:pre-wrap;font-size:11.5px;margin:4px 0 0;color:var(--muted)}
+.checklist .hintbox small{display:inline;color:var(--muted)}
+.checklist .hintbox b{display:inline}
 .allok{padding:22px 14px;text-align:center;color:var(--muted)}
 .allok b{display:block;color:var(--green);font-size:15px;margin-bottom:2px}
 .glance{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;padding:12px}
@@ -559,6 +567,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M12.6 8.0L14.2 8.0 M11.3 11.3L12.4 12.4 M8.0 12.6L8.0 14.2 M4.7 11.3L3.6 12.4 M3.4 8.0L1.8 8.0 M4.7 4.7L3.6 3.6 M8.0 3.4L8.0 1.8 M11.3 4.7L12.4 3.6"/></svg>Settings</button>
         <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
         <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Log</button>
+        <button type="button" id="dbBtn" role="menuitem" title="How big Rollcall's database is, what takes the room, and whether it's healthy"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="3.8" rx="5" ry="1.8"/><path d="M3 3.8v8.4c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V3.8M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8"/></svg>Database</button>
         <button type="button" id="msgBtn" role="menuitem" hidden title="Send a short message to the screens of agent devices (admins only)"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Messages</button>
         <hr>
         <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.8 2.4v3.4h3.4"/></svg>Reset all uptime…</button>
@@ -594,6 +603,14 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents send reports; they never take instructions, apart from updates and messages that you turn on.</div></div>
     <div class="dlg-body" id="agBody"></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="dbDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Database</h2><div class="sub">Rollcall's history, readings and syslog messages, and everything else in its data folder on Home Assistant's disk.</div></div>
+    <div class="dlg-body" id="dbBody"><p class="empty-note">Loading…</p></div>
+    <div class="dlg-foot"><div class="actions"><button type="button" id="dbCheck">Check now</button><button type="button" id="dbCompact" hidden>Compact now…</button></div><div><button type="button" id="dbRefresh">Refresh</button><button class="primary">Close</button></div></div>
   </form>
 </dialog>
 
@@ -1399,6 +1416,61 @@ function alerts() {
   }
   return out.sort((a, b) => a.sev - b.sev || (b.since || 0) - (a.since || 0) || collator.compare(a.h.name, b.h.name));
 }
+// ---- Hints for errors: the built-in table (hints.py), and Claude on request when an admin has turned it on ----
+const hintOpen = new Set(), hintAns = new Map();
+const HINT_NEVER = ["security", "secrets", "domain", "integrity", "vulns", "aduser"];
+const hintId = (hostKey, svcKey) => hostKey + "|" + svcKey;
+const canAskClaude = svc => !!(data && data.claude_hints && data.can_edit && (svc.status === "red" || svc.status === "amber") && svc.detail
+  && !HINT_NEVER.includes(String(svc.key).replace(/^agent_/, "")));
+const hintable = (h, svc) => !!((svc.hint && svc.hint.length) || canAskClaude(svc));
+function hintHtml(h, svc) {
+  const id = hintId(h.key, svc.key), ans = hintAns.get(id) || {};
+  let out = (svc.hint || []).map(x => `<span class="hintbox"><span class="who">💡 What this usually means${x.code ? ` (${esc(x.code)})` : ""}</span><p>${esc(x.means)}</p><p><b>Try:</b> ${esc(x.try)}</p></span>`).join("");
+  if (canAskClaude(svc)) {
+    if (ans.text) out += `<span class="hintbox"><span class="who">Suggestion from Claude${ans.cached ? " (asked before)" : ""} · advice only, check before acting</span><p>${esc(ans.text)}</p>` +
+      `<details><summary><small>What was sent</small></summary><pre>${esc(ans.sent || "")}</pre></details></span>`;
+    else out += `<span class="hintbox"><button type="button" class="mini" data-askclaude="${esc(id)}"${ans.loading ? " disabled" : ""}>${ans.loading ? "Asking Claude…" : "Ask Claude"}</button>` +
+      ` <small>Sends only this check and its error, with names and addresses replaced.${ans.left != null ? ` ${ans.left} left today.` : ""}</small>` +
+      (ans.error ? `<p class="failtxt" style="margin-top:6px">${esc(ans.error)}</p>` : "") +
+      (ans.sent ? `<details><summary><small>What would be sent</small></summary><pre>${esc(ans.sent)}</pre></details>` : ` <button type="button" class="mini" data-hintpreview="${esc(id)}">What's sent?</button>`) + `</span>`;
+  }
+  return out;
+}
+// In Details, under each amber or red check
+function detHint(x) {
+  const h = data && data.hosts.find(y => y.key === detKey);
+  if (!h || (x.status !== "red" && x.status !== "amber")) return "";
+  const svc = h.services.find(s => s.key === "agent_" + x.key) || {key: "agent_" + x.key, status: x.status, detail: x.detail, hint: x.hint};
+  const full = {...svc, hint: x.hint || svc.hint}, id = hintId(h.key, full.key);
+  if (!hintable(h, full)) return "";
+  return `<button type="button" class="mini hintmini" style="margin-top:4px" data-hintbtn="${esc(id)}" aria-expanded="${hintOpen.has(id)}">💡 ${hintOpen.has(id) ? "Hide hint" : "Hint"}</button>` +
+    (hintOpen.has(id) ? hintHtml(h, full) : "");
+}
+function hintRerender() {
+  if (document.getElementById("home") && !document.getElementById("home").hidden) renderHome();
+  if (detDlg.open && detKey && detMode === "agent" && lastDetails) renderDetails(lastDetails);
+}
+async function hintCall(id, preview) {
+  const [hostKey, svcKey] = [id.slice(0, id.indexOf("|")), id.slice(id.indexOf("|") + 1)];
+  const cur = hintAns.get(id) || {};
+  if (!preview) hintAns.set(id, {...cur, loading: true, error: ""});
+  hintRerender();
+  try {
+    const r = await fetch("api/hints/claude", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({host: hostKey, check: svcKey, preview: !!preview})});
+    const j = await r.json().catch(() => ({}));
+    hintAns.set(id, {...cur, loading: false, sent: j.sent || cur.sent, left: j.left, error: r.ok ? "" : (j.error || "That didn't work (" + r.status + ")"),
+      ...(r.ok && !preview ? {text: j.text, cached: j.cached} : {})});
+  } catch (e) { hintAns.set(id, {...cur, loading: false, error: e.message}); }
+  hintRerender();
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-hintbtn],[data-askclaude],[data-hintpreview]");
+  if (!b) return;
+  e.stopPropagation(); e.preventDefault();
+  if (b.dataset.hintbtn) { const id = b.dataset.hintbtn; hintOpen.has(id) ? hintOpen.delete(id) : hintOpen.add(id); hintRerender(); }
+  else if (b.dataset.askclaude) hintCall(b.dataset.askclaude, false);
+  else hintCall(b.dataset.hintpreview, true);
+}, true);
 // Everything acknowledged, under the alerts, folded away, each with Undo
 let ackedOpen = false;
 function ackedList() {
@@ -1460,18 +1532,20 @@ function renderHome() {
     ${tile(deg ? "warm" : "", "degraded", "Need attention", deg, deg ? `device${deg === 1 ? "" : "s"} with alerts` : "none", "q:attention")}
     ${tile(down ? "hot" : "", "red", "Down", down, (down ? "not responding" : "none") + (unreach ? ` · ${unreach} more unreachable behind ${down === 1 ? "it" : "them"}` : ""), "q:down")}
     ${quiet ? tile("", "maintenance", "Paused or off", quiet, "not being alerted", "q:quiet") : ""}
+    ${dbTile(tile)}
     ${withAgent.length ? tile(agentBad ? "warm" : "", agentBad ? "amber" : "green", "Agents", withAgent.length - agentBad + "/" + withAgent.length, agentBad ? `${agentBad} not reporting properly` : "all reporting", agentBad ? "q:agentbad" : "q:agents") : ""}
   </div>`;
   html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
       const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
-      const ack = ackFor(a);
-      return `${ack ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
+      const ack = ackFor(a), hk = a.check && hintable(a.h, a.check) ? hintId(a.h.key, a.check.key) : "";
+      const wrap = ack || hk;
+      return `${wrap ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
         <span class="dot ${a.dot}"></span>
         <span class="what"><b>${esc(a.h.name)}</b>${a.h.no_alerts ? ` <span title="Never alerts: notifications are off for this device">🔕</span>` : ""} <span class="chk">· ${esc(a.title)}</span><small>${esc(a.detail)}</small></span>
         <span class="when" title="${a.since ? esc(new Date(a.since * 1000).toLocaleString()) : ""}">${a.since ? ago(a.since, now).replace(" ago", "") : ""}</span>
-        <span class="go">${target} ›</span></button>${ack ? `<button type="button" class="ackmini edit-only" ${ack.sys ? `data-sysack="${esc(a.h.key)}"` : `data-ackalert="${i}"`} title="${esc(ack.tip)}">Acknowledge</button></div>` : ""}`;
+        <span class="go">${target} ›</span></button>${hk ? `<button type="button" class="mini hintmini" data-hintbtn="${esc(hk)}" aria-expanded="${hintOpen.has(hk)}" title="What this usually means">💡</button>` : ""}${ack ? `<button type="button" class="ackmini edit-only" ${ack.sys ? `data-sysack="${esc(a.h.key)}"` : `data-ackalert="${i}"`} title="${esc(ack.tip)}">Acknowledge</button>` : ""}${wrap ? `</div>` : ""}${hk && hintOpen.has(hk) ? `<div class="hintpanel">${hintHtml(a.h, a.check)}</div>` : ""}`;
     }).join("") : `<div class="allok"><b>✓ All clear</b>All ${hosts.length} devices and their checks are OK.</div>`) + ackedList() + `</div>`;
   const gs = GLANCE_SORT[glanceSort] ? glanceSort : "status";
   const groupOpts = Object.fromEntries(Object.entries(GLANCE_GROUP).filter(([k]) => k !== "tab" || views.length));
@@ -1589,6 +1663,7 @@ function showInList(key) {
   if (row) { row.scrollIntoView({block: "center", behavior: "smooth"}); row.classList.add("flashrow"); setTimeout(() => row.classList.remove("flashrow"), 1700); }
 }
 document.getElementById("home").addEventListener("click", async e => {
+  if (e.target.closest('[data-hometab="db"]')) return openDatabase();
   const t = e.target.closest("[data-hometab]");
   if (t) { tabId = t.dataset.hometab; document.getElementById("filter").value = ""; return render(); }
   if (e.target.closest("[data-homeadd]")) return openDialog(null);
@@ -1997,7 +2072,8 @@ function stParse(f, raw) {
 }
 const stSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function stChanged() { return ST.meta ? ST.meta.fields.filter(f => !stSame(ST.vals[f.key], ST.orig[f.key])).map(f => f.key) : []; }
-function stLocked(f) { return f.group === "access" && !ST.meta.can_admin; }
+const ST_ADMIN_KEYS = ["messages", "claude_hints", "claude_api_key", "claude_model", "claude_hints_per_day"];  // as settingslib.ACCESS_KEYS
+function stLocked(f) { return (f.group === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin; }
 function stCheck(f, v) {
   if (f.type === "int" && (typeof v !== "number" || v < f.min || v > f.max)) return `Must be a whole number from ${f.min} to ${f.max}`;
   if (f.type === "ints" && v.some(x => typeof x !== "number" || x < f.min || x > f.max)) return `Each must be a whole number from ${f.min} to ${f.max}`;
@@ -2049,6 +2125,9 @@ function stNote(group) {
       (mode !== "off" ? `<div class="st-note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="mini primary" id="stEmailTest">Send a test email</button><span id="stEmailTestNote" class="hint" style="margin:0">Uses the settings as they are here, even before you save them.</span></div>` : "");
   }
   if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
+  if (group === "hints") return `<p class="st-note">Every amber or red check with a well-known error code shows 💡 <b>What this usually means</b>, from a table built into Rollcall: free, and nothing leaves your network.</p>` +
+    `<p class="st-note"><b>Hints from Claude</b> are optional and off unless turned on here. They add an <b>Ask Claude</b> button for errors the table doesn't cover. Only the check and its error are sent to Anthropic's API, with computer, account and domain names and addresses replaced by stand-ins (each hint shows exactly what was sent). Security events, account lists and anything from password scanning are never sent. It uses your own API key from console.anthropic.com, only asks when someone clicks, and the same error is only asked about once.</p>` +
+    (ST.meta.can_admin ? "" : `<p class="st-note">Only Home Assistant administrators can change these.</p>`);
   if (group === "agent_port") return `<p class="st-note">The agent port is using <b>${esc(ST.meta.agent_port)}</b> now. Switching it takes effect straight away; agents keep using the address they were installed with, so update the addresses under <b>Agents</b> to match (<code>https://</code> or <code>http://</code>).</p>`;
   if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each device's next check or agent report.</p>`;
   return "";
@@ -2283,6 +2362,7 @@ function applyStatus(fresh) {
     mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
     document.getElementById("msgBtn").hidden = !data.can_admin;
+    document.getElementById("dbCompact").hidden = !data.can_admin;
     let later = 0; try { later = +localStorage.getItem("pm_tls_later") || 0; } catch (e) { }
     document.getElementById("tlsPrompt").hidden = !(data.tls_prompt && data.can_admin && Date.now() - later > 7 * 86400000);
     const vo = document.querySelector(".viewonly");
@@ -2523,7 +2603,7 @@ function renderDetails(d) {
   const T = {};
   const flush = next => { if (html) T[curTab] = (T[curTab] || "") + html; html = ""; curTab = next; };
   html += sect("Checks", `<div class="checklist">${(d.checks || []).map(x =>
-    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${(x.status === "amber" || x.status === "red" && x.key === "security") && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>`
+    `<div class="${JUMP[x.key] ? "jump" : ""}" ${JUMP[x.key] ? `data-jump="${esc(x.key)}" role="button" tabindex="0" title="Show ${esc(x.label)} details"` : ""}><span class="dot ${x.status}" style="margin-top:4px"></span><span><b>${esc(x.label)}</b><small>${esc(x.detail || "")}</small>${detHint(x)}${(x.status === "amber" || x.status === "red" && x.key === "security") && (x.key === "events" || x.key === "security") && newAlerts(x.key) ? `<button type="button" class="mini edit-only ackbtn" data-ack="${x.key}" title="Back to green until something new arrives">Acknowledge</button>`
       : x.key === "integrity" && x.status === "amber" ? `<button type="button" class="mini edit-only ackbtn" data-ack="integrity" title="Back to green until the agent finds another change">Acknowledge</button>`
       : x.key === "domain" && x.status === "amber" && domainNew() ? `<button type="button" class="mini edit-only ackbtn" data-ack="domain" title="Back to green until someone else is added to a privileged group">Acknowledge</button>`
       : x.acked ? `<small>acknowledged: counts as OK while it stays like this</small><button type="button" class="mini edit-only ackbtn" data-ackcheck="${esc(x.key)}" data-undo="1">Undo</button>`
@@ -4962,6 +5042,78 @@ async function logLoad() {
 function logFollow() {
   clearInterval(addonLogTimer);
   if (document.getElementById("alFollow").checked && document.getElementById("alDlg").open) addonLogTimer = setInterval(logLoad, 5000);
+}
+// ---- Manage > Database: sizes, what takes the room, and health ----
+const fmtBytes = n => n == null ? "—" : n < 1024 ? n + " bytes" : n < 1048576 ? Math.round(n / 1024) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(1) + " GB";
+// The Overview's Rollcall card: database health and room on Home Assistant's disk
+function dbTile(tile) {
+  const h = data.db_health;
+  if (!h) return "";
+  const cls = h.level === "crit" ? "hot" : h.level === "warn" ? "warm" : "", dot = h.level === "crit" ? "red" : h.level === "warn" ? "amber" : h.ok === null ? "" : "green";
+  const disk = h.disk && h.disk.total ? ` · ${Math.round(h.disk.free_pct)}% of disk free` : "";
+  return tile(cls, dot, "Rollcall", fmtBytes(h.db_bytes), esc(h.text) + disk, "db");
+}
+let dbInfo = null;
+async function openDatabase() {
+  document.getElementById("mainMenu").hidden = true;
+  document.getElementById("dbBody").innerHTML = `<p class="empty-note">Loading…</p>`;
+  document.getElementById("dbDlg").showModal();
+  dbLoad();
+}
+document.getElementById("dbBtn").addEventListener("click", openDatabase);
+document.getElementById("dbRefresh").addEventListener("click", () => dbLoad());
+async function dbLoad(url, method) {
+  const btns = ["dbCheck", "dbCompact", "dbRefresh"].map(id => document.getElementById(id));
+  btns.forEach(b => b.disabled = true);
+  try {
+    const r = await fetch(url || "api/database", {method: method || "GET", cache: "no-store"});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    dbInfo = j; dbRender(j);
+    return j;
+  } catch (e) {
+    if (dbInfo) { dbRender(dbInfo); alert(e.message); }
+    else document.getElementById("dbBody").innerHTML = `<p class="empty-note">${esc("Couldn't read the database details: " + e.message)}</p>`;
+  } finally { btns.forEach(b => b.disabled = false); }
+}
+document.getElementById("dbCheck").addEventListener("click", () => {
+  document.getElementById("dbHealthLine") && (document.getElementById("dbHealthLine").textContent = "Checking…");
+  dbLoad("api/database/check", "POST");
+});
+document.getElementById("dbCompact").addEventListener("click", async () => {
+  const i = dbInfo || {};
+  if (!confirm(`Compact the database now?\n\nIt rewrites the database without the free space old history left behind${i.reclaimable ? ` (about ${fmtBytes(i.reclaimable)})` : ""}. ` +
+    `Rollcall holds its writes until it's finished, which can take a minute for a big database. Nothing is deleted.`)) return;
+  document.getElementById("dbHealthLine") && (document.getElementById("dbHealthLine").textContent = "Compacting…");
+  const j = await dbLoad("api/database/compact", "POST");
+  if (j && j.before != null) alert(`Compacted: ${fmtBytes(j.before)} → ${fmtBytes(j.after)} in ${j.took.toFixed(1)} s.`);
+});
+function dbRender(j) {
+  const now = Date.now() / 1000, s = j.summary || {}, st = j.state || {}, d = s.disk || {};
+  const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+  const day = t => t ? new Date(t * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"}) : "—";
+  const lvlDot = l => `<em style="font-style:normal;white-space:nowrap"><i class="dot ${l === "crit" ? "red" : l === "warn" ? "amber" : "green"}"></i> `;
+  const diskLvl = !d.total ? "ok" : d.free_pct < j.disk_crit ? "crit" : d.free_pct < j.disk_warn ? "warn" : "ok";
+  const health = !st.checked ? `<em style="font-style:normal">Not checked yet</em>`
+    : st.ok ? lvlDot("ok") + `No problems found</em> <small class="muted">${ago(st.checked, now)} · took ${st.took} s</small>`
+    : lvlDot("crit") + `<b class="failtxt">Damaged</b></em> <small class="muted">${ago(st.checked, now)}</small>`;
+  let html = `<div class="kv">
+    ${kv("Health", `<span id="dbHealthLine">${health}</span>`)}
+    ${kv("Database", fmtBytes(s.db_bytes) + (j.reclaimable > 1048576 ? ` <small class="muted">${fmtBytes(j.reclaimable)} of it free space (Compact now gives it back)</small>` : ""))}
+    ${kv("Data folder", fmtBytes((j.folder || []).reduce((a, f) => a + f.bytes, 0)))}
+    ${kv("Home Assistant's disk", d.total ? lvlDot(diskLvl) + `${fmtBytes(d.free)} free of ${fmtBytes(d.total)} (${d.free_pct}%)</em>` : "—")}
+    ${kv("Last compacted", st.compacted ? `${day(st.compacted)} <small class="muted">${fmtBytes(st.compact_before)} → ${fmtBytes(st.compact_after)}</small>` : "")}
+  </div>`;
+  if (st.checked && !st.ok) html += `<p class="hint failtxt">SQLite's integrity check found damage. Restore from a Rollcall export (Manage → Export / import) or a Home Assistant backup of the add-on. What it found:</p><pre class="logout" style="max-height:140px">${esc((st.found || []).join("\n"))}</pre>`;
+  if (diskLvl !== "ok") html += `<p class="hint ${diskLvl === "crit" ? "failtxt" : ""}">Home Assistant's disk is nearly full. Free up space there (old backups are the usual culprit), or keep less history under Settings.</p>`;
+  html += sect("What takes the room in the database", `<div style="overflow-x:auto">` + tbl(["What", "Size", "Entries", "Oldest", "Kept for"], (j.tables || []).map(t =>
+    `<tr><td style="white-space:normal;min-width:140px">${esc(t.label)}${t.parts ? `<br><small class="muted">${t.parts.map(p => `${p.rows.toLocaleString()} ${esc(p.label)}`).join(" · ")}</small>` : ""}</td>
+      <td style="white-space:nowrap">${t.estimate ? "about " : ""}${fmtBytes(t.bytes)}</td><td>${(t.rows || 0).toLocaleString()}</td><td style="white-space:nowrap">${day(t.oldest)}</td><td style="min-width:160px"><small>${esc(t.keep)}</small></td></tr>`)) + `</div>`);
+  html += sect("Data folder", tbl(["", "Size"], (j.folder || []).filter(f => f.bytes > 0).map(f =>
+    `<tr><td style="white-space:normal">${esc(f.label || f.name)}${f.label ? ` <small class="muted">${esc(f.name)}${f.folder ? "/" : ""}</small>` : ""}</td><td style="white-space:nowrap">${fmtBytes(f.bytes)}</td></tr>`)));
+  html += `<p class="hint">The integrity check runs once a day in the early hours. Amber below ${j.disk_warn}% free on Home Assistant's disk, red (with an alert) below ${j.disk_crit}%.` +
+    (data && data.can_admin ? " Compact now needs free space of about twice the database's size." : " Only Home Assistant admins can compact the database.") + `</p>`;
+  document.getElementById("dbBody").innerHTML = html;
 }
 // ---- Messages to users' screens (admins only; off unless the messages option is on) ----
 let msgInfo = null, msgIncEdit = null;

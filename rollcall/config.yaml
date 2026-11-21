@@ -114,6 +114,10 @@ options:
   agent_ssl: false
   agent_certfile: fullchain.pem
   agent_keyfile: privkey.pem
+  claude_hints: false
+  claude_api_key: ""
+  claude_model: claude-haiku-5-5
+  claude_hints_per_day: 30
   hosts: []
 schema:
   interval: int(30,3600)
@@ -203,6 +207,10 @@ schema:
   agent_ssl: bool
   agent_certfile: str
   agent_keyfile: str
+  claude_hints: bool?
+  claude_api_key: password?
+  claude_model: str?
+  claude_hints_per_day: int(1,500)?
   hosts:
     - name: str
       host: str

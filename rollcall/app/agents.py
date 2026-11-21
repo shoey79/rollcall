@@ -858,6 +858,51 @@ def laps_state(laps: dict, now: float, overdue_days: float = 3) -> tuple[str, st
     return level, detail[0].upper() + detail[1:], info
 
 
+# Errors meaning "couldn't find or reach a domain controller", as Windows LAPS and Group Policy report them
+DC_ERRORS = ("0x8007054b", "0x8007051f", "0x800706ba", "0x8007203a", "0x80072095", "domain controller",
+             "no logon servers", "specified domain either does not exist", "server is not operational",
+             "rpc server is unavailable", "ldap_server_down")
+GP_DC_IDS = {1006, 1053, 1054, 1055, 1129}
+
+
+def off_domain(laps: dict, rc: dict, now: float) -> tuple[float | None, str] | None:
+    """(since, how we know) when the device can't reach a domain controller, else None. since is the last
+    time Group Policy applied (it needs a domain controller), or None when that isn't known."""
+    g = rc.get("gpo") or {}
+    last_ok = _ts(g.get("last_computer_success") or g.get("last_success")) if (g.get("last_computer_success") or g.get("last_success")) else None
+    fails = g.get("failures") or []
+    latest = max(fails, key=lambda f: _ts(f.get("time")) or 0, default=None)
+    gp_dc = bool(latest and latest.get("id") in GP_DC_IDS and (not last_ok or (_ts(latest.get("time")) or 0) > last_ok))
+    gp_stale = bool(g) and last_ok is not None and now - last_ok > 2 * DAY
+    err = str(laps.get("last_error") or "").lower()
+    laps_dc = any(k in err for k in DC_ERRORS)
+    t = rc.get("time") or {}
+    time_dc = t.get("role", "member") == "member" and t.get("offset_s") is None and bool(t.get("error"))
+    signs = [w for w, on in (("Group Policy", gp_dc or gp_stale), ("LAPS", laps_dc), ("time sync", time_dc)) if on]
+    # LAPS alone saying so is enough (its error names the domain controller); otherwise two signs, or Group Policy
+    # not having applied for days
+    if not (laps_dc or gp_stale or len(signs) >= 2):
+        return None
+    return last_ok, " and ".join(signs) if len(signs) < 3 else "Group Policy, LAPS and time sync"
+
+
+def laps_context(level: str, detail: str, info: dict, laps: dict, rc: dict, uptime_s, now: float) -> tuple[str, str, dict]:
+    """Put a failing LAPS check in context: a device that hasn't been on the domain network can't rotate or back
+    up its password, so say that instead of the bare error, and keep it amber (no alert for LAPS alone). A device
+    only just started gets the same allowance: LAPS catches up within an hour or so of reaching the domain."""
+    od = off_domain(laps, rc, now)
+    if od:
+        since, how = od
+        info = {**info, "off_domain": since or True}
+        when = f" since {_day(since)}" if since else " recently"
+        return WARN, (f"Hasn't been on the domain network{when} ({how} can't reach a domain controller), so LAPS "
+                      "can't rotate or back up the password; it catches up once the device is back on the network"), info
+    if isinstance(uptime_s, int) and 0 <= uptime_s < 2 * 3600 and level == CRIT:
+        info = {**info, "just_started": True}
+        return WARN, detail + "; the device started less than 2 hours ago, and LAPS normally catches up within an hour", info
+    return level, detail, info
+
+
 BITLOCKER_REQUIRE = ("off", "workstations", "all")
 
 
@@ -1849,6 +1894,8 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     laps = rc.get("laps")
     if laps and not ign.has("laps", "laps"):
         level, detail, info = laps_state(laps, now, float(opts.get("agent_laps_overdue_days", 3)))
+        if level != OK:
+            level, detail, info = laps_context(level, detail, info, laps, rc, report.get("uptime_s"), now)
         checks.append(_check("laps", "LAPS", level, detail, confirm=level == CRIT, info=info))
 
     dm = rc.get("domain")

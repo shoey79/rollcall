@@ -64,6 +64,8 @@ import iprange
 import jellyfin as jflib
 import plex as pxlib
 import starlink as sllib
+import dbhealth as dblib
+import hints as hintlib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
@@ -119,6 +121,8 @@ VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vu
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
+CLAUDE_HINTS_PATH = Path(os.environ.get("PM_CLAUDE_HINTS", str(DB_PATH.parent / "claude_hints.json")))  # hints from Claude: cache and today's count
+DB_HEALTH_PATH = Path(os.environ.get("PM_DB_HEALTH", str(DB_PATH.parent / "db_health.json")))  # the last database check
 MESSAGES_PATH = Path(os.environ.get("PM_MESSAGES", str(DB_PATH.parent / "messages.json")))  # messages to screens
 AGENT_TLS = agenttls.AgentTLS(Path(os.environ.get("PM_AGENT_TLS", str(DB_PATH.parent / "agent_tls"))))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
@@ -231,6 +235,10 @@ DEFAULTS = {
     "agent_ssl": False,
     "agent_certfile": "fullchain.pem",
     "agent_keyfile": "privkey.pem",
+    "claude_hints": False,
+    "claude_api_key": "",
+    "claude_model": "claude-haiku-5-5",
+    "claude_hints_per_day": 30,
     "hosts": [],
 }
 
@@ -1790,6 +1798,9 @@ class Monitor:
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
         self.metrics = metricslib.Metrics(store.db)
+        self.dbh = dblib.Health(DB_HEALTH_PATH)  # Manage > Database (dbhealth.py)
+        self.claude = hintlib.ClaudeHints(CLAUDE_HINTS_PATH)  # hints for errors (hints.py)
+        self.db_started = time.time()
         self.email = emaillib.Emailer(lambda: self.opts, {}, lambda: None)
         self.syslog_unknown: dict[str, dict] = {}
         self.scan: discovery.Scan | None = None
@@ -2507,6 +2518,7 @@ class Monitor:
                 last_publish = now
                 self.rollout_watch(now)
                 await self.email_summary_tick(now)
+                await self.db_health_tick(now)
                 if not self._pub_all or self._pub_all.done():  # in the background: a slow Home Assistant mustn't hold up checks
                     self._pub_all = asyncio.create_task(self._publish_all())
             if now - last_prune >= 3600:
@@ -4129,6 +4141,94 @@ class Monitor:
         except emaillib.EmailError as e:
             log.warning("Couldn't send the daily summary email: %s", e)
 
+    # -- Hints from Claude (hints.py) ---------------------------------------
+    def claude_on(self) -> bool:
+        return bool(self.opts.get("claude_hints") and self.opts.get("claude_api_key"))
+
+    def claude_question(self, h: Host, key: str) -> tuple[dict, str]:
+        """(the check, what would be sent to Claude) for one amber or red check, with every name and address that
+        Rollcall knows of replaced, and the generic patterns (addresses, accounts, domain names) caught as well."""
+        s = next((x for x in h.services + h.agent_checks if x.key == key), None)
+        short = key.removeprefix("agent_")
+        if not s:
+            raise ValueError("That check doesn't exist")
+        if short in hintlib.NEVER or key in SECURITY_KEYS:
+            raise ValueError("Security checks are never sent to Claude")
+        if s.status not in (RED, AMBER) or not s.detail:
+            raise ValueError("Only amber and red checks with an error can be asked about")
+        names, domains, users = [], [], []
+        for o in self.hosts.values():
+            names += [o.name, str(o.host or "")]
+            r = o.agent_report or {}
+            names += [str(r.get("hostname") or ""), str(r.get("fqdn") or "").split(".")[0]]
+            fq = str(r.get("fqdn") or "")
+            if "." in fq:
+                domains.append(fq.split(".", 1)[1])
+                domains.append(fq.split(".", 1)[1].split(".")[0])
+            dm = ((r.get("checks") or {}).get("domain") or {}).get("domain")
+            if dm:
+                domains += [str(dm), str(dm).split(".")[0]]
+            for x in r.get("sessions") or []:
+                u = str(x.get("user") or "")
+                users.append(u.split("\\")[-1].split("@")[0])
+        names = [n for n in names if n and not re.fullmatch(r"[\d.:]+", n)]
+        red = hintlib.Redactor(names, domains, users)
+        r = h.agent_report or {}
+        roles = r.get("roles") or []
+        kind = "domain controller" if "Domain controller" in roles else "server" if re.search(r"(?i)server", str(r.get("os") or "")) else \
+            "workstation" if r.get("os") else ""
+        ctx = {"Device": " ".join(x for x in (red(str(r.get("os") or "")), f"({kind})" if kind else "") if x) or None,
+               "Joined to a domain": None if not r.get("fqdn") else ("yes" if "." in str(r.get("fqdn")) else "no"),
+               "Last agent report": (f"{int((time.time() - h.agent_seen) // 60)} minutes ago" if h.agent_seen else None) if s.kind == "agent" else None}
+        return {"label": red(s.label), "status": s.status}, hintlib.prompt(red(s.label), s.status, red(s.detail), ctx)
+
+    # -- Manage > Database (dbhealth.py) -----------------------------------
+    async def db_health_tick(self, now: float) -> None:
+        """Once a minute: the daily integrity check when it's due, and an alert when the disk is nearly full."""
+        local = datetime.fromtimestamp(now, TZ) if TZ else datetime.fromtimestamp(now)
+        if not self.dbh.busy and self.dbh.due(now, local.hour, self.db_started):
+            await self.db_check()
+        d = dblib.disk(DB_PATH.parent)
+        lvl = dblib.disk_level(d)
+        if lvl == "crit" and self.dbh.alerted.get("disk") != "crit":
+            self.dbh.alerted["disk"] = "crit"
+            await self.notify("🔴 Home Assistant's disk is nearly full",
+                              f"Only {d['free_pct']:.1f}% ({dblib.fmt_bytes(d['free'])}) is free on the disk Rollcall keeps its data on. "
+                              "Rollcall and Home Assistant stop saving history once it's full. See Manage > Database in Rollcall.",
+                              tag="rollcall_disk", level="red")
+        elif lvl == "ok" and self.dbh.alerted.get("disk") == "crit":
+            self.dbh.alerted["disk"] = "ok"
+            await self.notify("🟢 Home Assistant's disk has room again", f"{d['free_pct']:.0f}% is free.", tag="rollcall_disk", level="ok")
+
+    async def db_check(self) -> dict:
+        """SQLite's quick_check on Rollcall's database; damage is red with an alert."""
+        self.dbh.busy = "check"
+        try:
+            ok, found, took = await asyncio.to_thread(dblib.quick_check, self.store.db)
+        finally:
+            self.dbh.busy = ""
+        was = self.dbh.state.get("ok")
+        self.dbh.record_check(ok, found, took, time.time())
+        if not ok:
+            log.error("Rollcall's database is damaged: %s", "; ".join(found[:5]))
+            if was is not False:
+                await self.notify("🔴 Rollcall's database is damaged",
+                                  "SQLite's integrity check found problems in Rollcall's database (history and readings). "
+                                  "Restore it from a Rollcall export (Manage > Export / import) or a Home Assistant backup. "
+                                  "Details are under Manage > Database.", tag="rollcall_db", level="red")
+        else:
+            log.info("Database check: OK (%.1f s)", took)
+            if was is False:
+                await self.notify("🟢 Rollcall's database is OK again", "The integrity check found no problems.", tag="rollcall_db", level="ok")
+        return self.dbh.state
+
+    def db_details(self) -> dict:
+        """Everything Manage > Database shows (run in a worker thread: counting rows takes a moment)."""
+        rows, pages = dblib.tables(self.store.db, self.opts, self.logs.per_host)
+        return {"path": str(DB_PATH), "tables": rows, **pages, "folder": dblib.folder(DB_PATH.parent, DB_PATH.name),
+                "summary": self.dbh.summary(DB_PATH), "state": self.dbh.state,
+                "disk_warn": dblib.DISK_WARN, "disk_crit": dblib.DISK_CRIT}
+
     def summary_sections(self) -> tuple[list, str]:
         """What needs attention now, for the daily summary: [(heading, [(colour, what, detail)])], and a line of totals."""
         down, red, amber, paused = [], [], [], []
@@ -5093,6 +5193,8 @@ class Monitor:
                 "received": h.agent_seen, "security_visible": include_security, "secrets": secrets_out,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN,
+                            **({"hint": hk} if s.status in (RED, AMBER) and s.key not in SECURITY_KEYS
+                               and (hk := hintlib.known(s.key.removeprefix("agent_"), s.detail or "")) else {}),
                             **({"acked": True} if s.acked else {})}
                            for s in h.agent_checks]}
 
@@ -5243,6 +5345,7 @@ class Monitor:
                     "uptime_24h": self.uptime_24h(svc_key(h, s)),
                     "last_check": s.last_check, "last_change": s.last_change,
                     "agent": s.kind == "agent", **({"acked": True} if s.acked else {}),
+                    **({"hint": hk} if s.status in (RED, AMBER) and (hk := hintlib.known(s.key.removeprefix("agent_"), s.detail or "")) else {}),
                     **({"ackable": any(i["what"] != "SNMP" and not i.get("acked") and not i.get("ignored") for i in h.snmp_items)} if s.kind == "snmp" else
                        {"ackable": any(i["what"] != "iLO" and not i.get("acked") and not i.get("ignored") for i in h.ilo_items)} if s.kind == "ilo" else {}),
                 } for s in h.services + h.agent_checks],
@@ -5256,7 +5359,7 @@ class Monitor:
                 "syslog_port": self.syslog_port, "syslog_unknown": [{k: v for k, v in u.items() if k != "held"} for u in sorted(self.syslog_unknown.values(), key=lambda u: -u["last"])[:20]],
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
-                "ping_mode": PING_MODE,
+                "ping_mode": PING_MODE, "db_health": self.dbh.summary(DB_PATH), "claude_hints": self.claude_on(),
                 "hosts": hosts}
 
 
@@ -5440,6 +5543,72 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         log.info("%s withdrew a message", user["display"] or "an admin")
         return web.json_response({"ok": True})
 
+    async def hints_claude(req):
+        """💡 Ask Claude about one amber or red check (or, with preview, just show what would be sent)."""
+        try:
+            body = await req.json()
+        except (json.JSONDecodeError, ValueError):
+            raise web.HTTPBadRequest(text="invalid JSON")
+        h = monitor.hosts.get(str((body or {}).get("host") or ""))
+        if not h:
+            return web.json_response({"error": "No such device"}, status=404)
+        try:
+            check, sent = monitor.claude_question(h, str(body.get("check") or ""))
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        opts = monitor.opts
+        limit = int(opts.get("claude_hints_per_day") or 30)
+        local = datetime.fromtimestamp(time.time(), TZ) if TZ else datetime.now()
+        day = local.strftime("%Y-%m-%d")
+        base = {"sent": sent, "check": check, "left": monitor.claude.left_today(day, limit), "limit": limit}
+        if body.get("preview"):
+            return web.json_response(base)
+        if not monitor.claude_on():
+            return web.json_response({**base, "error": "Hints from Claude are off. An admin can turn them on under Settings → Error hints."}, status=409)
+        user = await access.who(req)
+        try:
+            out = await monitor.claude.ask(monitor.ha.session, str(opts.get("claude_api_key")), str(opts.get("claude_model") or ""),
+                                           check["label"], sent, day, limit, time.time())
+        except ValueError as e:
+            log.warning("Hint from Claude for %s / %s: %s", h.name, check["label"], e)
+            return web.json_response({**base, "left": monitor.claude.left_today(day, limit), "error": str(e)}, status=502)
+        if not out["cached"]:
+            log.info("%s asked Claude about %s on %s", user["display"] or "someone", check["label"], h.name)
+        return web.json_response({**base, **out, "left": monitor.claude.left_today(day, limit)})
+
+    async def database_info(_req):
+        """Manage > Database: sizes, what takes the room, and the last check."""
+        out = await asyncio.to_thread(monitor.db_details)
+        return web.json_response(out, headers={"Cache-Control": "no-store"})
+
+    async def database_check(_req):
+        if monitor.dbh.busy:
+            return web.json_response({"error": "A database check or compaction is already running."}, status=409)
+        await monitor.db_check()
+        return web.json_response(await asyncio.to_thread(monitor.db_details))
+
+    async def database_compact(req):
+        """Compact now (VACUUM): admins only, and only with room for the temporary copies."""
+        if monitor.dbh.busy:
+            return web.json_response({"error": "A database check or compaction is already running."}, status=409)
+        room, need, free = dblib.vacuum_room(DB_PATH)
+        if not room:
+            return web.json_response({"error": f"Not enough free space to compact: it needs about {dblib.fmt_bytes(need)} "
+                                               f"and {dblib.fmt_bytes(free)} is free."}, status=409)
+        user = await access.who(req)
+        log.info("%s compacted the database", user["display"] or "an admin")
+        monitor.dbh.busy = "compact"
+        try:
+            before, after, took = await asyncio.to_thread(dblib.vacuum, monitor.store.db, DB_PATH)
+        except sqlite3.Error as e:
+            log.warning("Couldn't compact the database: %s", e)
+            return web.json_response({"error": f"Couldn't compact the database: {e}"}, status=500)
+        finally:
+            monitor.dbh.busy = ""
+        monitor.dbh.record_compact(before, after, took, time.time())
+        log.info("Database compacted: %s to %s in %.1f s", dblib.fmt_bytes(before), dblib.fmt_bytes(after), took)
+        return web.json_response({"before": before, "after": after, "took": took, **await asyncio.to_thread(monitor.db_details)})
+
     async def addon_log(req):
         """The add-on's log (Manage > Log), newest last, with secrets masked."""
         try:
@@ -5506,7 +5675,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if set(settingslib.ACCESS_KEYS) & changes.keys() and not await access.is_admin(req):
             same = all(monitor.opts.get(k) == changes[k] for k in settingslib.ACCESS_KEYS if k in changes)
             if not same:
-                return web.json_response({"error": "Only Home Assistant admins can change who can make changes.",
+                return web.json_response({"error": "Only Home Assistant admins can change who can make changes, messages or hints from Claude.",
                                           "errors": {k: "Only Home Assistant admins can change this"
                                                      for k in settingslib.ACCESS_KEYS if k in changes}}, status=403)
             changes = {k: v for k, v in changes.items() if k not in settingslib.ACCESS_KEYS}
@@ -6853,6 +7022,10 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/agents/networks", editor_only(agents_networks))
     app.router.add_post("/api/email/test", editor_only(email_test))
     app.router.add_get("/api/log", editor_only(addon_log))
+    app.router.add_get("/api/database", editor_only(database_info))
+    app.router.add_post("/api/hints/claude", editor_only(hints_claude))
+    app.router.add_post("/api/database/check", editor_only(database_check))
+    app.router.add_post("/api/database/compact", admin_only(database_compact))
     app.router.add_post("/api/acks/dismiss", editor_only(acks_dismiss))
     app.router.add_get("/api/agents/msi", editor_only(agents_msi))
     app.router.add_post("/api/agents/{aid}/update-now", editor_only(agents_update_now))
@@ -6996,7 +7169,7 @@ def make_backup(version: str | None) -> bytes:
         try:
             raw = json.loads(OPTIONS_PATH.read_text())
             raw.pop("hosts", None)
-            for k in ("smtp_password", "m365_client_secret"):  # passwords stay on this install
+            for k in ("smtp_password", "m365_client_secret", "claude_api_key"):  # passwords and keys stay on this install
                 raw.pop(k, None)
             z.writestr("options.json", json.dumps(raw, indent=2))
         except (OSError, ValueError):
