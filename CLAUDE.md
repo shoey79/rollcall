@@ -35,7 +35,12 @@ Remove each line once it's released.
 Features the owner has asked for, to build when they say (he'll say once there's a reasonable number to build
 together). Remove each once it's released.
 
-(none)
+- Offline / airgapped use (owner asked 21 Nov). An "Offline mode" setting: no downloads (vulnerability feeds, winget
+  catalogue, Jellyfin/Immich release checks) and no hourly warnings; the Vulnerabilities and Software pages say the
+  data is offline and how old it is. Manage → Offline data: export a bundle (vulns/ data and the winget catalogue)
+  from a connected Rollcall, import it on the airgapped one, with its date shown. Also fix: the winget catalogue
+  already on disk isn't loaded when the download fails (it tries the download first). Docs: what needs the
+  internet, and installing the add-on without it (base image and Alpine packages from a local mirror).
 
 ## Built, waiting for release
 
