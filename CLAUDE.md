@@ -42,6 +42,13 @@ together). Remove each once it's released.
   already on disk isn't loaded when the download fails (it tries the download first). Docs: what needs the
   internet, and installing the add-on without it (base image and Alpine packages from a local mirror).
 
+- Hints from other AI providers (owner asked 21 Nov). Error hints currently use Claude only (hints.py, settings
+  claude_*). Add a provider choice: Anthropic (Claude), OpenAI, Google Gemini (and similar hosted APIs), each with its
+  own API key kept like the Claude key (never shown again, only sent to that provider) and a model setting. Same
+  rules for all: off by default, admins only, on request, cached, daily limit, the same redaction and never-sent
+  checks; the answer says which provider wrote it. Docs and changelog name the provider in use; migrate the existing
+  claude_* settings. Tests against stand-in APIs for each provider.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
