@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.96.0 - 2026-11-21
+
+### Added
+- **Starlink alignment and obstruction map.** The Starlink tab now shows where the dish faces and how high it points, against where it would like to (a compass and an elevation gauge), and its obstruction map: the sky as the dish sees it, with blocked areas in red and a summary in words, e.g. *mostly to the north-east and east, low, near the horizon*. The map is read when the tab opens, at most every 5 minutes. A dish 20° or more off the direction it wants (or 10° off its elevation) turns the check amber, saying which way to turn or tilt it. Still read only: Rollcall never changes anything on the dish.
+
 ## 1.95.0 - 2026-11-21
 
 ### Added
