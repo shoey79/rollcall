@@ -72,6 +72,8 @@ together). Remove each once it's released.
   load rule. `/sys/class/thermal` is permission-denied over ADB: say "not readable on this model". Also add: count
   of disabled packages (`pm list packages -d`; a drop means an update re-enabled debloated apps) and, for each
   sideloaded app, whether it's running (`pidof`) and its service count (e.g. a custom launcher's Home helper).
+  CPU swings with video (13% then 47.5%, both YouTube): sample 2-3 s and only go amber when it stays high over
+  several checks.
   Don't scrub version numbers as IP addresses. TV approval with Rollcall's own key not yet tested (he used adb).
 
 ## Built, waiting for release
