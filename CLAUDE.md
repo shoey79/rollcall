@@ -42,22 +42,6 @@ together). Remove each once it's released.
   already on disk isn't loaded when the download fails (it tries the download first). Docs: what needs the
   internet, and installing the add-on without it (base image and Alpine packages from a local mirror).
 
-- Hints from other AI providers (owner asked 21 Nov). Error hints currently use Claude only (hints.py, settings
-  claude_*). Add a provider choice: Anthropic (Claude), OpenAI, Google Gemini (and similar hosted APIs), each with its
-  own API key kept like the Claude key (never shown again, only sent to that provider) and a model setting. Same
-  rules for all: off by default, admins only, on request, cached, daily limit, the same redaction and never-sent
-  checks; the answer says which provider wrote it. Docs and changelog name the provider in use; migrate the existing
-  claude_* settings. Tests against stand-in APIs for each provider.
-
-- Readings as chips, with conditions, for all integrations (owner asked 22 Nov). Under Edit, tick readings from an
-  integration to show as their own chips on the device's row, each with its current value, and optionally a
-  condition (like HA sensor checks: e.g. "Latency > 80 ms", "Download < 20 Mb/s", "Alignment off by > 15°") that
-  turns it amber/red and alerts like any other check. Starlink: latency, drops, down/up, uptime, obstructed %, sky
-  blocked %, alignment (rotation and elevation off where it wants, in degrees), Ethernet speed, signal, update
-  waiting. Same picker for Jellyfin, Plex, iLO, myenergi, Pi-hole and other linked HA devices (their existing
-  readings). Owner wants alarms, e.g. orientation out of allowance: today alignment is amber only, no alert.
-  Values come from each check's latest reading (no extra requests). Docs, tests per integration.
-
 - Other backup products: Veritas NetBackup and HPE/OpenText Data Protector (owner asked 22 Nov; used by other Rollcall
   users, not the owner). First a common framework in the Windows agent so each product is a small definition (where
   to read, success/warning/failure, job name, reason), feeding the same Backups check and tab, "Why?" and alerts as
@@ -80,3 +64,7 @@ rename and version bump in the release commit, push the code, wait for CI, then 
   lines; 💡 hint for "Cannot use CBT". Owner to confirm on his backup server after release.
 - Settings → Agent port shows when Rollcall's own HTTPS (Manage → Agents) is in use; own-certificate settings greyed
   out and refused while it's on.
+- Security review of 1.95.0 (RC-01..03): scan ranges size-checked before listing; export/import admins only; Overview
+  reminder to close plain HTTP once all agents use HTTPS (stays off across restarts); role test over every route.
+- Hints from AI: provider choice (Claude, ChatGPT, Gemini), own key and model each, Test button.
+- Readings as chips with limits that alert (reading:source.id): Starlink, Jellyfin, Plex, iLO, UPS; linked HA sensors.
