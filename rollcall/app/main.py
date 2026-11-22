@@ -5158,7 +5158,7 @@ class Monitor:
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))
             now = time.time()
             r["checks"] = {**r["checks"], "tasks": {**tk, "tasks": [{**t, "_state": st, "_why": why} for t in tk["tasks"]
-                                                                    for st, why in [agentlib.task_state(t, now, ign)]]}}
+                                                                    for st, why in [agentlib.task_state(t, now, ign, agentlib.boot_time(r, now))]]}}
         cs = (r.get("checks") or {}).get("certs")
         if cs and cs.get("certs"):  # each certificate's state as the check sees it, for the Security tab
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))

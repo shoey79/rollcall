@@ -1034,6 +1034,11 @@ TASK_NOISE = re.compile(r"^(MicrosoftEdgeUpdate|GoogleUpdate|GoogleUpdater|OneDr
                         r"BraveSoftwareUpdate|ZoomUpdate|Intel|NVIDIA|NvTm|Lenovo|Dropbox|npcapwatchdog)", re.I)
 TASK_NOISE_PATHS = re.compile(r"^\\(Mozilla|Google|GoogleSystem|Adobe|Intel|NVIDIA|Lenovo|Apple|Dropbox|Zoom|Opera|BraveSoftware)\\", re.I)
 TASK_TIMED = {"daily", "weekly", "monthly", "time"}
+# Rollcall's own agent tasks: watched through the agent's reports, not as scheduled tasks (after a night off,
+# Windows counts every 5-minute run it missed)
+TASK_OWN = re.compile(r"^(Ping Monitor Agent|Rollcall Agent)( \(start-up\))?$", re.I)
+# How long a task can go without running after the computer starts before missed runs count again
+TASK_GRACE = {"time": 26 * 3600, "daily": 26 * 3600, "weekly": 8 * 86400, "monthly": 32 * 86400}
 
 
 def task_result_text(code) -> str:
@@ -1042,8 +1047,11 @@ def task_result_text(code) -> str:
     return f"0x{code:X}" + (f", {TASK_RESULT_TEXT[code]}" if code in TASK_RESULT_TEXT else "")
 
 
-def task_state(t: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str]:
-    """(state, why) for one scheduled task: ok, failed, missed, disabled, vendor (routine noise), running, ignored."""
+def task_state(t: dict, now: float, ign: "Ignore | None" = None, boot: float | None = None) -> tuple[str, str]:
+    """(state, why) for one scheduled task: ok, failed, missed, off (missed while the computer was off), disabled,
+    vendor (routine noise), own (Rollcall's agent), running, ignored. boot is when the computer last started."""
+    if TASK_OWN.match(t["name"]) and t.get("path", "\\") == "\\":
+        return "own", "Rollcall's agent (watched through its reports)"
     if ign and (ign.has("task", t["name"]) or ign.has("task", (t["path"] + t["name"]))):
         return "ignored", ""
     if t["state"].lower() == "disabled":
@@ -1054,23 +1062,43 @@ def task_state(t: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, s
     code = t.get("result")
     if code is not None and code not in TASK_OK_RESULTS and t.get("last_run"):
         return ("vendor" if vendor else "failed"), "last run failed (" + task_result_text(code) + ")"
-    timed = bool(TASK_TIMED & set(t.get("triggers") or []))
+    trig = set(t.get("triggers") or [])
+    timed = bool(TASK_TIMED & trig)
     due = _ts(t.get("next_run")) if t.get("next_run") else None
-    if timed and not vendor and ((t.get("missed") or 0) > 0 or (due and due < now - 3600)):
-        n = t.get("missed") or 0
-        return "missed", f"missed {n} scheduled run{'s' if n != 1 else ''}" if n else "was due over an hour ago and hasn't run"
+    last = _ts(t.get("last_run")) if t.get("last_run") else None
+    n = t.get("missed") or 0
+    if timed and not vendor and (n > 0 or (due and due < now - 3600)):
+        runs = f"{n} scheduled run{'s' if n != 1 else ''}" if n else "its scheduled run"
+        grace = max(TASK_GRACE.get(k, 0) for k in trig & TASK_TIMED)
+        if boot and (last is None or last < boot) and (not due or due < boot or due >= now - 3600):
+            # Nothing has been due since the computer started: these runs were missed while it was off
+            if last and now - last > max(7 * 86400, 2 * grace):
+                return "missed", (f"hasn't run since {_day(last)}: its runs fall while the computer is off (tick \"Run task as "
+                                  "soon as possible after a scheduled start is missed\" in its settings)")
+            if now - boot < grace:
+                return "off", f"missed {runs} while the computer was off"
+        return "missed", f"missed {runs}" if n else "was due over an hour ago and hasn't run"
     return ("vendor" if vendor else "ok"), ""
 
 
-def tasks_check(tk: dict, now: float, ign: "Ignore | None" = None) -> tuple[str, str] | None:
+def boot_time(report: dict, now: float) -> float | None:
+    """When the computer last started, from the agent's report (uptime when it was collected)."""
+    up = report.get("uptime_s")
+    if not isinstance(up, (int, float)) or isinstance(up, bool) or up < 0:
+        return None
+    at = _ts(report.get("collected")) if report.get("collected") else None
+    return (at or now) - up
+
+
+def tasks_check(tk: dict, now: float, ign: "Ignore | None" = None, boot: float | None = None) -> tuple[str, str] | None:
     tasks = tk.get("tasks") or []
     if not tasks:
         return None
-    bad = [(t, why) for t in tasks for st, why in [task_state(t, now, ign)] if st in ("failed", "missed")]
+    bad = [(t, why) for t in tasks for st, why in [task_state(t, now, ign, boot)] if st in ("failed", "missed")]
     if bad:
         t, why = bad[0]
         return WARN, f"{t['name']}: {why}" + (f"; {len(bad) - 1} more" if len(bad) > 1 else "")
-    mine = [t for t in tasks if task_state(t, now, ign)[0] in ("ok", "running")]
+    mine = [t for t in tasks if task_state(t, now, ign, boot)[0] in ("ok", "running", "off")]
     return OK, f"{len(mine)} scheduled task(s) OK" if mine else "No scheduled tasks of your own to watch"
 
 
@@ -1937,7 +1965,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
 
     tk = rc.get("tasks")
     if tk and report.get("workstation") is not True and not ign.has("task", "tasks"):  # servers only: PCs are full of vendor tasks
-        res = tasks_check(tk, now, ign)
+        res = tasks_check(tk, now, ign, boot_time(report, now))
         if res:
             checks.append(_check("tasks", "Scheduled tasks", res[0], res[1]))
 

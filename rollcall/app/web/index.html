@@ -2774,8 +2774,8 @@ function renderDetails(d) {
     const chk = (d.checks || []).find(x => x.key === "tasks");
     const whole = findIgnore("task", "tasks");
     const when = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
-    const ST = {ok: "OK", failed: "Failed", missed: "Missed", disabled: "Disabled", running: "Running", vendor: "Not watched", ignored: "Ignored"};
-    const order = {failed: 0, missed: 1, running: 2, ok: 3, vendor: 4, disabled: 5, ignored: 6};
+    const ST = {ok: "OK", failed: "Failed", missed: "Missed", off: "Missed while off", disabled: "Disabled", running: "Running", vendor: "Not watched", own: "Rollcall agent", ignored: "Ignored"};
+    const order = {failed: 0, missed: 1, running: 2, off: 3, ok: 4, own: 5, vendor: 6, disabled: 7, ignored: 8};
     const rows = c.tasks.tasks.slice().sort((a, b) => (order[a._state] ?? 9) - (order[b._state] ?? 9) || collator.compare(a.name, b.name));
     const head = chk ? `<p class="${chk.status === "amber" ? "old" : ""}" style="margin:0 0 8px">${chk.status === "green" ? "✓ " : ""}${esc(chk.detail || "")}</p>`
       : whole ? `<p class="hint" style="margin:0 0 8px">The scheduled task check is ignored ${whole.scope === "host" ? "on this server" : "on all servers"}.</p>`
@@ -2784,12 +2784,13 @@ function renderDetails(d) {
       const bad = chk && (t._state === "failed" || t._state === "missed");
       const why = String(t._why || "").replace(/^last run failed \((.*)\)$/, "$1").replace(/^missed /, "");
       const res = t._state === "failed" || t._state === "missed" ? `<b class="failtxt">${esc(ST[t._state])}</b> <small class="muted">${esc(why)}</small>`
+        : t._state === "off" ? `${esc(ST.off)} <small class="muted">${esc(why.replace(/ while the computer was off$/, ""))}</small>`
         : `${esc(ST[t._state] || "")}${t._state === "vendor" && t._why ? ` <small class="muted">(last run ${esc(why)})</small>` : ""}`;
       const trig = (t.triggers || []).join(", ");
       return `<tr class="${rowCls(bad, "task", t.name)}"><td><b>${esc(t.name)}</b>${t.path && t.path !== "\\" ? ` <small class="muted">${esc(t.path)}</small>` : ""}${t.action || trig ? `<br><small class="muted">${esc([t.action, trig && "runs " + trig].filter(Boolean).join(" · "))}</small>` : ""}</td>
         <td>${esc(t.run_as)}</td><td>${esc(when(t.last_run)) || `<small class="muted">never</small>`}</td><td>${res}</td><td>${esc(when(t.next_run))}</td>
         <td>${bad || findIgnore("task", t.name) ? ignBtn("task", t.name, t.name) : ""}</td></tr>`;
-    })) + `<p class="hint">Tasks outside Task Scheduler's Microsoft folder. Amber when a task's last run failed, or a timed task missed its run. Disabled tasks, and other vendors' updaters (Edge, Google, OneDrive, Adobe…), are listed but don't alert. ${chk && !whole ? ignBtn("task", "tasks", "Scheduled tasks") + " the whole check on this server." : ""}</p>`);
+    })) + `<p class="hint">Tasks outside Task Scheduler's Microsoft folder. Amber when a task's last run failed, or a timed task missed its run while the computer was on. Runs missed while it was off don't count, unless a task hasn't run for over a week because its runs always fall while it's off. Disabled tasks, and other vendors' updaters (Edge, Google, OneDrive, Adobe…), are listed but don't alert. ${chk && !whole ? ignBtn("task", "tasks", "Scheduled tasks") + " the whole check on this server." : ""}</p>`);
   }
   flush("roles");
   if (c.sql && (c.sql.instances || []).length) {
