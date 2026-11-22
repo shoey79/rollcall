@@ -58,13 +58,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Scheduled tasks: runs missed while the server was off don't warn ("Missed while off"); Rollcall's own agent task
-  left out of the check.
-- Veeam 13 (needs PowerShell 7.6): Windows agent 1.0.55 runs the "Why?" lookup in PowerShell 7; each VM's own warning
-  lines; 💡 hint for "Cannot use CBT". Owner to confirm on his backup server after release.
-- Settings → Agent port shows when Rollcall's own HTTPS (Manage → Agents) is in use; own-certificate settings greyed
-  out and refused while it's on.
-- Security review of 1.95.0 (RC-01..03): scan ranges size-checked before listing; export/import admins only; Overview
-  reminder to close plain HTTP once all agents use HTTPS (stays off across restarts); role test over every route.
-- Hints from AI: provider choice (Claude, ChatGPT, Gemini), own key and model each, Test button.
-- Readings as chips with limits that alert (reading:source.id): Starlink, Jellyfin, Plex, iLO, UPS; linked HA sensors.
+(none)
