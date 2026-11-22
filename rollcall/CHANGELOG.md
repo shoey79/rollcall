@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.97.0 - 2026-11-22
+
+### Security
+Fixes for findings in an independent review of 1.95.0. Thanks to the reviewer.
+- **Export and import are for Home Assistant admins only.** An export holds the key that signs agent updates and Rollcall's own HTTPS key, and import replaces everything. Before, anyone named in `editors` could use them too. If you've given editors who aren't Home Assistant admins access, and don't trust each of them with those keys, remove any exports they may have taken. (Installs where only admins can make changes, the default, weren't affected.)
+
+- **Network scan ranges are checked for size before being listed.** Entering a very large range, such as a /8, built a list of 16 million addresses before refusing it, which could stall the add-on. It's now refused straight away.
+
+- **A reminder to close plain HTTP once every agent uses HTTPS.** With Rollcall's own HTTPS on and every agent moved over, admins see a reminder on the Overview with a button to turn plain HTTP off. Off stays off across restarts.
+
+- **A test now tries every route as an ordinary user, an editor and an admin**, so a route given the wrong permission in future fails the tests.
+
+### Added
+- **Readings as chips.** Any reading from a device's integrations can be its own chip on the row, with its value (e.g. *Latency 31.5 ms*), and optionally a limit that makes it red and alert like any other check: Starlink (latency, drops, download, upload, obstruction, rotation and elevation off where the dish wants to point, and more), Jellyfin, Plex, iLO, UPS, and linked Home Assistant devices' sensors. In **Edit**, tick **Add readings as chips**. For example, `Rotation=reading:starlink.rotation_off>15` alerts when the dish is knocked out of alignment.
+
+- **Hints from ChatGPT or Gemini as well as Claude.** Settings → Error hints → **AI provider** chooses who answers **Ask**, each with its own API key and model, kept like the others (never shown again, only sent to that provider). The same rules apply to all: off by default, on request only, names and addresses replaced, security checks never sent. **Test the saved key and model** checks they work. Existing Claude settings carry on as they are.
+
+### Fixed
+- **Settings → Agent port says when Rollcall's own HTTPS is in use.** With HTTPS turned on under **Manage → Agents**, it still said the agent port was using HTTP, with its own-certificate box unticked. It now says agents use Rollcall's own HTTPS (and whether plain HTTP is still on), and the own-certificate settings, renamed **Use your own certificate on the agent port**, are greyed out while it is: one or the other, not both.
+
+- **Veeam Backup & Replication 13: "Why?" says why again.** Veeam 13's PowerShell needs PowerShell 7.6, which the agent (Windows PowerShell 5.1) couldn't load, so a VM that warned only showed *task has finished with 'Warning' state* from the event log. Windows agent 1.0.55 runs the lookup in PowerShell 7 when the module needs it, and also reads each VM's own warning lines, e.g. *Cannot use CBT: there is no change tracking data available… for disk 'disk0.vhdx'*. Common reasons like that one get a 💡 explaining them. Installed agents update themselves if automatic updates are on.
+
+- **Scheduled tasks no longer warn about runs missed while a server was off.** Windows counts those as missed too, so a server started in the morning reported every run it slept through, including Rollcall's own agent task (*Ping Monitor Agent: missed 140 scheduled runs*). Runs missed before the server started now show as *Missed while off* without a warning, and the agent's own task is left out (its reports already show whether it runs). A task that still hasn't run a day after start-up, or hasn't run for over a week because it's always scheduled while the server is off, is still amber.
+
 ## 1.96.0 - 2026-11-21
 
 ### Added
