@@ -67,3 +67,5 @@ rename and version bump in the release commit, push the code, wait for CI, then 
 
 - Scheduled tasks: runs missed while the server was off don't warn ("Missed while off"); Rollcall's own agent task
   left out of the check.
+- Veeam 13 (needs PowerShell 7.6): Windows agent 1.0.55 runs the "Why?" lookup in PowerShell 7; each VM's own warning
+  lines; 💡 hint for "Cannot use CBT". Owner to confirm on his backup server after release.
