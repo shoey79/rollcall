@@ -247,3 +247,24 @@ def test_end_to_end(tmp_path, monkeypatch, api):
         assert "asked Claude about" in (tmp_path / "addon" / "addon.log").read_text()
     finally:
         addon.stop()
+
+
+def test_veeam_cbt_warning_is_explained():
+    text = ("Cannot use CBT: There is no change tracking data available associated with the specified change tracking "
+            "identifier. Failed to query changes for disk 'D:\\VMs\\VM01\\disk0.vhd'.")
+    h = hints.known("backups", text)
+    assert h and "changed block tracking" in h[0]["means"] and "backup is fine" in h[0]["means"]
+
+
+def test_veeam_reasons_get_their_hint_in_details(mon):
+    main, m, h = mon
+    h.agent_report = {**h.agent_report, "checks": {"backups": {"jobs": [
+        {"source": "Veeam", "id": "j1", "name": "Daily VMs", "result": "Warning", "issue": {"session": "s", "source": "Veeam PowerShell",
+         "objects": [{"name": "VM01", "status": "Warning", "reason": "", "details": ["Cannot use CBT: no change tracking data available"]},
+                     {"name": "VM02", "status": "Success", "reason": "", "details": []}], "log": []}}]}}}
+    import types
+    m.agents = m.agents or types.SimpleNamespace(agents={})
+    m.secret_scan_config = lambda _a: {"on": False}
+    r = m.details(h, include_security=False)["report"]
+    objs = r["checks"]["backups"]["jobs"][0]["issue"]["objects"]
+    assert "_hint" in objs[0] and "_hint" not in objs[1]

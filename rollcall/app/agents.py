@@ -231,7 +231,9 @@ def _veeam_issue(raw) -> dict | None:
     if not isinstance(raw, dict):
         return None
     t = lambda v, n: re.sub(r"\s+", " ", str(v or "")).strip()[:n]
-    objs = [{"name": t(o.get("name"), 120), "status": t(o.get("status"), 20), "reason": t(o.get("reason"), 400)}
+    objs = [{"name": t(o.get("name"), 120), "status": t(o.get("status"), 20), "reason": t(o.get("reason"), 400),
+             # the VM's own warning lines (agent 1.0.55+), e.g. why changed block tracking couldn't be used
+             "details": [t(d, 400) for d in _as_list(o.get("details")) if d and isinstance(d, str)][:8]}
             for o in _as_list(raw.get("objects")) if isinstance(o, dict) and o.get("name")][:30]
     log = [{"status": "Failed" if o.get("status") == "Failed" else "Warning", "text": t(o.get("text"), 400)}
            for o in _as_list(raw.get("log")) if isinstance(o, dict) and o.get("text")][:20]

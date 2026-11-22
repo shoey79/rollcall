@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.54'
+$AgentVersion = '1.0.55'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -1991,26 +1991,81 @@ function Get-PreviousRun($Runs, [string]$Finished) {
     try { return ConvertTo-UtcString ([DateTime]::Parse($Finished).ToUniversalTime().AddDays(-1)) } catch { return '' }
 }
 
+# Why one run warned or failed, from Veeam's PowerShell: each VM or item's status, Veeam's reason and its own
+# warning lines, and the run's warning and error lines. Run in this PowerShell, or in PowerShell 7 when Veeam's
+# module needs it (Backup & Replication 13 needs 7.6), so it's kept as text.
+function Get-VeeamLookupScript { return @'
+param([string]$Session)
+function Cut([string]$t, [int]$n) { $t = ($t -replace '\s+', ' ').Trim(); if ($t.Length -gt $n) { $t.Substring(0, $n - 1) + [char]0x2026 } else { $t } }
+Import-Module Veeam.Backup.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking
+$s = $null
+try { $s = Get-VBRBackupSession -Id ([guid]$Session) -ErrorAction Stop } catch { $s = [Veeam.Backup.Core.CBackupSession]::Get([guid]$Session) }
+if (-not $s) { return $null }
+$tasks = @()
+try { $tasks = @(Get-VBRTaskSession -Session $s -ErrorAction Stop) } catch { try { $tasks = @($s.GetTaskSessions()) } catch { } }
+$objects = @($tasks | Sort-Object { if ([string]$_.Status -eq 'Success') { 1 } else { 0 } }, Name | Select-Object -First 30 | ForEach-Object {
+    $details = @()
+    if ([string]$_.Status -ne 'Success') {  # the VM's own warning and error lines (e.g. why changed block tracking couldn't be used)
+        try { $details = @($_.Logger.GetLog().UpdatedRecords | Where-Object { [string]$_.Status -in 'EWarning', 'EFailed' } | Select-Object -First 8 |
+            ForEach-Object { Cut ([string]$_.Title) 400 } | Where-Object { $_ } | Select-Object -Unique) } catch { }
+    }
+    [ordered]@{ name = (Cut ([string]$_.Name) 120); status = [string]$_.Status; reason = (Cut ([string]$_.Info.Reason) 400); details = @($details) } })
+$log = @()
+try {
+    $log = @($s.Logger.GetLog().UpdatedRecords | Where-Object { [string]$_.Status -in 'EWarning', 'EFailed' } | Select-Object -First 20 | ForEach-Object {
+        [ordered]@{ status = $(if ([string]$_.Status -eq 'EFailed') { 'Failed' } else { 'Warning' }); text = (Cut ([string]$_.Title) 400) } })
+} catch { }
+[ordered]@{ objects = @($objects); log = @($log) }
+'@ }
+
+function Find-Pwsh {
+    # PowerShell 7, for modules that need it
+    foreach ($c in @((Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source),
+                     "$env:ProgramFiles\PowerShell\7\pwsh.exe", "$env:ProgramFiles\PowerShell\7-preview\pwsh.exe")) {
+        if ($c -and (Test-Path -LiteralPath $c)) { return $c }
+    }
+    return $null
+}
+
+function Invoke-InPwsh([string]$Pwsh, [string]$Command, [int]$TimeoutSec = 180) {
+    # Runs a command in PowerShell 7 and returns what it printed; stopped after TimeoutSec
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Pwsh
+    $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc"
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch { }; throw "PowerShell 7 didn't finish within $TimeoutSec s" }
+    if ($p.ExitCode -ne 0) { throw ("PowerShell 7: " + (($err.Result -split "`r?`n" | Where-Object { $_ } | Select-Object -First 1) -as [string])) }
+    return $out.Result
+}
+
 function Get-VeeamRunIssue([string]$Log, [string]$Session, [string]$JobId = '', [string]$Since, [string]$Until, [switch]$NoPowerShell) {
-    # Why one run of a Veeam job warned or failed: each VM or item's status and Veeam's reason, and the
-    # run's warning and error lines. From Veeam's PowerShell on a backup server (Backup & Replication
-    # 11 or later), else from the Veeam event log between the run before and this one finishing.
+    # Why one run of a Veeam job warned or failed: from Veeam's PowerShell on a backup server (Backup &
+    # Replication 11 or later; 13 and later through PowerShell 7), else from the Veeam event log between the
+    # run before and this one finishing.
     $issue = [ordered]@{ session = $Session; source = ''; objects = @(); log = @() }
-    if (-not $NoPowerShell -and $Session -match '^[0-9a-fA-F-]{36}$' -and (Get-Module -ListAvailable -Name 'Veeam.Backup.PowerShell' -ErrorAction SilentlyContinue)) {
+    $mod = if (-not $NoPowerShell -and $Session -match '^[0-9a-fA-F-]{36}$') { Get-Module -ListAvailable -Name 'Veeam.Backup.PowerShell' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($mod) {
         try {
-            Import-Module Veeam.Backup.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking
-            $s = $null
-            try { $s = Get-VBRBackupSession -Id ([guid]$Session) -ErrorAction Stop } catch { $s = [Veeam.Backup.Core.CBackupSession]::Get([guid]$Session) }
-            if ($s) {
+            $r = $null
+            $needs = $null; try { $needs = [version]$mod.PowerShellVersion } catch { }
+            if ($needs -and $needs -gt $PSVersionTable.PSVersion) {
+                $pwsh = Find-Pwsh
+                if (-not $pwsh) { throw "Veeam's PowerShell needs PowerShell $needs or later, which isn't installed" }
+                $cmd = "& { $(Get-VeeamLookupScript) } '$Session' | ConvertTo-Json -Depth 6 -Compress"
+                $txt = Invoke-InPwsh $pwsh $cmd
+                $line = @($txt -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+                if ($line) { $r = $line | ConvertFrom-Json }
+            } else {
+                $r = & ([scriptblock]::Create((Get-VeeamLookupScript))) $Session
+            }
+            if ($r) {
                 $issue.source = 'Veeam PowerShell'
-                $tasks = @()
-                try { $tasks = @(Get-VBRTaskSession -Session $s -ErrorAction Stop) } catch { try { $tasks = @($s.GetTaskSessions()) } catch { } }
-                $issue.objects = @($tasks | Sort-Object { if ([string]$_.Status -eq 'Success') { 1 } else { 0 } }, Name | Select-Object -First 30 | ForEach-Object {
-                    [ordered]@{ name = (Limit-Text ([string]$_.Name) 120); status = [string]$_.Status; reason = (Limit-Text (([string]$_.Info.Reason) -replace '\s+', ' ') 400) } })
-                try {
-                    $issue.log = @($s.Logger.GetLog().UpdatedRecords | Where-Object { [string]$_.Status -in 'EWarning', 'EFailed' } | Select-Object -First 20 | ForEach-Object {
-                        [ordered]@{ status = $(if ([string]$_.Status -eq 'EFailed') { 'Failed' } else { 'Warning' }); text = (Limit-Text (([string]$_.Title) -replace '\s+', ' ') 400) } })
-                } catch { }
+                $issue.objects = @(@($r.objects) | Where-Object { $_ } | ForEach-Object { [ordered]@{ name = [string]$_.name; status = [string]$_.status
+                    reason = [string]$_.reason; details = @(@($_.details) | Where-Object { $_ } | ForEach-Object { [string]$_ }) } })
+                $issue.log = @(@($r.log) | Where-Object { $_ } | ForEach-Object { [ordered]@{ status = [string]$_.status; text = [string]$_.text } })
                 return $issue
             }
         } catch { Write-AgentLog "WARN Veeam PowerShell couldn't read the run: $($_.Exception.Message)" }

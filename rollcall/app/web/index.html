@@ -3146,12 +3146,14 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const res = x => { const r = (x.result || "").toLowerCase();
       return r === "success" ? `<span class="okc">Success</span>` : r === "failed" ? `<b class="failtxt">Failed</b>` : r === "warning" ? `<b class="old">Warning</b>` : esc(x.result || "—"); };
     const ago2 = iso => iso ? `${when(iso)}<br><small class="muted">${ago(Date.parse(iso) / 1000, now)}</small>` : "—";
+    // A well-known Veeam reason explained (hints.py's table, sent with the report as _hint)
+    const bkHint = o => o._hint ? `<span class="hintbox"><span class="who">💡 What this usually means</span><p>${esc(o._hint.means)}</p><p><b>Try:</b> ${esc(o._hint.try)}</p></span>` : "";
     // What went wrong in a job's latest run (agent 1.0.50+), opened with its "Why?" button
     const why = x => { const is = x.issue;
       const st = v => /fail|error/i.test(v) ? `<b class="failtxt">${esc(v)}</b>` : /warn/i.test(v) ? `<b class="old">${esc(v)}</b>` : `<span class="okc">${esc(v || "—")}</span>`;
       return (is.objects.length ? `<table class="bkwhy"><tr><th>VM or item</th><th>Result</th><th>Reason</th></tr>${is.objects.map(o =>
-          `<tr><td>${esc(o.name)}</td><td>${st(o.status)}</td><td class="msg">${esc(o.reason || "")}</td></tr>`).join("")}</table>` : "")
-        + (is.log.length ? `<ul class="bklog">${is.log.map(l => `<li>${st(l.status)} ${esc(l.text)}</li>`).join("")}</ul>` : "")
+          `<tr><td>${esc(o.name)}</td><td>${st(o.status)}</td><td class="msg">${esc(o.reason || "")}${(o.details || []).filter(d => d !== o.reason).map(d => `<br><small>${esc(d)}</small>`).join("")}${bkHint(o)}</td></tr>`).join("")}</table>` : "")
+        + (is.log.length ? `<ul class="bklog">${is.log.map(l => `<li>${st(l.status)} ${esc(l.text)}</li>`).join("")}</ul>` : "") + bkHint(is)
         + `<small class="muted">From ${is.source === "Veeam PowerShell" ? "Veeam's own record of the run" : "the Veeam event log during the run"}.</small>`; };
     html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map((x, i) => {
       const bad = x._level ? x._level !== "ok" : /failed|warning|stopped|disconnected/i.test(x.result || "");

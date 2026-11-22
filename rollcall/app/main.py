@@ -5159,6 +5159,19 @@ class Monitor:
             now = time.time()
             r["checks"] = {**r["checks"], "tasks": {**tk, "tasks": [{**t, "_state": st, "_why": why} for t in tk["tasks"]
                                                                     for st, why in [agentlib.task_state(t, now, ign, agentlib.boot_time(r, now))]]}}
+        bk = (r.get("checks") or {}).get("backups")
+        if bk and bk.get("jobs"):  # a well-known reason a Veeam run warned or failed, explained (hints.py)
+            def _hinted(j):
+                iss = j.get("issue")
+                if not isinstance(iss, dict):
+                    return j
+                objs = [{**o, **({"_hint": hk[0]} if (hk := hintlib.known("backups", " ".join([str(o.get("reason") or "")] + [str(d) for d in o.get("details") or []]), 1)) else {})}
+                        for o in iss.get("objects") or [] if isinstance(o, dict)]
+                if not any("_hint" in o for o in objs):
+                    hk = hintlib.known("backups", " ".join(str(x.get("text") or "") for x in iss.get("log") or [] if isinstance(x, dict)), 1)
+                    return {**j, "issue": {**iss, "objects": objs, **({"_hint": hk[0]} if hk else {})}}
+                return {**j, "issue": {**iss, "objects": objs}}
+            r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [_hinted(j) for j in bk["jobs"]]}}
         cs = (r.get("checks") or {}).get("certs")
         if cs and cs.get("certs"):  # each certificate's state as the check sees it, for the Security tab
             ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(self._host_settings(h).get("ignore") or []))

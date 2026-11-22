@@ -157,6 +157,12 @@ KNOWN: list[dict] = [
      "means": "DFS Replication paused after an unexpected shutdown, waiting to be told it's safe to carry on.",
      "try": "Event 2213 gives the exact command (wmic ... dfsrVolumeConfig ... call ResumeReplication). Back up the folder first."},
     # Backups
+    {"words": [r"Cannot use CBT", r"no change tracking data available", r"Changed block tracking (is disabled|cannot be used)"],
+     "means": "Veeam couldn't use changed block tracking for this disk, so it read the whole disk to find what changed. "
+              "The backup is fine, just slower. On Hyper-V it usually happens once after the VM was moved, restored, "
+              "merged from a checkpoint, or after the host restarted unexpectedly.",
+     "try": "Nothing, if the next run is clean. If it repeats every run, check the VM has no leftover checkpoints and "
+            "see Veeam's guidance for the exact message."},
     {"words": [r"\bVSS\b", r"shadow copy", r"0x8004230F", r"0x80042306"], "checks": ["backups"],
      "means": "The backup couldn't take a shadow copy (VSS) of the volume.",
      "try": "vssadmin list writers shows any writer in a failed state; restarting the service it belongs to usually clears it. "
