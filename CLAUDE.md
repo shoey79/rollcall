@@ -63,4 +63,5 @@ together). Remove each once it's released.
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
 releasing; remove each line once it's released.
 
-(none)
+- Scheduled tasks: runs missed while the server was off don't warn ("Missed while off"); Rollcall's own agent task
+  left out of the check.
