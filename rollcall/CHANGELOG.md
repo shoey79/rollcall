@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.97.1 - 2026-11-22
+
+### Changed
+- **Hints from AI say what a check is about.** A reading's error on its own, like *1.5% (above 1)*, didn't tell the AI what had been measured. The question now says what the check looks at (e.g. *a reading from a Starlink satellite dish: Obstructed, the share of the time something blocked the dish's view of the satellites*), the limit set in Rollcall, and the related check's state, still with names and addresses replaced. Readings in the picker explain themselves the same way.
+
 ## 1.97.0 - 2026-11-22
 
 ### Security
