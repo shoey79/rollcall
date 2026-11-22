@@ -78,3 +78,5 @@ rename and version bump in the release commit, push the code, wait for CI, then 
   left out of the check.
 - Veeam 13 (needs PowerShell 7.6): Windows agent 1.0.55 runs the "Why?" lookup in PowerShell 7; each VM's own warning
   lines; 💡 hint for "Cannot use CBT". Owner to confirm on his backup server after release.
+- Settings → Agent port shows when Rollcall's own HTTPS (Manage → Agents) is in use; own-certificate settings greyed
+  out and refused while it's on.
