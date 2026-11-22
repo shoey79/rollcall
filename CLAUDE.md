@@ -58,5 +58,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Hints from AI: the question says what the check looks at (readings explained, e.g. Starlink obstructed), the limit
-  set in Rollcall and the related check's state.
+(none)
