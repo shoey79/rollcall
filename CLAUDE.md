@@ -61,7 +61,9 @@ together). Remove each once it's released.
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
-releasing; remove each line once it's released.
+releasing; remove each line once it's released. Built changes waiting for release are kept on the `pending` branch
+(force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
+rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
 - Scheduled tasks: runs missed while the server was off don't warn ("Missed while off"); Rollcall's own agent task
   left out of the check.
