@@ -239,6 +239,11 @@ DEFAULTS = {
     "claude_api_key": "",
     "claude_model": "claude-haiku-5-5",
     "claude_hints_per_day": 30,
+    "ai_provider": "anthropic",
+    "openai_api_key": "",
+    "openai_model": "gpt-5.4-mini",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-3.5-flash-lite",
     "hosts": [],
 }
 
@@ -4170,8 +4175,19 @@ class Monitor:
             log.warning("Couldn't send the daily summary email: %s", e)
 
     # -- Hints from Claude (hints.py) ---------------------------------------
+    AI_OPTS = {"anthropic": ("claude_api_key", "claude_model"), "openai": ("openai_api_key", "openai_model"),
+               "gemini": ("gemini_api_key", "gemini_model")}
+
+    def ai_settings(self) -> tuple[str, str, str]:
+        """(provider, its API key, its model) for hints from AI."""
+        prov = str(self.opts.get("ai_provider") or "anthropic")
+        prov = prov if prov in self.AI_OPTS else "anthropic"
+        k, m = self.AI_OPTS[prov]
+        return prov, str(self.opts.get(k) or ""), str(self.opts.get(m) or "") or hintlib.PROVIDERS[prov]["model"]
+
     def claude_on(self) -> bool:
-        return bool(self.opts.get("claude_hints") and self.opts.get("claude_api_key"))
+        """Hints from AI are on, with a key for the chosen provider."""
+        return bool(self.opts.get("claude_hints") and self.ai_settings()[1])
 
     def claude_question(self, h: Host, key: str) -> tuple[dict, str]:
         """(the check, what would be sent to Claude) for one amber or red check, with every name and address that
@@ -5401,6 +5417,7 @@ class Monitor:
                 "retry_interval": self.retry_interval,
                 "maintenance_minutes": int(self.opts["maintenance_minutes"]),
                 "ping_mode": PING_MODE, "db_health": self.dbh.summary(DB_PATH), "claude_hints": self.claude_on(),
+                "ai_name": hintlib.PROVIDERS[self.ai_settings()[0]]["name"],
                 "hosts": hosts}
 
 
@@ -5584,8 +5601,22 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         log.info("%s withdrew a message", user["display"] or "an admin")
         return web.json_response({"ok": True})
 
-    async def hints_claude(req):
-        """💡 Ask Claude about one amber or red check (or, with preview, just show what would be sent)."""
+    async def hints_test(req):
+        """Settings → Error hints → Test: one tiny question to the chosen provider, to check its key and model."""
+        prov, key, model = monitor.ai_settings()
+        p = hintlib.PROVIDERS[prov]
+        if not key:
+            return web.json_response({"error": f"No {p['key_name']} is saved yet."}, status=400)
+        try:
+            text, used = await hintlib.call(monitor.ha.session, prov, key, model, "Answer in one word.", "Reply with the word OK.", 200)
+        except ValueError as e:
+            return web.json_response({"error": str(e), "provider": p["name"], "model": model}, status=502)
+        user = await access.who(req)
+        log.info("%s tested hints from %s (%s): it answered", user["display"] or "an admin", p["name"], used)
+        return web.json_response({"ok": True, "provider": p["name"], "model": used, "text": text[:100]})
+
+    async def hints_ask(req):
+        """💡 Ask the AI about one amber or red check (or, with preview, just show what would be sent)."""
         try:
             body = await req.json()
         except (json.JSONDecodeError, ValueError):
@@ -5605,16 +5636,17 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if body.get("preview"):
             return web.json_response(base)
         if not monitor.claude_on():
-            return web.json_response({**base, "error": "Hints from Claude are off. An admin can turn them on under Settings → Error hints."}, status=409)
+            return web.json_response({**base, "error": "Hints from AI are off. An admin can turn them on under Settings → Error hints."}, status=409)
         user = await access.who(req)
+        prov, key, model = monitor.ai_settings()
+        name = hintlib.PROVIDERS[prov]["name"]
         try:
-            out = await monitor.claude.ask(monitor.ha.session, str(opts.get("claude_api_key")), str(opts.get("claude_model") or ""),
-                                           check["label"], sent, day, limit, time.time())
+            out = await monitor.claude.ask(monitor.ha.session, key, model, check["label"], sent, day, limit, time.time(), prov)
         except ValueError as e:
-            log.warning("Hint from Claude for %s / %s: %s", h.name, check["label"], e)
+            log.warning("Hint from %s for %s / %s: %s", name, h.name, check["label"], e)
             return web.json_response({**base, "left": monitor.claude.left_today(day, limit), "error": str(e)}, status=502)
         if not out["cached"]:
-            log.info("%s asked Claude about %s on %s", user["display"] or "someone", check["label"], h.name)
+            log.info("%s asked %s about %s on %s", user["display"] or "someone", name, check["label"], h.name)
         return web.json_response({**base, **out, "left": monitor.claude.left_today(day, limit)})
 
     async def database_info(_req):
@@ -7081,7 +7113,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/email/test", editor_only(email_test))
     app.router.add_get("/api/log", editor_only(addon_log))
     app.router.add_get("/api/database", editor_only(database_info))
-    app.router.add_post("/api/hints/claude", editor_only(hints_claude))
+    app.router.add_post("/api/hints/ask", editor_only(hints_ask))
+    app.router.add_post("/api/hints/test", admin_only(hints_test))
     app.router.add_post("/api/database/check", editor_only(database_check))
     app.router.add_post("/api/database/compact", admin_only(database_compact))
     app.router.add_post("/api/acks/dismiss", editor_only(acks_dismiss))
@@ -7227,7 +7260,7 @@ def make_backup(version: str | None) -> bytes:
         try:
             raw = json.loads(OPTIONS_PATH.read_text())
             raw.pop("hosts", None)
-            for k in ("smtp_password", "m365_client_secret", "claude_api_key"):  # passwords and keys stay on this install
+            for k in ("smtp_password", "m365_client_secret", "claude_api_key", "openai_api_key", "gemini_api_key"):  # passwords and keys stay on this install
                 raw.pop(k, None)
             z.writestr("options.json", json.dumps(raw, indent=2))
         except (OSError, ValueError):

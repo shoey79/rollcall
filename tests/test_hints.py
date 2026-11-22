@@ -35,6 +35,8 @@ class FakeAnthropic:
         s.close()
         app = web.Application()
         app.router.add_post("/v1/messages", self.messages)
+        app.router.add_post("/v1/chat/completions", self.openai)
+        app.router.add_post("/v1beta/models/{model}:generateContent", self.gemini)
         self.runner = web.AppRunner(app)
         ready = threading.Event()
 
@@ -61,6 +63,29 @@ class FakeAnthropic:
         return web.json_response({"id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
                                   "content": [{"type": "text", "text": "The device can't reach a domain controller. Check its DNS."}],
                                   "stop_reason": "end_turn", "usage": {"input_tokens": 120, "output_tokens": 30}})
+
+
+    async def openai(self, req):
+        body = await req.json()
+        self.asked.append({"provider": "openai", "headers": dict(req.headers), "body": body})
+        if req.headers.get("Authorization") != f"Bearer {OKEY}":
+            return web.json_response({"error": {"message": "Incorrect API key provided", "type": "invalid_request_error"}}, status=401)
+        return web.json_response({"id": "chatcmpl-1", "object": "chat.completion", "model": body["model"] + "-2026",
+                                  "choices": [{"index": 0, "message": {"role": "assistant", "content": "ChatGPT says: check DNS."},
+                                               "finish_reason": "stop"}]})
+
+    async def gemini(self, req):
+        body = await req.json()
+        self.asked.append({"provider": "gemini", "path": req.path, "query": req.query_string, "headers": dict(req.headers), "body": body})
+        if req.headers.get("x-goog-api-key") != GKEY:
+            return web.json_response({"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                                                "status": "INVALID_ARGUMENT"}}, status=400)
+        return web.json_response({"candidates": [{"content": {"role": "model", "parts": [
+            {"text": "thinking...", "thought": True}, {"text": "Gemini says: check DNS."}]}, "finishReason": "STOP"}],
+            "modelVersion": req.match_info["model"]})
+
+
+OKEY, GKEY = "sk-openai-made-up", "AIza-made-up"
 
 
 @pytest.fixture
@@ -151,10 +176,46 @@ def test_refused_key_and_errors_are_explained(tmp_path, api):
         ask(c, "more", key="")
 
 
-def test_the_key_only_goes_to_anthropic():
-    assert hints.API_URL == "https://api.anthropic.com/v1/messages"
+def test_each_key_only_goes_to_its_own_provider():
     import os
-    assert not os.environ.get("PM_ANTHROPIC_TEST_BASE")
+    assert hints.PROVIDERS["anthropic"]["url"] == "https://api.anthropic.com/v1/messages"
+    assert hints.PROVIDERS["openai"]["url"] == "https://api.openai.com/v1/chat/completions"
+    assert hints.PROVIDERS["gemini"]["url"].startswith("https://generativelanguage.googleapis.com/v1beta/models/")
+    assert not os.environ.get("PM_AI_TEST_BASE")
+
+
+@pytest.mark.parametrize("provider, key, model, says", [
+    ("openai", OKEY, "gpt-5.4-mini", "ChatGPT says"), ("gemini", GKEY, "gemini-3.5-flash-lite", "Gemini says")])
+def test_other_providers(tmp_path, api, provider, key, model, says):
+    c = hints.ClaudeHints(tmp_path / "claude_hints.json")
+
+    async def go(k):
+        async with aiohttp.ClientSession() as s:
+            return await c.ask(s, k, model, "LAPS", "Check: LAPS\nError: x", "2026-11-22", 5, time.time(), provider)
+    a = asyncio.run(go(key))
+    assert a["text"].startswith(says) and a["provider"] == hints.PROVIDERS[provider]["name"] and a["cached"] is False
+    sent = api.asked[-1]
+    if provider == "openai":
+        assert sent["body"]["messages"][0]["role"] == "system" and sent["body"]["messages"][1] == {"role": "user", "content": "Check: LAPS\nError: x"}
+        assert sent["body"]["model"] == model and "x-api-key" not in {h.lower() for h in sent["headers"]}
+    else:
+        assert sent["path"] == f"/v1beta/models/{model}:generateContent" and key not in sent["query"]   # the key isn't in the address
+        assert sent["body"]["contents"][0]["parts"][0]["text"] == "Check: LAPS\nError: x" and "systemInstruction" in sent["body"]
+        assert "thinking" not in a["text"]                                  # Gemini's thoughts left out
+    assert asyncio.run(go(key))["cached"] is True
+    c2 = hints.ClaudeHints(tmp_path / "other.json")
+
+    async def bad():
+        async with aiohttp.ClientSession() as s:
+            return await c2.ask(s, "wrong", model, "LAPS", "other", "2026-11-22", 5, time.time(), provider)
+    with pytest.raises(ValueError, match="key was refused"):
+        asyncio.run(bad())
+    assert key not in (tmp_path / "claude_hints.json").read_text()
+
+
+def test_switching_provider_asks_again(tmp_path):
+    c = hints.ClaudeHints(tmp_path / "claude_hints.json")
+    assert c.key("LAPS", "x", "anthropic") != c.key("LAPS", "x", "openai")
 
 
 # ---- what Rollcall sends, from a real check ----------------------------------------------------------------------
@@ -214,7 +275,7 @@ from test_update_signing_e2e import HAVE_ADDON_DEPS, UI, Addon, call  # noqa: E4
 
 @pytest.mark.skipif(not HAVE_ADDON_DEPS, reason="needs the add-on's packages")
 def test_end_to_end(tmp_path, monkeypatch, api):
-    monkeypatch.setenv("PM_ANTHROPIC_TEST_BASE", api.base)
+    monkeypatch.setenv("PM_AI_TEST_BASE", api.base)
     addon = Addon(tmp_path / "addon")
     addon.start()
     try:
@@ -230,21 +291,31 @@ def test_end_to_end(tmp_path, monkeypatch, api):
         assert svc["status"] == "red", svc
         ask_ = {"host": hh["key"], "check": svc["key"]}
         # Off by default: what would be sent can be seen, but nothing is asked
-        prev = addon.api("/api/hints/claude", {**ask_, "preview": True}, "POST")
+        prev = addon.api("/api/hints/ask", {**ask_, "preview": True}, "POST")
         assert "127.0.0.1" not in prev["sent"] and "PC-HINT01" not in prev["sent"] and "Error:" in prev["sent"]
-        st, body = call(addon.ui + "/api/hints/claude", ask_, UI, "POST")
+        st, body = call(addon.ui + "/api/hints/ask", ask_, UI, "POST")
         assert st == 409 and b"off" in body and not api.asked
         # An admin turns it on with a key
         addon.api("/api/settings", {"values": {"claude_hints": True, "claude_api_key": KEY, "claude_hints_per_day": 3}}, "POST")
         settings = json.dumps(addon.api("/api/settings"))
         assert KEY not in settings                                           # never shown again
-        out = addon.api("/api/hints/claude", ask_, "POST")
+        out = addon.api("/api/hints/ask", ask_, "POST")
         assert out["text"].startswith("The device") and out["cached"] is False and out["left"] == 2
         assert api.asked[-1]["body"]["messages"][0]["content"] == out["sent"] and "127.0.0.1" not in out["sent"]
-        again = addon.api("/api/hints/claude", ask_, "POST")
+        again = addon.api("/api/hints/ask", ask_, "POST")
         assert again["cached"] is True and len(api.asked) == 1
         assert KEY not in json.dumps(addon.api("/api/status")) and KEY not in (tmp_path / "addon" / "addon.log").read_text()
         assert "asked Claude about" in (tmp_path / "addon" / "addon.log").read_text()
+        # Test the saved key and model (admins only), then switch to Gemini with its own key: asked again, by Gemini
+        assert addon.api("/api/hints/test", {}, "POST")["ok"] is True
+        addon.api("/api/settings", {"values": {"ai_provider": "gemini", "gemini_api_key": GKEY}}, "POST")
+        assert addon.api("/api/status")["ai_name"] == "Gemini"
+        g = addon.api("/api/hints/ask", ask_, "POST")
+        assert g["provider"] == "Gemini" and g["cached"] is False and api.asked[-1]["provider"] == "gemini"
+        assert GKEY not in json.dumps(addon.api("/api/settings")) and GKEY not in (tmp_path / "addon" / "addon.log").read_text()
+        addon.api("/api/settings", {"values": {"gemini_api_key": "wrong"}}, "POST")
+        st, body = call(addon.ui + "/api/hints/test", {}, UI, "POST")
+        assert st == 502 and b"key was refused" in body
     finally:
         addon.stop()
 

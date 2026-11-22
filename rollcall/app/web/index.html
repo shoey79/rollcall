@@ -1441,9 +1441,10 @@ function hintHtml(h, svc) {
   const id = hintId(h.key, svc.key), ans = hintAns.get(id) || {};
   let out = (svc.hint || []).map(x => `<span class="hintbox"><span class="who">💡 What this usually means${x.code ? ` (${esc(x.code)})` : ""}</span><p>${esc(x.means)}</p><p><b>Try:</b> ${esc(x.try)}</p></span>`).join("");
   if (canAskClaude(svc)) {
-    if (ans.text) out += `<span class="hintbox"><span class="who">Suggestion from Claude${ans.cached ? " (asked before)" : ""} · advice only, check before acting</span><p>${esc(ans.text)}</p>` +
+    const ai = esc(data.ai_name || "AI");
+    if (ans.text) out += `<span class="hintbox"><span class="who">Suggestion from ${esc(ans.provider || "Claude")}${ans.model ? ` (${esc(ans.model)})` : ""}${ans.cached ? ", asked before" : ""} · advice only, check before acting</span><p>${esc(ans.text)}</p>` +
       `<details><summary><small>What was sent</small></summary><pre>${esc(ans.sent || "")}</pre></details></span>`;
-    else out += `<span class="hintbox"><button type="button" class="mini" data-askclaude="${esc(id)}"${ans.loading ? " disabled" : ""}>${ans.loading ? "Asking Claude…" : "Ask Claude"}</button>` +
+    else out += `<span class="hintbox"><button type="button" class="mini" data-askclaude="${esc(id)}"${ans.loading ? " disabled" : ""}>${ans.loading ? `Asking ${ai}…` : `Ask ${ai}`}</button>` +
       ` <small>Sends only this check and its error, with names and addresses replaced.${ans.left != null ? ` ${ans.left} left today.` : ""}</small>` +
       (ans.error ? `<p class="failtxt" style="margin-top:6px">${esc(ans.error)}</p>` : "") +
       (ans.sent ? `<details><summary><small>What would be sent</small></summary><pre>${esc(ans.sent)}</pre></details>` : ` <button type="button" class="mini" data-hintpreview="${esc(id)}">What's sent?</button>`) + `</span>`;
@@ -1470,10 +1471,10 @@ async function hintCall(id, preview) {
   if (!preview) hintAns.set(id, {...cur, loading: true, error: ""});
   hintRerender();
   try {
-    const r = await fetch("api/hints/claude", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({host: hostKey, check: svcKey, preview: !!preview})});
+    const r = await fetch("api/hints/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({host: hostKey, check: svcKey, preview: !!preview})});
     const j = await r.json().catch(() => ({}));
     hintAns.set(id, {...cur, loading: false, sent: j.sent || cur.sent, left: j.left, error: r.ok ? "" : (j.error || "That didn't work (" + r.status + ")"),
-      ...(r.ok && !preview ? {text: j.text, cached: j.cached} : {})});
+      ...(r.ok && !preview ? {text: j.text, cached: j.cached, provider: j.provider, model: j.model} : {})});
   } catch (e) { hintAns.set(id, {...cur, loading: false, error: e.message}); }
   hintRerender();
 }
@@ -2086,7 +2087,8 @@ function stParse(f, raw) {
 }
 const stSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function stChanged() { return ST.meta ? ST.meta.fields.filter(f => !stSame(ST.vals[f.key], ST.orig[f.key])).map(f => f.key) : []; }
-const ST_ADMIN_KEYS = ["messages", "claude_hints", "claude_api_key", "claude_model", "claude_hints_per_day"];  // as settingslib.ACCESS_KEYS
+const ST_ADMIN_KEYS = ["messages", "claude_hints", "ai_provider", "claude_api_key", "claude_model", "openai_api_key", "openai_model",
+  "gemini_api_key", "gemini_model", "claude_hints_per_day"];  // as settingslib.ACCESS_KEYS
 function stLocked(f) { return ((f.group === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin)
   || (f.group === "agent_port" && !!(ST.meta.agent_tls || {}).builtin); }  // not used while Rollcall's own HTTPS is on
 function stCheck(f, v) {
@@ -2141,8 +2143,8 @@ function stNote(group) {
   }
   if (group === "access" && !ST.meta.can_admin) return `<p class="st-note">Only Home Assistant administrators can change who can make changes.</p>`;
   if (group === "hints") return `<p class="st-note">Every amber or red check with a well-known error code shows 💡 <b>What this usually means</b>, from a table built into Rollcall: free, and nothing leaves your network.</p>` +
-    `<p class="st-note"><b>Hints from Claude</b> are optional and off unless turned on here. They add an <b>Ask Claude</b> button for errors the table doesn't cover. Only the check and its error are sent to Anthropic's API, with computer, account and domain names and addresses replaced by stand-ins (each hint shows exactly what was sent). Security events, account lists and anything from password scanning are never sent. It uses your own API key from console.anthropic.com, only asks when someone clicks, and the same error is only asked about once.</p>` +
-    (ST.meta.can_admin ? "" : `<p class="st-note">Only Home Assistant administrators can change these.</p>`);
+    `<p class="st-note"><b>Hints from AI</b> are optional and off unless turned on here. They add an <b>Ask</b> button for errors the table doesn't cover, answered by the provider you choose: <b>Claude</b> (Anthropic), <b>ChatGPT</b> (OpenAI) or <b>Gemini</b> (Google), with your own API key for it. Only the check and its error are sent, with computer, account and domain names and addresses replaced by stand-ins (each hint shows exactly what was sent). Security events, account lists and anything from password scanning are never sent. It only asks when someone clicks, and the same error is only asked about once.</p>` +
+    (ST.meta.can_admin ? `<p class="st-note"><button type="button" class="mini" id="aiTest">Test the saved key and model</button> <span id="aiTestOut" class="muted"></span></p>` : `<p class="st-note">Only Home Assistant administrators can change these.</p>`);
   if (group === "agent_port") {
     const t = ST.meta.agent_tls || {};
     if (t.builtin) return `<p class="st-note">Agents use <b>Rollcall's own HTTPS</b> on port ${esc(t.port)}, set under <b>Manage → Agents</b>. ` +
@@ -5188,6 +5190,17 @@ function logFollow() {
   clearInterval(addonLogTimer);
   if (document.getElementById("alFollow").checked && document.getElementById("alDlg").open) addonLogTimer = setInterval(logLoad, 5000);
 }
+document.addEventListener("click", async e => {
+  if (e.target.id !== "aiTest") return;
+  const out = document.getElementById("aiTestOut");
+  e.target.disabled = true; out.textContent = "Asking…";
+  try {
+    const r = await fetch("api/hints/test", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const j = await r.json().catch(() => ({}));
+    out.textContent = r.ok ? `✓ ${j.provider} (${j.model}) answered.` : (j.error || "That didn't work (" + r.status + ")") + (r.status === 400 ? "" : " Save any changes first; the test uses the saved settings.");
+  } catch (x) { out.textContent = x.message; }
+  e.target.disabled = false;
+});
 // ---- Manage > Database: sizes, what takes the room, and health ----
 const fmtBytes = n => n == null ? "—" : n < 1024 ? n + " bytes" : n < 1048576 ? Math.round(n / 1024) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(1) + " GB";
 // The Overview's Rollcall card: database health and room on Home Assistant's disk

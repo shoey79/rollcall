@@ -27,7 +27,7 @@ AS = {"user": {"X-Remote-User-Id": "u-guest", "X-Remote-User-Name": "guest"},
       "admin": {"X-Remote-User-Id": "u-admin", "X-Remote-User-Name": "owner"}}
 
 # Admins only. Anything else that changes something is for editors and admins.
-ADMIN_ONLY = {("GET", "/api/export"), ("POST", "/api/import"), ("POST", "/api/import/chunk"),
+ADMIN_ONLY = {("GET", "/api/export"), ("POST", "/api/hints/test"), ("POST", "/api/import"), ("POST", "/api/import/chunk"),
               ("POST", "/api/database/compact"), ("POST", "/api/agents/tls")}
 ADMIN_ONLY_PREFIX = ("/api/messages",)
 # GET routes that show what only someone who can make changes should see

@@ -3,7 +3,8 @@
 Two parts:
 1. A built-in table of well-known codes and messages (LAPS, Group Policy, Windows Update, domain sign-in, time,
    certificates, backups...). Free, instant, and nothing leaves the network.
-2. Hints from Claude, OFF unless an admin turns them on and enters their own Anthropic API key. Only on request (a
+2. Hints from an AI (Claude, ChatGPT or Gemini), OFF unless an admin turns them on and enters their own API key for
+   the chosen provider. Only on request (a
    click on the 💡), cached per error, with a daily limit. Only the check, its error text and basic context are sent,
    and computer, account and domain names and addresses are replaced with stand-ins first. Security events,
    account lists and password-scan results are never sent.
@@ -194,11 +195,9 @@ def known(check: str, text: str, limit: int = 2) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# 2. Hints from Claude (off unless an admin turns them on)
+# 2. Hints from an AI provider (off unless an admin turns them on)
 # ---------------------------------------------------------------------------------------------------------------------
-API_URL = "https://api.anthropic.com/v1/messages"
-TEST_BASE = os.environ.get("PM_ANTHROPIC_TEST_BASE", "")  # tests point this at a stand-in API; never set in the add-on
-DEFAULT_MODEL = "claude-haiku-5-5"
+TEST_BASE = os.environ.get("PM_AI_TEST_BASE", "")  # tests point this at a stand-in API; never set in the add-on
 NEVER = {"security", "secrets", "domain", "integrity", "vulns", "aduser"}  # never sent, whatever they say
 SYSTEM = ("You help IT administrators understand monitoring alerts from Rollcall, a Home Assistant add-on that checks "
           "servers and PCs. Given one failing check, say in 2 to 4 short sentences what the error usually means and what "
@@ -319,10 +318,10 @@ class ClaudeHints:
             pass
 
     @staticmethod
-    def key(check: str, sent: str) -> str:
+    def key(check: str, sent: str, provider: str = "anthropic") -> str:
         # The same error is the same question: how long ago the agent last reported doesn't change the answer
         same = "\n".join(x for x in sent.split("\n") if not x.startswith("Last agent report:"))
-        return hashlib.sha256((check + "\n" + same).encode()).hexdigest()[:32]
+        return hashlib.sha256(((provider + "\n" if provider != "anthropic" else "") + check + "\n" + same).encode()).hexdigest()[:32]
 
     def cached(self, key: str, now: float) -> dict | None:
         c = self.state["cache"].get(key)
@@ -334,41 +333,23 @@ class ClaudeHints:
         return max(0, limit - (self.state["used"] if self.state.get("day") == day else 0))
 
     async def ask(self, session: aiohttp.ClientSession, api_key: str, model: str, check: str, sent: str,
-                  day: str, limit: int, now: float) -> dict:
-        """{"text", "model", "at", "cached"}; raises ValueError with something to show if it can't."""
-        k = self.key(check, sent)
+                  day: str, limit: int, now: float, provider: str = "anthropic") -> dict:
+        """{"text", "model", "provider", "at", "cached"}; raises ValueError with something to show if it can't."""
+        p = PROVIDERS.get(provider) or PROVIDERS["anthropic"]
+        k = self.key(check, sent, provider)
         c = self.cached(k, now)
         if c:
             return {**c, "cached": True}
         if not api_key:
-            raise ValueError("No Anthropic API key is set (Settings → Error hints).")
+            raise ValueError(f"No {p['key_name']} is set (Settings → Error hints).")
         if self.left_today(day, limit) <= 0:
-            raise ValueError(f"Today's limit of {limit} hint(s) from Claude has been reached. It resets at midnight.")
-        url = (TEST_BASE.rstrip("/") + "/v1/messages") if TEST_BASE else API_URL
-        body = {"model": model or DEFAULT_MODEL, "max_tokens": 400, "system": SYSTEM,
-                "messages": [{"role": "user", "content": sent}]}
-        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+            raise ValueError(f"Today's limit of {limit} AI hint(s) has been reached. It resets at midnight.")
         if self.state.get("day") != day:
             self.state["day"], self.state["used"] = day, 0
         self.state["used"] += 1  # counted when asked, so failures can't run up a bill unnoticed either
         self._save()
-        try:
-            async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=40)) as r:
-                try:
-                    j = await r.json(content_type=None)
-                except ValueError:
-                    j = {}
-                if r.status != 200:
-                    msg = ((j.get("error") or {}).get("message") if isinstance(j, dict) else "") or f"HTTP {r.status}"
-                    if r.status == 401:
-                        msg = "the API key was refused"
-                    raise ValueError(f"Claude didn't answer: {msg}"[:300])
-        except (aiohttp.ClientError, TimeoutError) as e:
-            raise ValueError(f"Couldn't reach Anthropic's API: {e or type(e).__name__}"[:300]) from None
-        text = "".join(b.get("text", "") for b in (j.get("content") or []) if isinstance(b, dict) and b.get("type") == "text").strip()
-        if not text:
-            raise ValueError("Claude didn't answer with any text.")
-        entry = {"text": text[:2000], "model": str(j.get("model") or model)[:80], "at": now}
+        text, used_model = await call(session, provider, api_key, model or p["model"], SYSTEM, sent)
+        entry = {"text": text[:2000], "model": used_model[:80], "provider": p["name"], "at": now}
         cache = self.state["cache"]
         cache[k] = entry
         if len(cache) > self.MAX_CACHE:
@@ -376,3 +357,65 @@ class ClaudeHints:
                 del cache[old]
         self._save()
         return {**entry, "cached": False}
+
+
+# Each provider: who it is, its key, its default model (a small, fast one; admins can change it), and where its
+# API is. Keys are only ever sent to their own provider.
+PROVIDERS = {
+    "anthropic": {"name": "Claude", "company": "Anthropic", "key_name": "Anthropic API key", "model": "claude-haiku-5-5",
+                  "url": "https://api.anthropic.com/v1/messages", "test_path": "/v1/messages"},
+    "openai": {"name": "ChatGPT", "company": "OpenAI", "key_name": "OpenAI API key", "model": "gpt-5.4-mini",
+               "url": "https://api.openai.com/v1/chat/completions", "test_path": "/v1/chat/completions"},
+    "gemini": {"name": "Gemini", "company": "Google", "key_name": "Gemini API key", "model": "gemini-3.5-flash-lite",
+               "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+               "test_path": "/v1beta/models/{model}:generateContent"},
+}
+
+
+async def call(session: aiohttp.ClientSession, provider: str, api_key: str, model: str, system: str, user: str,
+               max_tokens: int = 1000) -> tuple[str, str]:
+    """Ask one provider one question: (answer, model that answered). Raises ValueError with something to show.
+    max_tokens leaves room for models that think before answering."""
+    p = PROVIDERS[provider]
+    url = (TEST_BASE.rstrip("/") + p["test_path"]) if TEST_BASE else p["url"]
+    url = url.replace("{model}", re.sub(r"[^A-Za-z0-9._-]", "", model))
+    if provider == "anthropic":
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        body = {"model": model, "max_tokens": max_tokens, "system": system, "messages": [{"role": "user", "content": user}]}
+    elif provider == "openai":
+        headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+        body = {"model": model, "max_completion_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    else:  # gemini: the key goes in a header, never the address (addresses end up in logs)
+        headers = {"x-goog-api-key": api_key, "content-type": "application/json"}
+        body = {"systemInstruction": {"parts": [{"text": system}]}, "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"maxOutputTokens": max_tokens}}
+    who = p["name"]
+    try:
+        async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=40)) as r:
+            try:
+                j = await r.json(content_type=None)
+            except ValueError:
+                j = {}
+            if r.status != 200:
+                e = j.get("error") if isinstance(j, dict) else None
+                msg = (e.get("message") if isinstance(e, dict) else str(e or "")) or f"HTTP {r.status}"
+                if r.status == 401 or (r.status in (400, 403) and re.search(r"(?i)api.?key.*(invalid|not valid)|invalid.*api.?key", msg)):
+                    msg = "the API key was refused"
+                raise ValueError(f"{who} didn't answer: {msg}"[:300])
+    except (aiohttp.ClientError, TimeoutError) as e:
+        raise ValueError(f"Couldn't reach {p['company']}'s API: {e or type(e).__name__}"[:300]) from None
+    if not isinstance(j, dict):
+        j = {}
+    if provider == "anthropic":
+        text = "".join(b.get("text", "") for b in (j.get("content") or []) if isinstance(b, dict) and b.get("type") == "text")
+    elif provider == "openai":
+        ch = (j.get("choices") or [{}])[0] if isinstance(j.get("choices"), list) and j.get("choices") else {}
+        text = str(((ch or {}).get("message") or {}).get("content") or "")
+    else:
+        cand = (j.get("candidates") or [{}])[0] if isinstance(j.get("candidates"), list) and j.get("candidates") else {}
+        text = "".join(str(x.get("text") or "") for x in ((cand or {}).get("content") or {}).get("parts") or [] if isinstance(x, dict) and not x.get("thought"))
+    text = text.strip()
+    if not text:
+        raise ValueError(f"{who} didn't answer with any text.")
+    return text, str(j.get("model") or j.get("modelVersion") or model)

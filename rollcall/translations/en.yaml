@@ -237,17 +237,32 @@ configuration:
     name: Agent HTTPS private key
     description: The certificate's private key file in Home Assistant's /ssl folder.
   claude_hints:
-    name: "Hints from Claude"
-    description: "Adds an Ask Claude button to amber and red checks, for a few sentences on what the error usually means. Off by default. Only the check and its error are sent, with computer, account and domain names and addresses replaced; security events, account lists and password-scan results are never sent. Uses your own Anthropic API key, so you pay for what's asked (a fraction of a penny each)."
+    name: "Hints from AI"
+    description: "Adds an Ask button to amber and red checks, for a few sentences from the AI you choose below on what the error usually means. Off by default. Only the check and its error are sent, with computer, account and domain names and addresses replaced; security events, account lists and password-scan results are never sent. Uses your own API key, so you pay for what's asked (a fraction of a penny each)."
+  ai_provider:
+    name: "AI provider"
+    description: "Who writes the hints: anthropic (Claude), openai (ChatGPT) or gemini (Google). Each uses its own API key and model below."
   claude_api_key:
     name: "Anthropic API key"
-    description: "From console.anthropic.com. Stored with the add-on's settings, never shown again, and only ever sent to Anthropic's API."
+    description: "For Claude, from console.anthropic.com. Stored with the add-on's settings, never shown again, and only ever sent to Anthropic's API."
   claude_model:
     name: "Claude model"
-    description: "The model that writes the hints. A small, fast one keeps each hint cheap."
+    description: "The Claude model that writes the hints. A small, fast one keeps each hint cheap."
+  openai_api_key:
+    name: "OpenAI API key"
+    description: "For ChatGPT, from platform.openai.com. Stored with the add-on's settings, never shown again, and only ever sent to OpenAI's API."
+  openai_model:
+    name: "OpenAI model"
+    description: "The OpenAI model that writes the hints. A small, fast one keeps each hint cheap."
+  gemini_api_key:
+    name: "Gemini API key"
+    description: "For Gemini, from aistudio.google.com. Stored with the add-on's settings, never shown again, and only ever sent to Google's Gemini API."
+  gemini_model:
+    name: "Gemini model"
+    description: "The Gemini model that writes the hints. A small, fast one keeps each hint cheap."
   claude_hints_per_day:
-    name: "Hints from Claude per day"
-    description: "At most this many questions to Claude a day. The same error is only asked about once (answers are kept for 30 days)."
+    name: "AI hints per day"
+    description: "At most this many questions to the AI a day. The same error is only asked about once (answers are kept for 30 days)."
   hosts:
     name: Import devices
     description: Optional. Devices listed here are imported into the dashboard once, then this list is emptied. Adding them in the dashboard is easier.
