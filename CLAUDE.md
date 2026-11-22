@@ -49,6 +49,15 @@ together). Remove each once it's released.
   checks; the answer says which provider wrote it. Docs and changelog name the provider in use; migrate the existing
   claude_* settings. Tests against stand-in APIs for each provider.
 
+- Readings as chips, with conditions, for all integrations (owner asked 22 Nov). Under Edit, tick readings from an
+  integration to show as their own chips on the device's row, each with its current value, and optionally a
+  condition (like HA sensor checks: e.g. "Latency > 80 ms", "Download < 20 Mb/s", "Alignment off by > 15°") that
+  turns it amber/red and alerts like any other check. Starlink: latency, drops, down/up, uptime, obstructed %, sky
+  blocked %, alignment (rotation and elevation off where it wants, in degrees), Ethernet speed, signal, update
+  waiting. Same picker for Jellyfin, Plex, iLO, myenergi, Pi-hole and other linked HA devices (their existing
+  readings). Owner wants alarms, e.g. orientation out of allowance: today alignment is amber only, no alert.
+  Values come from each check's latest reading (no extra requests). Docs, tests per integration.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
