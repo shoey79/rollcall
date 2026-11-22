@@ -58,6 +58,15 @@ together). Remove each once it's released.
   readings). Owner wants alarms, e.g. orientation out of allowance: today alignment is amber only, no alert.
   Values come from each check's latest reading (no extra requests). Docs, tests per integration.
 
+- Other backup products: Veritas NetBackup and HPE/OpenText Data Protector (owner asked 22 Nov; used by other Rollcall
+  users, not the owner). First a common framework in the Windows agent so each product is a small definition (where
+  to read, success/warning/failure, job name, reason), feeding the same Backups check and tab, "Why?" and alerts as
+  Veeam. NetBackup: on the master/primary server, its job list (bpdbjobs) with status, client and policy; status codes
+  explained in the hints table. Data Protector: on the Cell Manager, session reports (omnirpt) with status, failed /
+  completed with errors. Neither can be tested here: build from vendor docs, then ask a user for a sample (output or
+  events, names replaced) and confirm before release; say so in the docs. Windows Server Backup is the easy next
+  one if wanted (own event log).
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
