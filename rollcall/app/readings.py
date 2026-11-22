@@ -11,6 +11,9 @@ from __future__ import annotations
 import re
 
 SOURCES = {"starlink": "Starlink", "jellyfin": "Jellyfin", "plex": "Plex", "ilo": "iLO", "ups": "UPS"}
+# What each source is, for hints from AI
+READING_WHAT = {"starlink": "Starlink satellite dish", "jellyfin": "Jellyfin media server", "plex": "Plex media server",
+                "ilo": "HPE server's iLO management controller", "ups": "UPS (read over SNMP)"}
 RE = re.compile(r"^reading:([a-z]+)\.([a-z0-9_]{1,40})\s*(?:(>=|<=|!=|>|<|=)\s*(\S.{0,60}))?$", re.I)
 
 
@@ -39,12 +42,15 @@ def catalog(source: str, d: dict | None, extra: dict | None = None) -> list[dict
         out.append({"id": rid, "label": label, "unit": unit, "value": value, **({"hint": hint} if hint else {})})
     if source == "starlink":
         al = d.get("alignment") or None
-        add("latency", "Latency", "ms", d.get("latency_ms"))
-        add("drops", "Pings dropped", "%", None if d.get("drop_rate") is None else round(d["drop_rate"] * 100, 2))
-        add("download", "Download", "Mb/s", None if d.get("down_bps") is None else round(d["down_bps"] / 1e6, 1))
-        add("upload", "Upload", "Mb/s", None if d.get("up_bps") is None else round(d["up_bps"] / 1e6, 1))
+        add("latency", "Latency", "ms", d.get("latency_ms"), "round-trip time to Starlink's network")
+        add("drops", "Pings dropped", "%", None if d.get("drop_rate") is None else round(d["drop_rate"] * 100, 2),
+            "share of pings to Starlink's network that got no answer")
+        add("download", "Download", "Mb/s", None if d.get("down_bps") is None else round(d["down_bps"] / 1e6, 1),
+            "traffic through the dish right now, not its top speed")
+        add("upload", "Upload", "Mb/s", None if d.get("up_bps") is None else round(d["up_bps"] / 1e6, 1),
+            "traffic through the dish right now, not its top speed")
         add("obstructed", "Obstructed", "%", None if d.get("obstructed_fraction") is None else round(d["obstructed_fraction"] * 100, 2),
-            "of the time")
+            "share of the time something (trees, a roof) blocked the dish's view of the satellites")
         su = ((extra or {}).get("map") or {}).get("summary") or {}
         add("sky_blocked", "Sky blocked", "%", su.get("blocked_pct"), "of the sky seen, from the obstruction map")
         add("uptime", "Uptime", "h", None if d.get("uptime_s") is None else round(d["uptime_s"] / 3600, 1))

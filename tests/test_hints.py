@@ -339,3 +339,27 @@ def test_veeam_reasons_get_their_hint_in_details(mon):
     r = m.details(h, include_security=False)["report"]
     objs = r["checks"]["backups"]["jobs"][0]["issue"]["objects"]
     assert "_hint" in objs[0] and "_hint" not in objs[1]
+
+
+def test_a_reading_says_what_it_is(mon):
+    """A bare "1.5% (above 1)" means nothing on its own: the question says what was measured, the limit and the
+    related check."""
+    main, m, h = mon
+    h.services = [main.Service(key="starlink", label="Starlink", kind="starlink", port=None, url=None, desc="Starlink",
+                               status=main.AMBER, detail="Starlink online, 31 ms, obstructed 1.5% of the time"),
+                  main.Service(key="obstructed", label="Obstructed", kind="reading", port=None, url=None, desc="Starlink obstructed > 1",
+                               entity="starlink.obstructed", op=">", value="1", status=main.RED, detail="1.5% (above 1)")]
+    h.sl_data = {"obstructed_fraction": 0.015, "latency_ms": 31}
+    _check, sent = m.claude_question(h, "obstructed")
+    assert "What it checks: a reading from a Starlink satellite dish: Obstructed (share of the time something" in sent
+    assert "Problem when: the value is above 1 (a limit set in Rollcall)" in sent
+    assert "Related check: Starlink: Starlink online, 31 ms, obstructed 1.5% of the time" in sent
+    assert "Error: 1.5% (above 1)" in sent
+
+
+def test_other_checks_say_what_they_look_at(mon):
+    main, m, h = mon
+    h.services = [main.Service(key="web", label="Web", kind="tcp", port=8443, url=None, desc="tcp/8443", status=main.RED,
+                               detail="connection refused")]
+    assert "What it checks: whether a TCP port answers (tcp/8443)" in m.claude_question(h, "web")[1]
+    assert "What it checks: a check run by Rollcall's agent on the computer" in m.claude_question(h, "agent_laps")[1]

@@ -4219,7 +4219,7 @@ class Monitor:
         if not s:
             raise ValueError("That check doesn't exist")
         if short in hintlib.NEVER or key in SECURITY_KEYS:
-            raise ValueError("Security checks are never sent to Claude")
+            raise ValueError("Security checks are never sent to an AI")
         if s.status not in (RED, AMBER) or not s.detail:
             raise ValueError("Only amber and red checks with an error can be asked about")
         names, domains, users = [], [], []
@@ -4243,10 +4243,48 @@ class Monitor:
         roles = r.get("roles") or []
         kind = "domain controller" if "Domain controller" in roles else "server" if re.search(r"(?i)server", str(r.get("os") or "")) else \
             "workstation" if r.get("os") else ""
-        ctx = {"Device": " ".join(x for x in (red(str(r.get("os") or "")), f"({kind})" if kind else "") if x) or None,
+        what, limit, related = self.check_context(h, s)
+        ctx = {"What it checks": red(what) if what else None,
+               "Problem when": limit,
+               "Device": " ".join(x for x in (red(str(r.get("os") or "")), f"({kind})" if kind else "") if x) or red(h.model) or None,
                "Joined to a domain": None if not r.get("fqdn") else ("yes" if "." in str(r.get("fqdn")) else "no"),
-               "Last agent report": (f"{int((time.time() - h.agent_seen) // 60)} minutes ago" if h.agent_seen else None) if s.kind == "agent" else None}
+               "Last agent report": (f"{int((time.time() - h.agent_seen) // 60)} minutes ago" if h.agent_seen else None) if s.kind == "agent" else None,
+               "Related check": red(related) if related else None}
         return {"label": red(s.label), "status": s.status}, hintlib.prompt(red(s.label), s.status, red(s.detail), ctx)
+
+    # What each kind of check looks at, so the AI knows what an error is about (e.g. a bare "1.5% (above 1)")
+    CHECK_WHAT = {
+        "starlink": "a Starlink satellite dish's status (outages, obstructions, alerts), read from the dish or the starlink.com account",
+        "jellyfin": "a Jellyfin media server's health, tasks and streams", "plex": "a Plex media server's status and streams",
+        "ilo": "an HPE server's iLO health (fans, temperatures, power supplies, storage)",
+        "hadev": "a device's readings from its Home Assistant integration", "ha": "a Home Assistant sensor",
+        "snmp": "SNMP readings from the device (switch ports, UPS, firewall)", "syslog": "syslog messages the device sends",
+        "tcp": "whether a TCP port answers", "http": "whether a web page answers", "https": "whether a web page answers",
+        "cert": "when a TLS certificate expires", "sip": "whether a SIP server answers OPTIONS", "ping": "whether an address answers ping",
+        "agent": "a check run by Rollcall's agent on the computer",
+    }
+    OPS_WORDS = {">": "above", ">=": "at or above", "<": "below", "<=": "at or below", "=": "is", "!=": "isn't"}
+
+    def check_context(self, h: Host, s: Service) -> tuple[str, str | None, str | None]:
+        """(what the check looks at, the limit set in Rollcall, the related check's detail) for hints from AI."""
+        if s.kind == "reading":
+            src, _, rid = (s.entity or "").partition(".")
+            r = readlib.lookup(h, src, rid) or {}
+            unit = r.get("unit") or ""
+            what = (f"a reading from a {readlib.READING_WHAT.get(src, readlib.SOURCES.get(src, src))}: "
+                    f"{r.get('label') or rid.replace('_', ' ')}" + (f" ({r['hint']})" if r.get("hint") else "")
+                    + (f", in {unit}" if unit else ""))
+            src_kind = {"ups": "snmp"}.get(src, src)
+            rel = next((x for x in h.services if x.kind == src_kind and x.detail), None)
+            related = f"{rel.label}: {rel.detail}" if rel else None
+        elif s.kind == "ha":
+            what, related = f"the Home Assistant sensor {s.entity}", None
+        elif s.kind in ("tcp", "http", "https", "cert", "sip", "ping"):
+            what, related = f"{self.CHECK_WHAT[s.kind]} ({s.desc})", None
+        else:
+            what, related = self.CHECK_WHAT.get(s.kind, ""), None
+        limit = f"the value is {self.OPS_WORDS.get(s.op, s.op)} {s.value} (a limit set in Rollcall)" if s.op else None
+        return what, limit, related
 
     # -- Manage > Database (dbhealth.py) -----------------------------------
     async def db_health_tick(self, now: float) -> None:
