@@ -841,12 +841,15 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           <input type="search" id="haSearch" class="preset-filter" placeholder="Search Home Assistant sensors, e.g. office ap" autocomplete="off" spellcheck="false">
           <div id="haResults" class="haresults"></div>
         </div>
+        <label class="schedopt" id="rdOpt"><input type="checkbox" id="fRdOn"> <span><b>Add readings as chips</b><button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Any reading from this device's integrations (Starlink, Jellyfin, Plex, iLO, a UPS, linked Home Assistant devices) can be its own chip on the row, showing its value. <b>Add</b> one and it appears under Custom checks with a suggested limit, e.g. <code>Latency=reading:starlink.latency&gt;100</code>: change or remove the limit there. Past the limit it goes red and alerts like any other check. Readings come from the integration's own check, so nothing extra is asked of the device.</span></button></span></label>
+        <div id="rdBox" class="subbox" hidden><div id="rdResults" class="haresults"></div></div>
       </fieldset>
       <fieldset>
         <legend>Custom checks<button type="button" class="tip" aria-label="More about this">i<span class="tiptext">Extra checks, one per line. Give one a name with <code>Name=</code> in front, e.g. <code>Reporting=tcp:50123</code>.<br><br>
 <b>A port on this device:</b> <code>tcp:5985</code><br>
 <b>A web page on this device:</b> <code>https:443/owa</code><br>
 <b>Any web address:</b> <code>https://mail.example.local/owa</code><br>
+<b>An integration's reading:</b> <code>Latency=reading:starlink.latency&gt;100</code><br>
 <b>When a certificate expires:</b> <code>cert:443</code>, or for mail <code>SMTP=cert:25</code>, or another address <code>cert:mail.example.local:443</code><br>
 <b>A Home Assistant sensor:</b> <code>CPU=ha:sensor.office_ap_cpu&gt;90</code> is amber, then red, while it's over 90. Use <code>&gt;</code> <code>&lt;</code> <code>=</code> or <code>!=</code>; with no condition it only has to be available.</span></button></legend>
         <div id="customList"></div>
@@ -1019,7 +1022,7 @@ function chip(s) {
     : [s.label + " (" + s.target + ")", SVC_LABEL[s.status] || s.status,
        s.detail, s.latency_ms != null ? s.latency_ms + " ms" : null,
        s.uptime_24h != null ? s.uptime_24h + "% over 24h" : null].filter(Boolean).join(" · ");
-  const val = s.kind === "ha" && s.detail && s.status !== "unknown" ? " " + s.detail.split(" (")[0] : "";
+  const val = (s.kind === "ha" || s.kind === "reading") && s.detail && s.status !== "unknown" && s.detail !== "not read yet" ? " " + s.detail.split(" (")[0] : "";
   return `<span class="svc ${s.status}" title="${esc(tip)}"><i></i>${esc(s.label)}${esc(val.length > 18 ? val.slice(0, 17) + "…" : val)}</span>`;
 }
 const CHIP_MAX = 6;  // check chips shown under a device's name before the rest fold into "+N more"
@@ -5635,6 +5638,38 @@ document.getElementById("haResults").addEventListener("click", e => {
   b.outerHTML = `<span class="ignored">Added</span>`;
 });
 
+// Readings as chips (readings.py): what this device's integrations read now, each addable as a check
+const RD_DEFAULT = {"starlink.latency": ">100", "starlink.drops": ">2", "starlink.obstructed": ">1", "starlink.sky_blocked": ">5",
+  "starlink.rotation_off": ">15", "starlink.elevation_off": ">10", "starlink.signal": "=weak", "starlink.download": "<20",
+  "jellyfin.failed_tasks": ">0", "ups.charge": "<50", "ups.runtime": "<10", "ups.load": ">80", "ups.on_battery": "=yes"};
+async function rdLoad() {
+  const box = document.getElementById("rdResults");
+  if (!editing) { box.innerHTML = ""; return; }
+  box.innerHTML = `<p class="hint">Reading…</p>`;
+  try {
+    const d = await (await fetch(`api/hosts/${encodeURIComponent(editing.key)}/readings/available`, {cache: "no-store"})).json();
+    const used = new Set([...form.querySelectorAll(".custom input")].map(i => (i.value.match(/reading:([a-z]+\.[a-z0-9_]+)/i) || i.value.match(/ha:([a-z_]+\.[a-z0-9_]+)/i) || [])[1]));
+    const val = (v, u) => v == null ? "not read yet" : esc(String(v)) + (u ? (["%", "°", "°C"].includes(u) ? "" : " ") + esc(u) : "");
+    const rows = (d.readings || []).map(r => { const id = r.source + "." + r.id, cond = RD_DEFAULT[id] || "";
+      return `<div class="harow"><span>${esc(r.source_name)}: ${esc(r.label)}<small>${esc(r.hint || "")}${cond ? `${r.hint ? " · " : ""}suggested limit ${esc(cond)}` : ""}</small></span>
+        <span class="val">${val(r.value, r.unit)}</span>
+        ${used.has(id) ? `<span class="ignored">Added</span>` : `<button type="button" class="mini" data-rd="${esc(r.label.replace(/[=:]/g, " ") + "=reading:" + id + cond)}">Add</button>`}</div>`; });
+    const ha = (d.ha || []).map(e => `<div class="harow"><span>${esc(e.device)}: ${esc(e.name)}<small>${esc(e.entity_id)}</small></span>
+        <span class="val">${val(e.state, e.unit)}</span>
+        ${used.has(e.entity_id) ? `<span class="ignored">Added</span>` : `<button type="button" class="mini" data-rd="${esc(haDefault(e))}">Add</button>`}</div>`);
+    box.innerHTML = rows.concat(ha).join("") || `<p class="hint">Nothing to add yet: readings appear once this device's Starlink, Jellyfin, Plex, iLO, UPS or linked Home Assistant device has been read.</p>`;
+  } catch (e) { box.innerHTML = `<p class="hint">Couldn't read this device's readings.</p>`; }
+}
+document.getElementById("fRdOn").addEventListener("change", e => {
+  document.getElementById("rdBox").hidden = !e.target.checked;
+  if (e.target.checked) rdLoad();
+});
+document.getElementById("rdResults").addEventListener("click", e => {
+  const b = e.target.closest("[data-rd]"); if (!b) return;
+  addCustomRow(b.dataset.rd);
+  b.outerHTML = `<span class="ignored">Added</span>`;
+});
+
 // Monitoring schedule editor
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 function schedRow(w) {
@@ -5856,6 +5891,9 @@ async function openDialog(h) {
   document.getElementById("fHaDevOn").checked = linkedDevs.length > 0;
   document.getElementById("fHaSenOn").checked = false;
   document.getElementById("haSenBox").hidden = true;
+  document.getElementById("fRdOn").checked = false;
+  document.getElementById("rdBox").hidden = true;
+  document.getElementById("rdOpt").hidden = !h;   // readings come from a saved device's integrations
   filterPresets();
   updatePicked();
   document.getElementById("editOnly").style.visibility = h ? "visible" : "hidden";

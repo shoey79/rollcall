@@ -376,6 +376,7 @@ Tick presets in the Add/Edit form. They're grouped as below, with a search box. 
 | `sip`, `sip:PORT` | `sip:5062` | A SIP service; see [VoIP](#voip-phones-atas-and-pbxs-sip) |
 | `ping:HOST`, `tcp:HOST:PORT` | `ping:203.0.113.5` | Another address of this device; see [Other addresses](#other-addresses) |
 | `ha:ENTITY` | `ha:sensor.ap_cpu>90` | A Home Assistant sensor; see [Home Assistant sensors](#home-assistant-sensors) |
+| `reading:SOURCE.READING` | `reading:starlink.latency>100` | One of an integration's readings as its own chip; see [Readings as chips](#readings-as-chips) |
 | `Label=` prefix | `SQL Reporting=tcp:50123` | Any of the above with your own label |
 
 **Web checks** pass on any response below 500:
@@ -438,6 +439,30 @@ In **Edit**, search under **Home Assistant sensors** (the search starts with the
 The condition describes the problem. Operators are `>` `>=` `<` `<=` `=` `!=`. A sensor that's `unavailable` or missing also counts as failing. Sensor checks run with the ping, and pause while the device is down or paused. Some UniFi sensors are disabled by default in Home Assistant; enable them on the device's page first.
 
 To bring in *all* of a device's entities at once, link its Home Assistant device instead; see [Linked Home Assistant devices](#linked-home-assistant-devices).
+
+### Readings as chips
+
+Any reading from a device's integrations can be its own chip on the row, with its value (e.g. **Latency 31.5 ms**), and optionally a limit that makes it a problem. Past the limit it's amber, then red (two checks in a row), and alerts like any other check. Readings come from the integration's own check on the same device, so nothing extra is asked of it.
+
+In **Edit**, tick **Add readings as chips**: it lists what this device's integrations read now, with their current values, and **Add** puts one under **Custom checks** with a suggested limit, where you can change or remove it. (It's there once the device is saved and its integration has been read.)
+
+| Source | Readings |
+|---|---|
+| Starlink | latency, pings dropped, download, upload, obstructed (% of the time), sky blocked (% of the sky seen, from the obstruction map), uptime, rotation off and elevation off (degrees from where the dish wants to point), Ethernet speed, signal, update waiting |
+| Jellyfin, Plex | streams, transcoding, users watching, failed tasks (Jellyfin), update available |
+| iLO | power (W), each temperature, each fan's speed |
+| UPS (SNMP) | battery charge, runtime, load, battery temperature, input voltage, on battery |
+| Linked Home Assistant devices | their sensors, added as [Home Assistant sensor](#home-assistant-sensors) checks |
+
+| Check | Meaning |
+|---|---|
+| `Rotation=reading:starlink.rotation_off>15` | Alerts when the dish is more than 15° off the direction it wants to face (knocked, or the mount moved) |
+| `Latency=reading:starlink.latency>100` | Alerts while latency is over 100 ms |
+| `Download=reading:starlink.download<20` | Alerts while download is under 20 Mb/s |
+| `reading:ups.runtime<10` | Alerts when the UPS has under 10 minutes left |
+| `reading:jellyfin.streams` | Just shows the number of streams |
+
+The condition describes the problem, with the same operators as Home Assistant sensors. A reading the integration hasn't read yet isn't a problem in itself: the integration's own check says why.
 
 ---
 
@@ -1249,7 +1274,7 @@ Rollcall can secure agent reports itself, with nothing to buy or install. Under 
 - **Agents trust exactly that key** ("pinning"), not names or certificate authorities, so a certificate for the right name from anyone else is refused, before anything, the token included, is sent. That's stronger than **Accept a self-signed certificate**, which accepts any certificate.
 - **Agents move across by themselves.** At its next report each agent gets the port and the key's fingerprint, signed with the key that signs updates (so even that hand-over can't be changed on the way), and from the run after it reports to `https://<the same address>:8101`. The address it had stays as the fallback. Agents downloaded while HTTPS is on have it built in and use it from their first report. Needs Windows agent 1.0.54, Linux agent 1.0.22 or router agent 1.0.3.
 - **Routers** can't check a key or a signature: the router agent is given Rollcall's certificate and trusts only that (`uclient-fetch --ca-certificate`, or curl), so the certificate lists every address agents use; Rollcall adds new ones as agents report from them. It's kept on the router's flash, written only when it changes. A router without TLS support for uclient-fetch (the `libustream-*` package) stays on HTTP.
-- **Plain HTTP stays on** until you choose **Turn off plain HTTP**; the HTTPS section lists any agents still using it first. Leave it on if a reverse proxy forwards to port 8100 over plain HTTP: agents that reach Rollcall through one with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are.
+- **Plain HTTP stays on** until you choose **Turn off plain HTTP**; the HTTPS section lists any agents still using it first. Once every agent reports over HTTPS, admins see a reminder on the Overview with a button to turn it off. Off stays off across restarts and updates, and **Settings → Agent port** shows it. Leave it on if a reverse proxy forwards to port 8100 over plain HTTP: agents that reach Rollcall through one with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are.
 - **Port 8101** must be open under the add-on's **Configuration → Network** (it is by default). If it's closed, the HTTPS section says so and agents stay on HTTP.
 
 ### Devices that report over the internet
@@ -1438,9 +1463,9 @@ To hide the panel from some non-admins, remove it from their sidebar under their
 
 ### Export and import
 
-**Manage → Export / import** (admins) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
+**Manage → Export / import** (Home Assistant admins only, not editors: an export holds private keys) moves everything to another install of the add-on, for example from a local copy to one installed from GitHub.
 
-- **Export** downloads one zip: devices and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key, any SNMP and iLO passwords, and the key that signs agent updates (so agents go on accepting updates from the install you import it into). Anyone with the export could sign an agent update, so keep it as safe as a password. The email password and Microsoft 365 client secret are left out.
+- **Export** downloads one zip: devices and their checks, tabs, pauses, agent approvals and the enrolment key, ignores and thresholds, uploaded icons, each agent's last report, uptime history and the Configuration-tab settings. Keep it safe: it contains the enrolment key, any SNMP and iLO passwords, and the key that signs agent updates (so agents go on accepting updates from the install you import it into). Anyone with the export could sign an agent update, so keep it as safe as a password. That's why export and import are for Home Assistant admins only (since 1.97.0; before that, editors named in `editors` could use them too). The keys have to be in it: without them, agents wouldn't trust updates or HTTPS from the install you import into. The email password and Microsoft 365 client secret are left out.
 - **Import** on the new install replaces everything there with the export and restarts the add-on. Tick **Also restore the Configuration-tab settings** to bring notifications, thresholds and agent options across too. The data it replaced is kept in a `before_import_<date>` folder in the add-on's data folder.
 
 Agents keep reporting without being reinstalled, as long as they reach the new install on the same address and port. Stop the old copy once the new one is running, since both can't use port 8100.
@@ -1453,14 +1478,22 @@ Amber and red checks with a well-known error show **💡**: on the Overview next
 
 **Built-in hints** cover common codes and messages: finding or signing in to the domain (`0x8007054B`, `0x8007051F`, `0x800706BA`, wrong or expired passwords, locked or disabled accounts, access denied), Group Policy failures, LAPS (no password in AD, overdue rotation), the clock and the PDC emulator, Windows Update and WSUS (`0x80244022`, `0x8024401C`, `0x80073712`, `0x800F081F` and others), certificates, DFS Replication (4012, 2213) and backups (VSS). They're part of Rollcall: free, and nothing leaves your network.
 
-**Hints from Claude** are optional and **off by default**. An admin turns them on under **Manage → Settings → Error hints** and enters their own Anthropic API key (from console.anthropic.com). Then **💡** also offers **Ask Claude** for any amber or red check, including errors the built-in table doesn't know.
+**Hints from AI** are optional and **off by default**. An admin turns them on under **Manage → Settings → Error hints**, chooses who answers, and enters their own API key for it:
 
-- **On request only.** Nothing is sent until someone who can make changes clicks **Ask Claude**. The answer is marked as a suggestion from Claude: advice only. Claude can't change anything.
+| Provider (`ai_provider`) | Key from | Default model |
+|---|---|---|
+| Claude (`anthropic`) | console.anthropic.com | `claude-haiku-5-5` |
+| ChatGPT (`openai`) | platform.openai.com | `gpt-5.4-mini` |
+| Gemini (`gemini`) | aistudio.google.com | `gemini-3.5-flash-lite` |
+
+Then **💡** also offers **Ask Claude** (or ChatGPT, or Gemini) for any amber or red check, including errors the built-in table doesn't know. **Test the saved key and model** sends one tiny question to check they work; model names change over time, so if a default stops working, enter the provider's current small model.
+
+- **On request only.** Nothing is sent until someone who can make changes clicks **Ask**. The answer is marked as a suggestion from that provider and model: advice only. It can't change anything.
 - **What's sent:** the check's name, whether it's amber or red, its error text, the kind of device (e.g. *Microsoft Windows 11 Pro (workstation)*), whether it's on a domain, and how long ago its agent reported. **What's sent?** shows exactly that before you ask, and each answer keeps a copy.
 - **Names and addresses are replaced first:** every device name Rollcall knows, the domain's names, signed-in users, `DOMAIN\account` names, email addresses, IPv4 and IPv6 addresses, host names, UNC paths, SIDs, MAC addresses and user profile folders become stand-ins such as `PC01`, `CONTOSO\user1` and `192.0.2.1`. Windows' own names (`NT AUTHORITY\SYSTEM`, `C:\Windows\...`) and error codes are kept, since they're what the answer depends on.
-- **Never sent:** security events, domain security (privileged groups and accounts), agent file changes, known vulnerabilities and anything from password scanning. Those checks don't offer **Ask Claude** at all.
-- **Cost:** a small, fast model (`claude_model`, `claude-haiku-5-5` by default) answers in a few sentences, a fraction of a penny each, on your Anthropic account. The same error is only asked about once (answers are kept for 30 days in `claude_hints.json`), and **Hints from Claude per day** (`claude_hints_per_day`, 30) caps the rest.
-- **The key** is stored with the add-on's settings like the email password: never shown again, left out of exports, and only ever sent to Anthropic's API.
+- **Never sent:** security events, domain security (privileged groups and accounts), agent file changes, known vulnerabilities and anything from password scanning. Those checks don't offer **Ask** at all.
+- **Cost:** a small, fast model answers in a few sentences, a fraction of a penny each, on your account with that provider. The same error is only asked about once per provider (answers are kept for 30 days in `claude_hints.json`), and **AI hints per day** (`claude_hints_per_day`, 30) caps the rest.
+- **The keys** are stored with the add-on's settings like the email password: never shown again, left out of exports, and each only ever sent to its own provider's API (Gemini's in a header, not the address).
 
 ### Add-on security
 
@@ -1558,10 +1591,15 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_certfile` | fullchain.pem | Certificate in Home Assistant's `/ssl` folder |
 | `agent_keyfile` | privkey.pem | Its private key |
 | **Error hints** (admins only) | | |
-| `claude_hints` | false | Offer **Ask Claude** on amber and red checks; see [Hints for errors](#hints-for-errors) |
-| `claude_api_key` | | Your Anthropic API key; never shown again, only sent to Anthropic |
-| `claude_model` | claude-haiku-5-5 | The model that writes the hints |
-| `claude_hints_per_day` | 30 | At most this many questions to Claude a day (1 to 500) |
+| `claude_hints` | false | Offer **Ask** (hints from AI) on amber and red checks; see [Hints for errors](#hints-for-errors) |
+| `ai_provider` | anthropic | Who answers: `anthropic` (Claude), `openai` (ChatGPT) or `gemini` |
+| `claude_api_key` | | Anthropic API key; never shown again, only sent to Anthropic |
+| `claude_model` | claude-haiku-5-5 | The Claude model |
+| `openai_api_key` | | OpenAI API key; never shown again, only sent to OpenAI |
+| `openai_model` | gpt-5.4-mini | The OpenAI model |
+| `gemini_api_key` | | Gemini API key; never shown again, only sent to Google |
+| `gemini_model` | gemini-3.5-flash-lite | The Gemini model |
+| `claude_hints_per_day` | 30 | At most this many questions to the AI a day (1 to 500) |
 | **Other** | | |
 | `log_level` | info | debug, info, warning or error |
 | `hosts` | `[]` | Optional bulk import; see [Adding and editing devices](#adding-and-editing-computers) |
@@ -1635,7 +1673,7 @@ In the add-on's data folder (included in Home Assistant backups):
 | `secrets/` | Where each agent's password scan found passwords: path, line, kind, setting name and length (never the passwords) |
 | `icons/` | Uploaded icons |
 | `db_health.json` | The last database check and compaction |
-| `claude_hints.json` | Hints from Claude: answers (30 days) and today's count; never the API key |
+| `claude_hints.json` | Hints from AI: answers (30 days) and today's count; never the API keys |
 | SQLite database | Uptime history, agent readings and syslog messages (see [The database](#the-database)) |
 
 In the repository:

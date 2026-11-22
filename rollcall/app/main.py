@@ -66,6 +66,7 @@ import plex as pxlib
 import starlink as sllib
 import dbhealth as dblib
 import hints as hintlib
+import readings as readlib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
@@ -597,6 +598,19 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         cond = f" {op} {value}" if op else ""
         return [{"label": label or ha_label(entity), "kind": "ha", "port": None, "url": None,
                  "desc": f"ha:{entity}{cond}", "entity": entity, "op": op, "value": value or None}]
+    if m := readlib.RE.match(entry):  # one of an integration's readings: reading:starlink.latency>80
+        src, rid, op, value = m.group(1).lower(), m.group(2).lower(), m.group(3), (m.group(4) or "").strip()
+        if src not in readlib.SOURCES:
+            raise ValueError(f"'{entry}': unknown source (one of {', '.join(readlib.SOURCES)})")
+        if op in (">", ">=", "<", "<="):
+            try:
+                float(value)
+            except ValueError:
+                raise ValueError(f"'{entry}': {op} needs a number")
+        cond = f" {op} {value}" if op else ""
+        return [{"label": label or rid.replace("_", " ").capitalize(), "kind": "reading", "port": None, "url": None,
+                 "desc": f"{readlib.SOURCES[src]} {rid.replace('_', ' ')}{cond}", "entity": f"{src}.{rid}",
+                 "op": op, "value": value or None}]
     if low.startswith(("http://", "https://")):
         u = urlparse(entry)
         if not u.netloc:
@@ -2727,6 +2741,10 @@ class Monitor:
                 return await self.plex_check(h)
             if s.kind == "starlink":
                 return await self.starlink_check(h)
+            if s.kind == "reading":  # from the source's latest reading: nothing extra is asked of the device
+                src, _, rid = (s.entity or "").partition(".")
+                ok, txt = readlib.judge(readlib.lookup(h, src, rid), s.op, s.value)
+                return ok, None, txt
             async with self.sem:
                 if s.kind == "cert":
                     ip = await resolve(s.target) if s.target else h.ip
@@ -2758,7 +2776,11 @@ class Monitor:
                     s.scheme_pref = scheme
                 return ok, ms, detail
 
-        results = await asyncio.gather(*(run_one(s) for s in h.services), return_exceptions=True)
+        # Readings come from the other checks' answers, so they go once those are in (this round's values, not last's)
+        first = await asyncio.gather(*(run_one(s) for s in h.services if s.kind != "reading"), return_exceptions=True)
+        later = await asyncio.gather(*(run_one(s) for s in h.services if s.kind == "reading"), return_exceptions=True)
+        it1, it2 = iter(first), iter(later)
+        results = [next(it2) if s.kind == "reading" else next(it1) for s in h.services]
         starting = startup_until(h, now)
         for s, res in zip(h.services, results):
             if isinstance(res, Exception):
@@ -6766,6 +6788,19 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             return web.json_response({"error": str(err)}, status=502)
         return web.json_response(m, headers={"Cache-Control": "no-store"})
 
+    async def host_readings(req):
+        """Edit → Readings as chips: what this device's integrations read now, to add as checks."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        ents = []
+        for d in ((h.ha_data or {}).get("devices") or []):
+            for e in d.get("entities") or []:
+                if str(e.get("entity_id") or "").split(".")[0] in ("sensor", "binary_sensor") and not e.get("category"):
+                    ents.append({"entity_id": e["entity_id"], "name": e.get("name") or e["entity_id"], "state": e.get("state"),
+                                 "unit": e.get("unit") or "", "device": d["device"].get("name") or ""})
+        return web.json_response({"readings": readlib.available(h), "ha": ents[:200]}, headers={"Cache-Control": "no-store"})
+
     async def host_ilo(req):
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
@@ -7057,6 +7092,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/snmp/ups-limits", editor_only(host_ups_limits))
     app.router.add_post("/api/hosts/{key}/snmp/ack-restart", editor_only(host_snmp_ack))
     app.router.add_get("/api/hosts/{key}/ilo", host_ilo)
+    app.router.add_get("/api/hosts/{key}/readings/available", host_readings)
     app.router.add_get("/api/hosts/{key}/starlink/map", host_starlink_map)
     app.router.add_post("/api/hosts/{key}/ilo/ack", editor_only(host_ilo_ack))
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
