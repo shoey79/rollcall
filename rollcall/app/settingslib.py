@@ -189,7 +189,7 @@ LABELS: dict[str, tuple[str, str]] = {
     "agent_watch_services": ("Extra services to watch", "Windows or Linux services to watch on every server, as well as the ones Rollcall picks automatically."),
     "agent_ignore": ("Ignore everywhere", "Things to ignore on every server, e.g. a service, event or disk. Most ignores are easier to add with the Ignore buttons in the dashboard."),
     "agent_auto_add": ("Add approved servers automatically", "When you approve an agent, add its device to the dashboard straight away."),
-    "agent_ssl": ("Agent port uses HTTPS", "Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder."),
+    "agent_ssl": ("Use your own certificate on the agent port", "Serve the agent port over HTTPS with your own certificate from Home Assistant's /ssl folder, instead of Rollcall's own HTTPS (Manage → Agents)."),
     "agent_certfile": ("Agent HTTPS certificate", "The certificate file in Home Assistant's /ssl folder."),
     "agent_keyfile": ("Agent HTTPS private key", "The certificate's private key file in Home Assistant's /ssl folder."),
     "claude_hints": ("Hints from Claude", "Adds an Ask Claude button to amber and red checks, for a few sentences on what the error usually means. Off by default. Only the check and its error are sent, with computer, account and domain names and addresses replaced; security events, account lists and password-scan results are never sent. Uses your own Anthropic API key, so you pay for what's asked (a fraction of a penny each)."),

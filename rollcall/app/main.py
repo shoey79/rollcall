@@ -5701,6 +5701,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "notify_services": notify,
             "ssl_files": live.ssl_files() if live else [],
             "agent_port": "HTTPS" if live and live.agent_listener and live.agent_listener.https else "HTTP",
+            "agent_tls": _tls_info(),  # Rollcall's own HTTPS (Manage → Agents), so the Agent port note tells the whole story
         })
 
     async def settings_post(req):
@@ -7705,6 +7706,9 @@ class LiveSettings:
             if not changed:
                 return {"changed": [], "notes": []}
             merged = {**current, **changed}
+            if changed.get("agent_ssl") and AGENT_TLS.on:
+                raise ValueError({"agent_ssl": "Rollcall's own HTTPS for agents is on (Manage → Agents). Use one or the other: "
+                                               "turn it off there first to use your own certificate on the agent port."})
             if set(settingslib.AGENT_PORT_KEYS) & changed.keys() and merged.get("agent_ssl"):
                 problem = await self.check_agent_port(merged)
                 if problem:

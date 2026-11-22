@@ -2085,7 +2085,8 @@ function stParse(f, raw) {
 const stSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function stChanged() { return ST.meta ? ST.meta.fields.filter(f => !stSame(ST.vals[f.key], ST.orig[f.key])).map(f => f.key) : []; }
 const ST_ADMIN_KEYS = ["messages", "claude_hints", "claude_api_key", "claude_model", "claude_hints_per_day"];  // as settingslib.ACCESS_KEYS
-function stLocked(f) { return (f.group === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin; }
+function stLocked(f) { return ((f.group === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin)
+  || (f.group === "agent_port" && !!(ST.meta.agent_tls || {}).builtin); }  // not used while Rollcall's own HTTPS is on
 function stCheck(f, v) {
   if (f.type === "int" && (typeof v !== "number" || v < f.min || v > f.max)) return `Must be a whole number from ${f.min} to ${f.max}`;
   if (f.type === "ints" && v.some(x => typeof x !== "number" || x < f.min || x > f.max)) return `Each must be a whole number from ${f.min} to ${f.max}`;
@@ -2140,7 +2141,14 @@ function stNote(group) {
   if (group === "hints") return `<p class="st-note">Every amber or red check with a well-known error code shows 💡 <b>What this usually means</b>, from a table built into Rollcall: free, and nothing leaves your network.</p>` +
     `<p class="st-note"><b>Hints from Claude</b> are optional and off unless turned on here. They add an <b>Ask Claude</b> button for errors the table doesn't cover. Only the check and its error are sent to Anthropic's API, with computer, account and domain names and addresses replaced by stand-ins (each hint shows exactly what was sent). Security events, account lists and anything from password scanning are never sent. It uses your own API key from console.anthropic.com, only asks when someone clicks, and the same error is only asked about once.</p>` +
     (ST.meta.can_admin ? "" : `<p class="st-note">Only Home Assistant administrators can change these.</p>`);
-  if (group === "agent_port") return `<p class="st-note">The agent port is using <b>${esc(ST.meta.agent_port)}</b> now. Switching it takes effect straight away; agents keep using the address they were installed with, so update the addresses under <b>Agents</b> to match (<code>https://</code> or <code>http://</code>).</p>`;
+  if (group === "agent_port") {
+    const t = ST.meta.agent_tls || {};
+    if (t.builtin) return `<p class="st-note">Agents use <b>Rollcall's own HTTPS</b> on port ${esc(t.port)}, set under <b>Manage → Agents</b>. ` +
+      (t.plain_http ? `Plain HTTP on port ${esc(t.http_port)} is still on for agents that haven't moved yet.` : `Plain HTTP on port ${esc(t.http_port)} is off.`) +
+      `</p><p class="st-note">The settings below are the other way to do it: your own certificate on port ${esc(t.http_port)} instead. They aren't used while Rollcall's own HTTPS is on.</p>`;
+    if (ST.meta.agent_port === "HTTPS") return `<p class="st-note">The agent port (${esc(t.http_port || "")}) uses <b>HTTPS with your own certificate</b>, below. Agents keep using the address they were installed with, so their addresses under <b>Agents</b> should start <code>https://</code>.</p>`;
+    return `<p class="st-note">The agent port (${esc(t.http_port || "")}) uses plain <b>HTTP</b>. For HTTPS, the simplest is <b>Rollcall's own HTTPS</b> under <b>Manage → Agents</b>: nothing to set up, and agents move over by themselves. Or tick below to use your own certificate on this port instead; agents keep the address they were installed with, so update their addresses under <b>Agents</b> to <code>https://</code>.</p>`;
+  }
   if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each device's next check or agent report.</p>`;
   return "";
 }

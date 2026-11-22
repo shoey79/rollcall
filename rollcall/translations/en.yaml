@@ -228,8 +228,8 @@ configuration:
     name: Add approved servers automatically
     description: When you approve an agent, add its device to the dashboard straight away.
   agent_ssl:
-    name: Agent port uses HTTPS
-    description: Serve the agent port over HTTPS, using the certificate below from Home Assistant's /ssl folder.
+    name: "Use your own certificate on the agent port"
+    description: "Serve the agent port over HTTPS with your own certificate from Home Assistant's /ssl folder, instead of Rollcall's own HTTPS (Manage → Agents)."
   agent_certfile:
     name: Agent HTTPS certificate
     description: The certificate file in Home Assistant's /ssl folder.

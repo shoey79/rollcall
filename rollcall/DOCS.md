@@ -1408,7 +1408,7 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 **Manage → Settings** (admins and editors) changes the add-on's settings from the dashboard: check intervals, notifications, alert limits, agent options, the agent port and who can make changes. They're the same settings as the add-on's **Configuration** tab, grouped into tabs with a search box, and saved to the same place, so the two always agree.
 
-- **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each device's next check or agent report; turning **Agent port uses HTTPS** on or off switches the agent port over at once.
+- **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each device's next check or agent report; turning **Use your own certificate on the agent port** on or off switches the agent port over at once.
 - **Checked as you type.** A value out of range is marked and **Save** waits until it's fixed. If Home Assistant turns a change down, nothing is changed and the reason is shown.
 - **Who can make changes** (`admin_only_changes`, `editors`), **Messages to users' screens** and **Error hints** can only be changed by Home Assistant admins, not by editors.
 - **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
@@ -1554,7 +1554,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_watch_services` | `[]` | Extra services to watch on every server |
 | `agent_ignore` | `[]` | Things to ignore on every server; see [Tuning](#tuning) |
 | `agent_auto_add` | true | Add approved servers to the dashboard automatically |
-| `agent_ssl` | false | Serve the agent port over HTTPS |
+| `agent_ssl` | false | Serve the agent port over HTTPS with your own certificate, instead of Rollcall's own HTTPS. Not while Rollcall's own HTTPS is on (Manage → Agents); **Settings → Agent port** says which is in use |
 | `agent_certfile` | fullchain.pem | Certificate in Home Assistant's `/ssl` folder |
 | `agent_keyfile` | privkey.pem | Its private key |
 | **Error hints** (admins only) | | |

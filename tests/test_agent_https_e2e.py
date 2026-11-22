@@ -107,6 +107,11 @@ def scenario(agent, tmp: Path):
         before = addon.agent()["last_report"]
         agent.run()
         assert addon.agent()["last_report"] > before and addon.agent()["sent_to"] == https_url, agent.log()[-3000:]
+        # Settings → Agent port says so (it used to say "HTTP"), and won't take your own certificate on top
+        meta = addon.api("/api/settings")
+        assert meta["agent_tls"]["builtin"] and meta["agent_tls"]["plain_http"] is False
+        st, body = call(addon.ui + "/api/settings", {"values": {"agent_ssl": True}}, UI, "POST")
+        assert st == 400 and b"Use one or the other" in body, body[:300]
 
         # 4. An impostor on the HTTPS port the agent knows; Rollcall's HTTPS moves to another port
         addon.api("/api/agents/tls", {"plain_http": True}, "POST")
