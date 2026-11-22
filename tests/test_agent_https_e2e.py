@@ -100,8 +100,12 @@ def scenario(agent, tmp: Path):
         assert addon.agent()["sent_to"] == https_url, agent.log()[-3000:]
         assert addon.api("/api/agents")["tls"]["agents_https"] == 1
 
+        # Every agent is on HTTPS, plain HTTP still open: the Overview suggests closing it
+        assert addon.api("/api/status")["tls_plain_prompt"] is True
+
         # 3. Plain HTTP off: still reporting
         addon.api("/api/agents/tls", {"plain_http": False}, "POST")
+        assert addon.api("/api/status")["tls_plain_prompt"] is False
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", addon.agent_port), 2).close()
         before = addon.agent()["last_report"]
@@ -112,6 +116,15 @@ def scenario(agent, tmp: Path):
         assert meta["agent_tls"]["builtin"] and meta["agent_tls"]["plain_http"] is False
         st, body = call(addon.ui + "/api/settings", {"values": {"agent_ssl": True}}, UI, "POST")
         assert st == 400 and b"Use one or the other" in body, body[:300]
+        # ...and stays off after a restart (security review RC-03)
+        addon.stop()
+        addon.start()
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", addon.agent_port), 2).close()
+        before = addon.agent()["last_report"]
+        agent.run()
+        assert addon.agent()["last_report"] > before and addon.agent()["sent_to"] == https_url, agent.log()[-3000:]
+        assert addon.api("/api/agents")["tls"]["plain_http"] is False
 
         # 4. An impostor on the HTTPS port the agent knows; Rollcall's HTTPS moves to another port
         addon.api("/api/agents/tls", {"plain_http": True}, "POST")

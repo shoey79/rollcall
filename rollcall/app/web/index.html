@@ -577,7 +577,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="discBtn" role="menuitem" title="Scan the network for devices that could be added"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="1.2"/><path d="M3.6 12.4a6.2 6.2 0 0 1 0-8.8M12.4 3.6a6.2 6.2 0 0 1 0 8.8M5.7 10.3a3.3 3.3 0 0 1 0-4.6M10.3 5.7a3.3 3.3 0 0 1 0 4.6"/></svg>Discover devices</button>
         <button type="button" id="swBtn" role="menuitem" title="Which devices have a program installed, and which version"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5 8 2.5 13.5 5v6L8 13.5 2.5 11zM2.5 5 8 7.5 13.5 5M8 7.5v6"/></svg>Find software</button>
         <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M12.6 8.0L14.2 8.0 M11.3 11.3L12.4 12.4 M8.0 12.6L8.0 14.2 M4.7 11.3L3.6 12.4 M3.4 8.0L1.8 8.0 M4.7 4.7L3.6 3.6 M8.0 3.4L8.0 1.8 M11.3 4.7L12.4 3.6"/></svg>Settings</button>
-        <button type="button" id="backupBtn" role="menuitem" title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
+        <button type="button" id="backupBtn" role="menuitem" hidden title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
         <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Log</button>
         <button type="button" id="dbBtn" role="menuitem" title="How big Rollcall's database is, what takes the room, and whether it's healthy"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="3.8" rx="5" ry="1.8"/><path d="M3 3.8v8.4c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V3.8M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8"/></svg>Database</button>
         <button type="button" id="msgBtn" role="menuitem" hidden title="Send a short message to the screens of agent devices (admins only)"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Messages</button>
@@ -590,6 +590,8 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
   <div class="err" id="err" hidden>Can't reach the monitor service. Retrying…</div>
   <div class="tlsprompt" id="tlsPrompt" hidden><span>🔒 Agents report to Rollcall over plain HTTP. <b>Turn on HTTPS</b>: Rollcall makes its own certificate and agents move across by themselves.</span>
     <span><button type="button" class="mini primary" id="tlsGo">Set it up</button> <button type="button" class="mini" id="tlsLater">Not now</button></span></div>
+  <div class="tlsprompt" id="tlsPlain" hidden><span>🔒 Every agent now reports over Rollcall's own HTTPS, but plain HTTP is still open on the agent port. <b>Turn it off</b> so nothing can report, or listen, without encryption.</span>
+    <span><button type="button" class="mini primary" id="tlsPlainOff">Turn off plain HTTP</button> <button type="button" class="mini" id="tlsPlainLater">Not now</button></span></div>
   <section id="home" aria-label="Overview"><div class="tiles"><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div></div><div class="panel"><h2>Alerts</h2><div class="allok">Loading…</div></div></section>
   <div class="wrap">
     <table>
@@ -2383,8 +2385,11 @@ function applyStatus(fresh) {
     document.body.classList.toggle("view-only", viewOnly);
     document.getElementById("msgBtn").hidden = !data.can_admin;
     document.getElementById("dbCompact").hidden = !data.can_admin;
+    document.getElementById("backupBtn").hidden = !data.can_admin;  // exports hold private keys: admins only
     let later = 0; try { later = +localStorage.getItem("pm_tls_later") || 0; } catch (e) { }
     document.getElementById("tlsPrompt").hidden = !(data.tls_prompt && data.can_admin && Date.now() - later > 7 * 86400000);
+    let laterPlain = 0; try { laterPlain = +localStorage.getItem("pm_tls_plain_later") || 0; } catch (e) { }
+    document.getElementById("tlsPlain").hidden = !(data.tls_plain_prompt && data.can_admin && Date.now() - laterPlain > 7 * 86400000);
     const vo = document.querySelector(".viewonly");
     if (vo) { vo.textContent = data.edit_blocked ? "View only for now" : "View only";
       vo.title = data.edit_blocked ? "Rollcall can't read Home Assistant's user list just now, so it can't tell who's an admin, and changes are off until it can. To make changes meanwhile, add your Home Assistant username to 'editors' in the add-on's Configuration tab." : "Only Home Assistant admins can add, edit, pause or reset"; }
@@ -5081,6 +5086,18 @@ document.getElementById("tlsGo").addEventListener("click", async () => {
 document.getElementById("tlsLater").addEventListener("click", () => {
   try { localStorage.setItem("pm_tls_later", String(Date.now())); } catch (e) { }
   document.getElementById("tlsPrompt").hidden = true;
+});
+
+document.getElementById("tlsPlainLater").addEventListener("click", () => {
+  try { localStorage.setItem("pm_tls_plain_later", String(Date.now())); } catch (e) { }
+  document.getElementById("tlsPlain").hidden = true;
+});
+document.getElementById("tlsPlainOff").addEventListener("click", async () => {
+  if (!confirm("Turn off plain HTTP on the agent port?\n\nEvery agent already reports over HTTPS. An agent that hasn't moved (e.g. one switched off for a while) moves over the next time it reports, as long as it can reach Rollcall's HTTPS port. You can turn plain HTTP back on under Manage → Agents.")) return;
+  const r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({plain_http: false})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "That didn't work (" + r.status + ")"); return; }
+  document.getElementById("tlsPlain").hidden = true;
+  load();
 });
 
 // ---- Network discovery ----

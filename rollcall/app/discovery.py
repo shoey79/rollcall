@@ -46,6 +46,9 @@ def parse_ranges(text: str) -> tuple[list[str], list[str]]:
                 net = ipaddress.ip_network(part, strict=False)
                 if net.version != 4:
                     raise ValueError("IPv4 only")
+                # Check the size before listing anything: a /8 would otherwise be 16 million addresses in memory
+                if (net.num_addresses - 2 if net.num_addresses > 2 else net.num_addresses) > MAX_PER_RANGE:
+                    raise ValueError(f"more than {MAX_PER_RANGE} addresses; use a /22 or smaller")
                 hosts = list(net.hosts()) if net.num_addresses > 2 else list(net)
             elif "-" in part:
                 a, b = part.split("-", 1)

@@ -5674,6 +5674,10 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         snap["messages_on"] = bool(monitor.opts.get("messages"))
         # Agents report over plain HTTP and Rollcall's own HTTPS isn't on: admins are offered it
         snap["tls_prompt"] = bool(not AGENT_TLS.on and not monitor.opts.get("agent_ssl") and monitor.agents and monitor.agents.agents)
+        # Rollcall's own HTTPS is on and every agent has moved to it, but plain HTTP is still open: suggest closing it
+        rows = list(monitor.agents.agents.values()) if monitor.agents else []
+        snap["tls_plain_prompt"] = bool(monitor.tls_builtin() and AGENT_TLS.plain_http and rows
+                                        and not any(str(a.get("sent_to") or "").startswith("http://") for a in rows))
         snap["networks"] = await monitor.network_view()
         if user["can_edit"] and monitor.agents:
             snap["agents_pending"] = len(monitor.agents.pending)
@@ -7031,10 +7035,10 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_get("/api/views", views_get)
     app.router.add_get("/api/settings", editor_only(settings_get))
     app.router.add_post("/api/settings", editor_only(settings_post))
-    app.router.add_get("/api/export", editor_only(export_data))
+    app.router.add_get("/api/export", admin_only(export_data))  # holds the update-signing and HTTPS private keys
     app.router.add_post("/api/starlink/dishes", editor_only(starlink_dishes))
-    app.router.add_post("/api/import", editor_only(import_data))
-    app.router.add_post("/api/import/chunk", editor_only(import_chunk))
+    app.router.add_post("/api/import", admin_only(import_data))  # replaces everything, keys included
+    app.router.add_post("/api/import/chunk", admin_only(import_chunk))
     app.router.add_get("/api/ha/entities", editor_only(ha_entities))
     app.router.add_get("/api/ha/devices", editor_only(ha_devices))
     app.router.add_get("/api/hosts/{key}/ha", host_ha)
