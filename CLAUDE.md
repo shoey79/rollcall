@@ -66,6 +66,13 @@ together). Remove each once it's released.
   plainly that network ADB gives full control to anything on the network (suggest a separate network, or ADB off on
   sticks not monitored). Never send input, install, or change settings. Build against a stand-in ADB device in
   tests; give the owner a read-only test script for his stick before release (as for Starlink).
+  Owner's test (22 Nov, Fire TV Stick 4K, Fire OS 6): full read ~4 s (each `pm`/`settings` call ~1.5 s, starts Java).
+  Fire OS version from `ro.build.mktg.fireos` first (`ro.build.version.fireos` is only the generation, "6.0").
+  Load average is useless (5-6 on an idle 4-core stick): use CPU % from two `/proc/stat` reads, never the router
+  load rule. `/sys/class/thermal` is permission-denied over ADB: say "not readable on this model". Also add: count
+  of disabled packages (`pm list packages -d`; a drop means an update re-enabled debloated apps) and, for each
+  sideloaded app, whether it's running (`pidof`) and its service count (e.g. a custom launcher's Home helper).
+  Don't scrub version numbers as IP addresses. TV approval with Rollcall's own key not yet tested (he used adb).
 
 ## Built, waiting for release
 
