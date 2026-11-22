@@ -51,6 +51,13 @@ together). Remove each once it's released.
   events, names replaced) and confirm before release; say so in the docs. Windows Server Backup is the easy next
   one if wanted (own event log).
 
+- Fast search with many devices (owner asked 22 Nov; 127 devices, typing in the search box is slow). Cause found:
+  nothing is fetched; each keystroke runs render() in full (summary, tabs with every tab's rule counts, and every
+  row's HTML rebuilt: chips, uptime bars, sparklines), and the 5-second status poll re-renders too. Fix: debounce
+  the search box (~120 ms); on a search, show/hide existing rows from a cached per-device search text instead of
+  rebuilding; cache each row's HTML and rebuild only rows whose data changed on a poll; don't recount tabs on a
+  keystroke. Measure render time with ~150 test devices before and after (Playwright), and keep the result in a test.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
