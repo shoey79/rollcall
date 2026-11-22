@@ -58,6 +58,15 @@ together). Remove each once it's released.
   rebuilding; cache each row's HTML and rebuild only rows whose data changed on a poll; don't recount tabs on a
   keystroke. Measure render time with ~150 test devices before and after (Playwright), and keep the result in a test.
 
+- Fire TV / Android TV monitoring (owner asked 22 Nov; one stick, network ADB already on). No agent on the stick:
+  the add-on connects over network ADB (port 5555, its own RSA key; the TV asks "Allow USB debugging?" once) and runs
+  read-only shell commands. A "Fire TV" preset and tab like Starlink: online and ADB still trusted, model, Fire OS
+  version, uptime/restarts, free storage, memory, Wi-Fi signal/link speed/band, temperature where reported, app in
+  front, installed apps with versions (flag sideloaded). Every value usable as a readings chip with limits. Say
+  plainly that network ADB gives full control to anything on the network (suggest a separate network, or ADB off on
+  sticks not monitored). Never send input, install, or change settings. Build against a stand-in ADB device in
+  tests; give the owner a read-only test script for his stick before release (as for Starlink).
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
