@@ -49,8 +49,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Starlink map errors always JSON and logged (#18); cause of Tom's error not yet known (needs his log line).
-- Fast search (row cache, bar times once, debounce; test_search_speed). Veeam agent policies judged by their computers
-  (PowerShell sessions/restore points, fallback from devices' agents). Fire TV over network ADB (firetv.py; owner to run
-  firetv-rollcall-test.py on his stick to confirm Allow works with Rollcall's key). NetBackup + Data Protector in Windows
-  agent 1.0.56 (untested on real installs: ask users for samples after release).
+(none)

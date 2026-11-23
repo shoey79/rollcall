@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.98.0 - 2026-11-23
+
+- **Fire TV and Android TV.** A new **Fire TV / Android TV** preset watches a Fire TV stick or Android TV box over network ADB, with nothing installed on it. Rollcall connects with a key of its own (the TV asks *Allow USB debugging?* once) and only runs commands that read: it never presses keys, installs anything or changes a setting.
+  - The **Fire TV** tab shows the model, Fire OS and Android versions and security patch, uptime and restarts, CPU (sampled over 2 seconds, since Fire OS's load average reads high on an idle stick), memory, storage, Wi-Fi signal, band and link speed, the screen and the app in front, and the apps you've installed, with versions and where they came from. Sideloaded apps show whether they're running and how many services they have.
+  - Amber for low storage, CPU busy in 3 checks in a row, disabled apps turned back on (a Fire OS update undoing debloating), a sideloaded app that stopped, or a weak Wi-Fi signal. Every value can be a chip with a limit of your own.
+  - Network ADB gives full control of the stick to anything the TV has allowed, so the setup note and docs say so, with what to do about it.
+
+- **Veeam agent policies are judged by their computers' backups.** On the backup server, an *Agent Policy* job's own run only sends its settings to the computers, so it said *no successful run for 198 h* while they backed up every night. Each computer's backups are now listed under the policy, like a copy job's sources, and checked on their own; the policy isn't judged by its age. The Windows agent (1.0.56) reads them with Veeam's PowerShell once an hour (PowerShell 7 for Backup & Replication 13), and computers with their own Rollcall agent fill them in when it can't.
+
+- **NetBackup and Data Protector.** The Windows agent now reads Veritas NetBackup's job list (on the primary server) and HPE/OpenText Data Protector's sessions (on the Cell Manager), into the same **Backups** check and tab as Veeam: failures red, partial successes amber, overdue jobs spotted, with the reason under **Why?** and hints for common NetBackup status codes. Neither could be tested on a real install, so they're built from the vendors' documentation; a sample of the output from anyone who uses them would confirm it.
+
+- **Searching is quick with many devices.** With 150 devices, each keystroke in the search box took about a second: every row's 24-hour bars made a new time format for each bar. Now the bars' times are worked out once, each row is only rebuilt when its device changes, and the search waits for a pause in typing. A keystroke now takes a few milliseconds, and redrawing all 150 rows about 65 ms.
+
+- **The Starlink tab's obstruction map says what went wrong** ([#18](https://github.com/shoey79/rollcall/issues/18), thanks to [tomvining](https://github.com/tomvining) for the report). When reading the map failed in an unexpected way, the tab showed the browser's *JSON.parse: unexpected character* instead of a reason. The map's errors now always come back as words (*starlink.com answered HTTP 403 for the dish's obstruction map*, say), a garbled answer from the dish or starlink.com counts as an error rather than a crash, and anything else unexpected goes in the add-on's log with the details. Through a Starlink account, the log also gets what starlink.com answered at each step (status codes and cookie names only, never values), as the status check already did.
+
 ## 1.97.2 - 2026-11-23
 
 - **Turning off plain HTTP for agents waits until it's safe** ([#17](https://github.com/shoey79/rollcall/issues/17), thanks to [tomvining](https://github.com/tomvining) for the report). The Overview's *Turn off plain HTTP* reminder went by the address each agent said it reported to, and only held back for agents that said plain HTTP. One that reached Rollcall through a reverse proxy (an `https://` address of its own that forwards to plain HTTP), or hadn't said, counted as ready, and stopped reporting once plain HTTP was off. Rollcall now notes which port each report actually arrives on:
