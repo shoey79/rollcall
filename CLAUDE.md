@@ -93,4 +93,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Plain HTTP off for agents waits until it's safe (#17): agents judged by the port reports arrive on; reminder,
+  Manage → Agents lists and turn-off warning use it; Overview warns if agents stop after it's off.
