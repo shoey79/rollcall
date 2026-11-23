@@ -126,4 +126,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Defender definitions show the date updated and age from now (Windows agent 1.0.57 sends the date), not "today".
