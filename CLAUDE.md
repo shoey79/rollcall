@@ -42,6 +42,30 @@ together). Remove each once it's released.
   already on disk isn't loaded when the download fails (it tries the download first). Docs: what needs the
   internet, and installing the add-on without it (base image and Alpine packages from a local mirror).
 
+- Cisco and Juniper hardware (owner asked 23 Nov). Today any switch or router gets Rollcall's generic SNMP (ports,
+  traffic, PoE) and discovery recognises Catalyst/IOS; nothing vendor-specific. Add, by SNMP object ID: Cisco
+  (CISCO-PROCESS-MIB CPU, CISCO-MEMORY-POOL / ENHANCED-MEMPOOL, CISCO-ENVMON fans/PSUs/temperatures, ENTITY-SENSOR,
+  stack members and ring, config changed since saved (CISCO-CONFIG-MAN), ASA failover state) and Juniper (JUNIPER-MIB
+  jnxOperatingTable CPU/memory/temperature per component, jnxRedundancy, alarms jnxYellow/RedAlarmState, chassis
+  FRUs), with readings as chips; optional BGP/OSPF neighbour state (BGP4-MIB, OSPF-MIB) for both. Syslog: hints for
+  common %LINK/%LINEPROTO/%SYS messages. Can't test on real kit here: build from MIBs with an SNMP stand-in, then ask
+  a user for snmpwalk output (names replaced).
+
+- VMware: ESXi, vCenter, Aria (owner asked 23 Nov). Today only HTTPS reachability presets. Add read-only API checks
+  with a read-only account (stored like other secrets): ESXi host (hardware health sensors, datastores free space,
+  VMs on/off, host alarms, maintenance mode, certificate expiry, uptime, version) and vCenter (REST /api: appliance
+  health, services, backup job status, alarms triggered, hosts connected/maintenance, clusters HA/DRS, datastores,
+  vSAN health if present, certificate expiry, version/updates). Aria Operations / Automation / Operations for Logs:
+  their health/status endpoints. Tabs like iLO; readings as chips. Build against stand-ins (vcsim-style fake), and
+  a read-only test script for a user before release.
+
+- Proxmox with an agent (owner asked 23 Nov). Today the preset only checks the web UI (8006/8007). With the Linux
+  agent on a Proxmox host, add a "Proxmox VE" role: cluster quorum and nodes (pvecm), VMs and containers with state
+  (qm/pct list, or pvesh), storage free (pvesm status), ZFS pool health, backup (vzdump) job results from the task
+  log (failed backup red, like Veeam: same Backups check and tab), replication jobs, HA resources, subscription and
+  pending updates (apt), Ceph health if present. Proxmox Backup Server: datastores, last verify/prune/GC, sync jobs.
+  Read only (pvesh get, not set).
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
