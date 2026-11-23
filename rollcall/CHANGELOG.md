@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.98.1 - 2026-11-23
+
+- **Routers without TLS support keep plain HTTP for agents** ([#17](https://github.com/shoey79/rollcall/issues/17), thanks to [tomvining](https://github.com/tomvining) for finding it). Most OpenWrt routers have `uclient-fetch` but not its TLS library, so they can't report over HTTPS at all, and stopped reporting when plain HTTP was turned off. Router agent 1.0.4 only tries HTTPS when the router can actually do it, and tells Rollcall when it can't. **Manage → Agents** then lists those routers as unable to use HTTPS (with what to install, if there's room), the Overview doesn't suggest turning plain HTTP off, and turning it off asks first. Routers on older agents are already caught, since 1.97.2 goes by the port their reports arrive on. The router agent doesn't update itself: download it again to get 1.0.4.
+
 ## 1.98.0 - 2026-11-23
 
 - **Fire TV and Android TV.** A new **Fire TV / Android TV** preset watches a Fire TV stick or Android TV box over network ADB, with nothing installed on it. Rollcall connects with a key of its own (the TV asks *Allow USB debugging?* once) and only runs commands that read: it never presses keys, installs anything or changes a setting.
