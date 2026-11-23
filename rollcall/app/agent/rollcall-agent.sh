@@ -44,7 +44,9 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # which many routers don't have room for. Without either, this agent stays on plain HTTP and tells Rollcall so.
 tls_ok() {
     if have curl; then curl --version 2>/dev/null | head -1 | grep -qiE 'ssl|tls' && return 0; fi
-    have uclient-fetch && ls /lib/libustream-ssl*.so* /usr/lib/libustream-ssl*.so* >/dev/null 2>&1
+    have uclient-fetch || return 1
+    for f in /lib/libustream-ssl*.so* /usr/lib/libustream-ssl*.so*; do [ -e "$f" ] && return 0; done   # each on its own
+    return 1
 }
 
 # A JSON string: backslashes, quotes and control characters escaped, at most $2 characters.
