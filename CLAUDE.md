@@ -85,6 +85,17 @@ together). Remove each once it's released.
   install/uninstall commands, docs and the Agents page use the new names. The add-on's own slug (ping_monitor)
   stays: changing it would make Home Assistant see a different add-on.
 
+- pfSense / OPNsense / FreeBSD agent (owner asked 23 Nov; he has pfSense, so test on it). The Linux agent (systemd,
+  /proc, apt) and router agent (OpenWrt ubus) don't run on FreeBSD; today pfSense only gets ping, HTTPS, generic SNMP
+  (its bsnmpd) and syslog. Add a small sh agent for FreeBSD like the router one (fetch for HTTPS; token in the
+  report): CPU, memory, disks, ZFS pool health (zpool status), temperatures (sysctl dev.cpu.N.temperature), uptime;
+  pfSense: gateways up/down with loss and latency (dpinger status), CARP master/backup, IPsec (swanctl --list-sas) and
+  OpenVPN tunnels, pf state table use (pfctl -si), pfSense version and available updates (pfSense-upgrade -c, pkg
+  version), interface errors. OPNsense: the same base, plus its API (read-only key) as an agentless option. Read
+  only. Must survive pfSense upgrades (install under /usr/local, cron via the cron package or /etc/crontab note).
+  Give the owner a read-only test script for his pfSense first (output with names/addresses blanked), as for
+  Starlink and Fire TV.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
