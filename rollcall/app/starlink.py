@@ -252,7 +252,7 @@ def parse_map(buf: bytes) -> dict:
         m = _sub(resp, 2008)
         rows, cols = _int(m, 1) or 0, _int(m, 2) or 0
         raw = b"".join(v for v in m.get(3, []) if isinstance(v, (bytes, bytearray)))  # packed floats (or one each)
-    except ValueError as err:
+    except (ValueError, TypeError, KeyError, IndexError) as err:
         raise StarlinkError(f"couldn't read the dish's obstruction map ({err})") from None
     n = len(raw) // 4
     if not rows or not cols or rows * cols != n or rows > 1000 or cols > 1000:

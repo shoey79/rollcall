@@ -347,6 +347,14 @@ def test_end_to_end_local_and_account(tmp_path, monkeypatch, dish):
         everything = json.dumps(addon.api("/api/status"))
         assert "sso-made-up" not in everything and "xsrf" not in everything     # the cookie is never shown again
 
+        # Issue #18: the Starlink tab's map through the account, and its errors always come back as JSON
+        m = addon.api(f"/api/hosts/{h['key']}/starlink/map")
+        assert m["rows"] == 123 and m["summary"]["blocked_pct"] is not None
+        com.map = None
+        st, body = call(addon.ui + f"/api/hosts/{h['key']}/starlink/map?fresh=1", headers=UI)
+        assert st == 502 and json.loads(body)["error"], body[:300]
+        com.map = fk.sky()
+
         # Editing without pasting it again keeps the cookie; the renewed part was kept too
         addon.api(f"/api/hosts/{h['key']}", {"name": "Remote dish", "host": "127.0.0.1", "checks": ["starlink"],
                                              "starlink_source": "account", "starlink_dish": TARGET,
@@ -361,3 +369,10 @@ def test_end_to_end_local_and_account(tmp_path, monkeypatch, dish):
         assert s["status"] == "amber" and "sign-in expired" in s["detail"]
     finally:
         addon.stop()
+
+
+def test_a_garbled_map_is_an_error_not_a_crash():
+    """Issue #18: anything unexpected in the map's answer is a StarlinkError (shown in the tab), never a crash."""
+    for junk in (b"<html>", b"\x0a\x05hello", fk.response_bytes(None, obstruction_map=None) + b"\xff\xff\xff"):
+        with pytest.raises(sl.StarlinkError):
+            sl.parse_map(junk)

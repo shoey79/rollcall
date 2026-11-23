@@ -3106,6 +3106,13 @@ class Monitor:
             try:
                 async with ClientSession() as session:
                     m = await acct.obstruction_map(session, h.sl_dish)
+            except sllib.StarlinkError as err:
+                # What starlink.com answered, step by step: status codes and cookie names only, never values
+                log.warning("Starlink account for %s, obstruction map: %s [%s]", h.name, err, "; ".join(acct.trace[-12:]))
+                raise
+            except Exception as err:  # noqa: BLE001
+                log.exception("Starlink account for %s: reading the obstruction map failed [%s]", h.name, "; ".join(acct.trace[-12:]))
+                raise sllib.StarlinkError(f"something went wrong reading it ({type(err).__name__}); the add-on's log has the details") from None
             finally:
                 if acct.changed and acct.cookie != h.sl_cookie:
                     h.sl_cookie = acct.cookie
@@ -6865,6 +6872,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             m = await monitor.starlink_map(h, fresh=req.query.get("fresh") == "1")
         except sllib.StarlinkError as err:
             return web.json_response({"error": str(err)}, status=502)
+        except Exception as err:  # noqa: BLE001 - always answer the tab in JSON, with the details in the log
+            log.exception("Reading the Starlink obstruction map for %s failed", h.name)
+            return web.json_response({"error": f"something went wrong reading it ({type(err).__name__}); the add-on's log has the details"}, status=500)
         return web.json_response(m, headers={"Cache-Control": "no-store"})
 
     async def host_readings(req):

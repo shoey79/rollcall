@@ -3946,8 +3946,10 @@ async function slMapLoad(key, fresh) {
   if (el && fresh) el.innerHTML = slMapHtml(key);
   try {
     const r = await fetch(`api/hosts/${encodeURIComponent(key)}/starlink/map${fresh ? "?fresh=1" : ""}`, {cache: "no-store"});
-    const j = await r.json();
-    slMaps[key] = r.ok ? {map: j, at: Date.now()} : {...slMaps[key], error: j.error || "HTTP " + r.status, at: Date.now()};
+    // Not JSON (e.g. a proxy's error page): say what came back rather than the browser's JSON error
+    const j = await r.json().catch(() => null);
+    slMaps[key] = r.ok && j ? {map: j, at: Date.now()} : {...slMaps[key], at: Date.now(),
+      error: (j && j.error) || `Rollcall answered HTTP ${r.status} without details (the add-on's log may say more)`};
   } catch (e) { slMaps[key] = {...slMaps[key], error: e.message, at: Date.now()}; }
   slMaps[key].loading = false;
   if (detDlg.open && detMode === "starlink" && detKey === key && document.getElementById("slMap")) {
