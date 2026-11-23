@@ -66,6 +66,15 @@ together). Remove each once it's released.
   pending updates (apt), Ceph health if present. Proxmox Backup Server: datastores, last verify/prune/GC, sync jobs.
   Read only (pvesh get, not set).
 
+- System file check on Windows agents (owner asked 23 Nov). An option (off by default; per device or for all
+  Windows agents) to run `sfc /verifyonly`: read only, never repairs. It takes 10-30 minutes of CPU and disk, so it
+  runs in the background, not in the agent's run: weekly at a chosen time, plus a "Run now" on the device. Result
+  read from CBS.log ([SR] lines; sfc's own output is unreliable UTF-16): no violations, violations found (with the
+  files named), or couldn't run (another servicing operation in progress, pending reboot). Optionally DISM
+  /Online /Cleanup-Image /ScanHealth (also read only) for the component store. A "System files" check: amber for
+  violations, with a hint (sfc /scannow, DISM /RestoreHealth first); shown on the device's Security or Overview tab
+  with when it last ran.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
