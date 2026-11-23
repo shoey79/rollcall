@@ -1469,6 +1469,41 @@ def backup_forgotten(j: dict, forgot: dict) -> bool:
     return bool(f) and (_ts(j.get("finished")) or 0) <= (_ts(f.get("finished")) or 0)
 
 
+POLICY_TYPE = re.compile(r"\b(agent|backup) policy\b", re.I)
+
+
+def is_policy(j: dict) -> bool:
+    """A Veeam agent policy (agents managed by Backup & Replication): its own session only runs when the policy's
+    settings are pushed to the computers, so it says nothing about their backups."""
+    return bool(POLICY_TYPE.search(str(j.get("type") or ""))) and "\\" not in str(j.get("name") or "")
+
+
+def policy_computers(jobs: list, others: list) -> list:
+    """A backup server's jobs, with each agent policy's computers filled in from Rollcall devices' own agents
+    when the server didn't list them itself. others: [(device name, that device's jobs)]. A device's agent names
+    a policy's job "<policy> - <computer>". Each becomes its own job, "<policy>\\<computer>", like a copy job's
+    sources, marked with the device it came from."""
+    jobs = [j for j in jobs if not j.get("from_device")]  # worked out afresh each time
+    out = list(jobs)
+    for p in jobs:
+        if not is_policy(p):
+            continue
+        name = str(p.get("name") or "")
+        if not name or any(str(c.get("name") or "").lower().startswith(name.lower() + "\\") for c in jobs):
+            continue  # the server listed its computers itself
+        pre = name.lower() + " - "
+        for dev, theirs in others:
+            for j in theirs or []:
+                jn = str(j.get("name") or "")
+                if j.get("source") != "Veeam Agent" or not jn.lower().startswith(pre):
+                    continue
+                comp = jn[len(pre):].strip() or dev
+                out.append({k: j.get(k) for k in ("result", "finished", "last_success", "runs", "detail", "retry", "issue", "session")}
+                           | {"source": "Veeam Agent", "id": f"{p.get('id') or name}\\{comp}", "name": f"{name}\\{comp}",
+                              "type": "Agent backup", "from_device": dev})
+    return out
+
+
 def backup_jobs_view(jobs: list, forgot: dict | None = None) -> list:
     """Veeam jobs as the checks should judge them.
 
@@ -1491,9 +1526,12 @@ def backup_jobs_view(jobs: list, forgot: dict | None = None) -> list:
         if not name or "\\" in name:
             continue
         kids = [c for c in out if str(c.get("name") or "").lower().startswith(name.lower() + "\\")]
+        if is_policy(j):
+            j["policy"] = len(kids)  # 0: its computers' backups aren't visible here (backup_job_state)
         if kids:
             # Its copies are each checked for being overdue; the copy job itself only logs now and
             # then, so judge it by them: last success is the latest successful copy, and no overdue of its own.
+            # An agent policy the same: by its computers' backups, not its own settings sessions.
             j["copies"] = len(kids)
             ok = [c.get("last_success") for c in kids if _ts(c.get("last_success"))]
             best = max(ok + [j.get("last_success")] if _ts(j.get("last_success")) else ok, key=_ts, default=None)
@@ -1522,6 +1560,8 @@ def backup_job_state(j: dict, now: float) -> tuple[str, str]:
         nxt = _ts(j.get("next_run"))
         if nxt and now > nxt + 2 * 3600 and res not in ("running", "queued"):
             return WARN, "missed its scheduled run"
+    elif j.get("policy") is not None:
+        pass  # an agent policy: its own sessions only push settings; its computers are judged one by one
     elif not j.get("copies"):  # a copy job with per-source copies is judged by them (backup_jobs_view)
         last = _ts(j.get("last_success")) or _ts(j.get("finished"))
         runs = sorted(t for t in (_ts(x) for x in j.get("runs") or []) if t)
