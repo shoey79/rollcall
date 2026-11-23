@@ -452,6 +452,7 @@ In **Edit**, tick **Add readings as chips**: it lists what this device's integra
 | Jellyfin, Plex | streams, transcoding, users watching, failed tasks (Jellyfin), update available |
 | iLO | power (W), each temperature, each fan's speed |
 | UPS (SNMP) | battery charge, runtime, load, battery temperature, input voltage, on battery |
+| Fire TV | CPU, memory free, storage free, Wi-Fi signal and link speed, uptime, temperature, disabled apps, apps installed, sideloaded apps and how many aren't running, screen, app in front, Fire OS version, security patch age |
 | Linked Home Assistant devices | their sensors, added as [Home Assistant sensor](#home-assistant-sensors) checks |
 
 | Check | Meaning |
@@ -623,6 +624,23 @@ The `plex` preset only checks that Plex's `/identity` page answers. For more, ti
   - **Busy with:** what Plex is doing in the background, such as a library scan, and how far it's got;
   - **Libraries:** each one's size (films, series and their episodes, artists...).
 - **The token** is stored with the device in `hosts.json`, never shown on the dashboard again, and **only ever sent to that address**, in Plex's `X-Plex-Token` header (not the address, so it doesn't end up in logs). Redirects aren't followed. Moving the address to another machine needs it entering again; switching to https, changing the port, or using the server's name instead of its IP keeps it.
+
+### Fire TV and Android TV
+
+Tick **Fire TV / Android TV** (`firetv`, under Media) to watch a Fire TV stick or an Android TV box. Nothing is installed on it: Rollcall talks to it over **network ADB** (Android's debugging connection, port 5555) with a key of its own, and runs a fixed set of commands that only read. It never presses keys, installs or removes anything, or changes a setting.
+
+**Setting it up:** on the stick, turn on **Settings → My Fire TV → Developer options → ADB debugging** (on Android TV, Developer options too). The first time Rollcall connects, the TV shows **Allow USB debugging?** for Rollcall's key: tick **Always allow from this computer** and choose **Allow**. Until then the check is amber and says so; Rollcall waits about 45 seconds for Allow at each check. The Fire TV tab shows the key's fingerprint as the TV's prompt shows it. Another port: use the check `firetv:5556`.
+
+**What it shows** (the **Fire TV** tab, and tiles on the Overview):
+- Model, Fire OS version (e.g. 6.7.1.1) and Android version, build and security patch; how long it's been up and how many times it has started.
+- CPU use over 2 seconds (Fire OS's load average counts waiting kernel tasks, so it reads 5 or 6 on an idle 4-core stick and isn't used), memory and storage free, Wi-Fi signal, band and link speed, and temperature where the TV lets ADB read it (Fire TV sticks don't: it says so).
+- The screen (on, standby or screensaver) and the app in front.
+- The apps you've installed, with versions and where they came from (Appstore, Google Play or **sideloaded**). Each sideloaded app shows whether it's running and how many services it has, e.g. a custom launcher's Home-button helper.
+- How many apps are **disabled**: if that drops, an update has turned debloated apps back on.
+
+**Amber, never an alert:** storage below 10% or 500 MB free, CPU at 90% or more in 3 checks in a row (a video makes it jump, so one busy check means nothing), disabled apps turned back on, a sideloaded app that was running having stopped, and a Wi-Fi signal below −80 dBm. **Red:** the stick doesn't answer on its ADB port. Every value can also be its own chip with a limit of your choosing ([Readings as chips](#readings-as-chips)).
+
+**Security:** network ADB gives **full control** of the stick to anything on the network that the TV has allowed, and anything at all can ask (the TV then shows the prompt). Keep sticks on a network of their own if you can, turn ADB debugging off on sticks you don't monitor, and only ever allow keys you recognise. Rollcall's key is kept in its data folder (`firetv/adbkey`); a fresh install makes a new one, and the TV asks again.
 
 ### Starlink
 
@@ -839,9 +857,17 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
   - A copy job like that is also judged by its copies for being overdue: its **Last success** is the latest successful copy, and each copy has its own overdue check, so the copy job's own occasional entries don't make it look overdue.
   - Rollcall learns how often each job runs. A job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or silently stopped.
   - Jobs with no run for 60 days are dropped.
-- **Veeam Agent for Microsoft Windows** on the device itself: each session's result, from the *Veeam Agent* event log. It works whether the agent is standalone or managed by a backup server, through an agent backup job or a backup policy. A **backup policy** (managed by the agent) writes nothing to the backup server's log, so put a Rollcall agent on the devices it protects to see their results. A failure Veeam Agent will retry is amber; one it won't is red. Overdue runs are spotted the same way as above.
+- **Agent policies** (Veeam Agents managed by the backup server, *Agent Policy* jobs): the policy's own run only sends its settings to the computers, so on its own it would look overdue while they back up every night. Each computer's backups are listed under the policy as `<policy>\<computer>`, like a copy job's sources, each judged and checked for being overdue on its own, and the policy itself isn't judged by its age. On the backup server the agent (Windows agent 1.0.56+) reads each computer's sessions with Veeam's PowerShell, once an hour (in PowerShell 7 for Backup & Replication 13), or, if there are none, when each computer's latest restore point was made. When the server can't list them, the computers that have their own Rollcall agent fill them in, marked *reported by PC01's own agent*. Reading them through Veeam's PowerShell is built from Veeam's documentation and checked with a stand-in; if it lists nothing on your server, the computers' own agents still fill the policy in.
+- **Veeam Agent for Microsoft Windows** on the device itself: each session's result, from the *Veeam Agent* event log. It works whether the agent is standalone or managed by a backup server, through an agent backup job or a backup policy. A failure Veeam Agent will retry is amber; one it won't is red. Overdue runs are spotted the same way as above.
 - **Backup for Microsoft 365:** each job's last status, from its PowerShell module, every 30 minutes (loading the module is slow). Failed is red; Warning, Stopped or Disconnected is amber; an enabled job more than 2 hours past its next scheduled run is amber ("missed"). Disabled jobs are listed but not checked.
 - **Ignore** on a job in the Backups tab (`backup:<job name>`) leaves it out, e.g. a weekly test job.
+
+**Other backup products** (Windows agent 1.0.56+) go in the same **Backups** check and tab, with the same red, amber, overdue and **Why?**:
+
+- **Veritas NetBackup**, on the primary (master) server: the job list from `bpdbjobs -report -all_columns`. Each policy and client is a job (`Servers / srv01.example.local`), from its finished backups: status 0 is a success, status 1 (partly successful) amber, anything else red, with the status code and what it means (e.g. *status 58: can't connect to client*). Catalog backups are listed too. NetBackup keeps its job list for a few days; the agent keeps each job's history itself, so one that stops running is spotted as overdue.
+- **HPE / OpenText Data Protector**, on the Cell Manager: the last week's sessions from `omnirpt -report list_sessions -tab`. Each backup specification is a job: *Completed* is a success, *Completed/Errors* and *Completed/Failures* amber (with the error and warning counts and how many disk agents failed), *Failed* and *Aborted* red.
+- Both only list jobs; nothing is changed. Common NetBackup status codes and Data Protector's partial failures get a 💡 hint.
+- **Not tested on real installs yet**: neither product is available to test with, so both are built from the vendors' documentation and checked against sample output in that format. If you use one, a sample of the command's output (with names replaced) in a GitHub issue would let it be confirmed.
 
 **Alerted as they happen** (a notification for each):
 
