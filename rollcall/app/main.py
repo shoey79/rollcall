@@ -64,6 +64,7 @@ import iprange
 import jellyfin as jflib
 import plex as pxlib
 import starlink as sllib
+import firetv as ftlib
 import dbhealth as dblib
 import hints as hintlib
 import readings as readlib
@@ -125,6 +126,7 @@ VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json"))
 CLAUDE_HINTS_PATH = Path(os.environ.get("PM_CLAUDE_HINTS", str(DB_PATH.parent / "claude_hints.json")))  # hints from Claude: cache and today's count
 DB_HEALTH_PATH = Path(os.environ.get("PM_DB_HEALTH", str(DB_PATH.parent / "db_health.json")))  # the last database check
 MESSAGES_PATH = Path(os.environ.get("PM_MESSAGES", str(DB_PATH.parent / "messages.json")))  # messages to screens
+FIRETV_KEY = ftlib.Key(Path(os.environ.get("PM_FIRETV_KEY", str(DB_PATH.parent / "firetv" / "adbkey"))))  # Rollcall's ADB key
 AGENT_TLS = agenttls.AgentTLS(Path(os.environ.get("PM_AGENT_TLS", str(DB_PATH.parent / "agent_tls"))))
 AGENT_SETTINGS = Path(os.environ.get("PM_AGENT_SETTINGS", str(DB_PATH.parent / "agent_settings.json")))
 # Rollcall's own key for signing agent updates and the addresses agents report to (private: never leaves it)
@@ -354,6 +356,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("jellyfin", "Jellyfin", _MEDIA, [("Jellyfin", "http:8096/health")]),
     ("jellyfin-api", "Jellyfin health (API key)", _MEDIA, [("Jellyfin", "jellyfin:device")]),
     ("plex-api", "Plex (token)", _MEDIA, [("Plex", "plex:device")]),
+    ("firetv", "Fire TV / Android TV", _MEDIA, [("Fire TV", "firetv:device")]),
     ("emby", "Emby", _MEDIA, [("Emby", "http:8096/emby/System/Info/Public")]),
     ("immich", "Immich", _MEDIA, [("Immich", "http:2283/api/server/ping")]),
     ("audiobookshelf", "Audiobookshelf", _MEDIA, [("Audiobookshelf", "http:13378/")]),
@@ -394,6 +397,7 @@ PRESET_NOTES = {
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
     "jellyfin-api": "Version, pending restart, updates, failed scheduled tasks and active streams (needs a Jellyfin API key)",
     "plex-api": "Version, updates and what's playing, by whom (needs a Plex token)",
+    "firetv": "Fire TV stick or Android TV, over network ADB: Fire OS version, CPU, memory, storage, Wi-Fi, apps (read only)",
     "starlink": "Starlink dish: online, outages, obstructions, latency, drops, throughput and the dish's own alerts",
     "printer": "Network printer (raw printing on 9100)",
     "snmp": "Switch ports and PoE, NAS disks and RAID, UPS battery and power, printer supplies, Sophos firewall VPNs",
@@ -424,6 +428,7 @@ ALIASES = {
     "jellyseerr": "overseerr", "forgejo": "gitea", "pi-hole": "pihole",
     "sip": "voip", "ata": "voip", "pbx": "voip", "phone": "voip", "asterisk": "voip", "freepbx": "voip", "3cx": "voip",
     "spa112": "ata2", "spa122": "ata2", "dishy": "starlink", "satellite": "starlink",
+    "fire-tv": "firetv", "firestick": "firetv", "androidtv": "firetv", "android-tv": "firetv", "adb": "firetv",
 }
 
 
@@ -445,6 +450,8 @@ def preset_summary(name: str) -> str:
             return "what's playing, with a Plex token"
         if spec == "starlink:device":
             return "status, outages and alerts"
+        if spec == "firetv:device":
+            return "over network ADB, read only"
         if kind == "tcp":
             return f"TCP {rest}"
         if kind == "cert":
@@ -588,6 +595,11 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "Plex", "kind": "plex", "port": None, "url": None, "desc": "plex api"}]
     if low == "starlink:device":
         return [{"label": label or "Starlink", "kind": "starlink", "port": None, "url": None, "desc": "starlink"}]
+    if m := re.match(r"^firetv:(device|\d{1,5})$", low):  # Fire TV over network ADB, port 5555 unless given
+        port = ftlib.DEFAULT_PORT if m.group(1) == "device" else int(m.group(1))
+        if not 0 < port < 65536:
+            return None
+        return [{"label": label or "Fire TV", "kind": "firetv", "port": port, "url": None, "desc": "firetv"}]
     if m := _HA.match(entry):
         entity, op, value = m.group(1).lower(), m.group(2), (m.group(3) or "").strip()
         if op in (">", ">=", "<", "<="):
@@ -1744,6 +1756,8 @@ class Host:
     px_url: str = ""                   # Plex's address ("" = http://<host>:32400)
     px_key: str = ""                   # Plex token: only ever sent to px_url, never shown again
     px_data: dict | None = None        # its latest reading
+    ft_data: dict | None = None        # Fire TV: its latest reading (firetv.py)
+    ft_mem: dict = field(default_factory=dict)  # what the next check compares with (recent CPU, disabled apps...)
     px_base: str = ""                  # the address that last answered (https when Plex drops plain HTTP)
     sl_source: str = "local"           # Starlink: read the dish itself ("local") or through the account ("account")
     sl_addr: str = ""                  # the dish's local API ("" = 192.168.100.1:9200)
@@ -2741,6 +2755,8 @@ class Monitor:
                 return await self.plex_check(h)
             if s.kind == "starlink":
                 return await self.starlink_check(h)
+            if s.kind == "firetv":
+                return await self.firetv_check(h, s)
             if s.kind == "reading":  # from the source's latest reading: nothing extra is asked of the device
                 src, _, rid = (s.entity or "").partition(".")
                 ok, txt = readlib.judge(readlib.lookup(h, src, rid), s.op, s.value)
@@ -3093,6 +3109,19 @@ class Monitor:
         d["read_at"] = int(time.time())
         h.sl_data = d
         return sllib.evaluate(d)
+
+    async def firetv_check(self, h: Host, s) -> tuple:
+        """A Fire TV / Android TV over network ADB (firetv.py): read only, with Rollcall's own key."""
+        try:
+            d = await ftlib.read(h.ip or h.host, s.port or ftlib.DEFAULT_PORT, FIRETV_KEY, timeout=max(self.svc_timeout, 15),
+                                 auth_wait=float(os.environ.get("PM_FIRETV_AUTH_WAIT", "45")))  # (shorter only in tests)
+        except ftlib.FireTVError as err:
+            h.ft_data = None
+            return (False, None, str(err), "warn") if err.level else (False, None, str(err))
+        d["read_at"] = int(time.time())
+        ok, lat, detail, level, h.ft_mem = ftlib.evaluate(d, h.ft_mem)
+        h.ft_data = d
+        return (ok, lat, detail, level) if level else (ok, lat, detail)
 
     async def starlink_map(self, h: Host, fresh: bool = False) -> dict:
         """The dish's obstruction map, read at most every few minutes (it's a bigger answer than the status, and
@@ -4292,6 +4321,7 @@ class Monitor:
     CHECK_WHAT = {
         "starlink": "a Starlink satellite dish's status (outages, obstructions, alerts), read from the dish or the starlink.com account",
         "jellyfin": "a Jellyfin media server's health, tasks and streams", "plex": "a Plex media server's status and streams",
+        "firetv": "a Fire TV stick or Android TV, read over network ADB (storage, CPU, Wi-Fi, apps, disabled apps)",
         "ilo": "an HPE server's iLO health (fans, temperatures, power supplies, storage)",
         "hadev": "a device's readings from its Home Assistant integration", "ha": "a Home Assistant sensor",
         "snmp": "SNMP readings from the device (switch ports, UPS, firewall)", "syslog": "syslog messages the device sends",
@@ -4938,6 +4968,12 @@ class Monitor:
             settings["cpu_recent"] = self.metrics.recent(h.key, "cpu", received - n * 330, received, n)
         except sqlite3.Error:
             settings["cpu_recent"] = []
+        bk = (report.get("checks") or {}).get("backups")
+        if isinstance(bk, dict) and any(agentlib.is_policy(j) for j in bk.get("jobs") or []):
+            # A backup server's agent policies: their computers' backups, from those computers' own agents
+            others = [(o.name, (((o.agent_report or {}).get("checks") or {}).get("backups") or {}).get("jobs") or [])
+                      for o in self.hosts.values() if o is not h and o.agent_report]
+            bk["jobs"] = agentlib.policy_computers(bk.get("jobs") or [], others)
         result = evaluate(report, self.opts, now=received, settings=settings)
         prev_up = (h.agent_report or {}).get("uptime_s")
         h.agent_report, h.agent_seen = report, received
@@ -5481,6 +5517,7 @@ class Monitor:
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
                 "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
+                "firetv": h.ft_data,
                 "starlink_source": h.sl_source, "starlink_addr": h.sl_addr, "starlink_cookie_set": bool(h.sl_cookie),
                 "starlink_dish": h.sl_dish, "starlink_dish_name": h.sl_dish_name, "starlink": h.sl_data,
                 "snmp_version": h.snmp_version, "icon": h.icon, "model": h.model, "subtitle": h.subtitle, "group": h.group, "check_by": h.check_by, "via_agent": h.via_agent,
@@ -5803,6 +5840,12 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         # Agents report over plain HTTP and Rollcall's own HTTPS isn't on: admins are offered it
         snap["tls_prompt"] = bool(not AGENT_TLS.on and not monitor.opts.get("agent_ssl") and monitor.agents and monitor.agents.agents)
         # Rollcall's own HTTPS is on and every agent has moved to it, but plain HTTP is still open: suggest closing it
+        if any(sv.kind == "firetv" for h in monitor.hosts.values() for sv in h.services):
+            # Rollcall's ADB key as the TV's "Allow USB debugging?" prompt shows it (made the first time it's needed)
+            try:
+                snap["firetv_key"] = await asyncio.to_thread(FIRETV_KEY.fingerprint)
+            except Exception as err:  # noqa: BLE001
+                log.warning("Couldn't read Rollcall's Fire TV key: %s", err)
         rd = monitor.tls_readiness()
         snap["tls_plain_prompt"] = bool(monitor.tls_builtin() and AGENT_TLS.plain_http and rd["ready"])
         # Plain HTTP is off and agents that were reporting haven't since: say who, and offer it back

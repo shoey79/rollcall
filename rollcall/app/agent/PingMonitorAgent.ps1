@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.55'
+$AgentVersion = '1.0.56'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -2018,6 +2018,93 @@ try {
 [ordered]@{ objects = @($objects); log = @($log) }
 '@ }
 
+function Get-VeeamPolicyScript { return @'
+param([string]$Names)
+# Each agent policy's computers and their latest backup: the policy's own sessions (named "<policy>") only send
+# its settings to the computers; each computer's backup is a session named "<policy> - <computer>". Read only.
+Import-Module Veeam.Backup.PowerShell -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking
+$since = (Get-Date).AddDays(-14)
+$all = $null
+$out = @()
+foreach ($n in @($Names -split "`n" | Where-Object { $_ })) {
+    $rows = @{}
+    $sess = @()
+    try { $sess = @(Get-VBRComputerBackupJobSession -Name "$n*" -ErrorAction Stop) } catch {
+        try { if ($null -eq $all) { $all = @(Get-VBRComputerBackupJobSession -ErrorAction Stop) }
+              $sess = @($all | Where-Object { ([string]$_.Name + [string]$_.JobName) -like "*$n*" }) } catch { } }
+    foreach ($x in $sess) {
+        $nm = [string]$(if ($x.Name) { $x.Name } else { $x.JobName })
+        if ($nm -notlike "$n - *") { continue }
+        $comp = $nm.Substring($n.Length + 3).Trim()
+        $end = $x.EndTime
+        if (-not ($end -is [DateTime]) -or $end.Year -lt 2000 -or $end -lt $since) { continue }  # still running, or old
+        $res = switch -regex ([string]$x.Result) { '^Succe' { 'Success' } '^Warn' { 'Warning' } '^Fail' { 'Failed' } default { '' } }
+        if (-not $res) { continue }
+        $t = $end.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $r = $rows[$comp]; if (-not $r) { $r = @{ computer = $comp; result = ''; finished = ''; last_success = ''; runs = @() }; $rows[$comp] = $r }
+        if ($t -gt $r.finished) { $r.finished = $t; $r.result = $res }
+        if ($res -ne 'Failed' -and $t -gt $r.last_success) { $r.last_success = $t }
+        $r.runs = @(@($r.runs) + $t | Sort-Object -Unique | Select-Object -Last 12)
+    }
+    if (-not $rows.Count) {  # no sessions to read: the restore points say when each computer last backed up
+        try {
+            foreach ($b in @(Get-VBRBackup -ErrorAction Stop | Where-Object { [string]$_.JobName -eq $n -or [string]$_.Name -like "$n*" })) {
+                foreach ($rp in @(Get-VBRRestorePoint -Backup $b -ErrorAction Stop)) {
+                    $comp = [string]$rp.Name; $ct = $rp.CreationTime
+                    if (-not $comp -or -not ($ct -is [DateTime])) { continue }
+                    $t = $ct.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    $r = $rows[$comp]; if (-not $r) { $r = @{ computer = $comp; result = 'Success'; finished = ''; last_success = ''; runs = @(); from = 'restore points' }; $rows[$comp] = $r }
+                    if ($t -gt $r.finished) { $r.finished = $t; $r.last_success = $t }
+                    $r.runs = @(@($r.runs) + $t | Sort-Object -Unique | Select-Object -Last 12)
+                }
+            }
+        } catch { }
+    }
+    foreach ($r in $rows.Values) { $out += [ordered]@{ policy = $n; computer = $r.computer; result = $r.result; finished = $r.finished
+        last_success = $r.last_success; runs = @($r.runs); from = $(if ($r.from) { $r.from } else { 'sessions' }) } }
+}
+[ordered]@{ computers = @($out) }
+'@ }
+
+function Invoke-VeeamScript([string]$Script, [string]$Arg) {
+    # One of the read-only scripts above, with Veeam's PowerShell: in this PowerShell, or PowerShell 7 when the
+    # module needs it (Backup & Replication 13). $null if the module isn't there.
+    $mod = Get-Module -ListAvailable -Name 'Veeam.Backup.PowerShell' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $mod) { return $null }
+    $needs = $null; try { $needs = [version]$mod.PowerShellVersion } catch { }
+    if ($needs -and $needs -gt $PSVersionTable.PSVersion) {
+        $pwsh = Find-Pwsh
+        if (-not $pwsh) { throw "Veeam's PowerShell needs PowerShell $needs or later, which isn't installed" }
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Arg))
+        $cmd = "& { $Script } ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64'))) | ConvertTo-Json -Depth 6 -Compress"
+        $txt = Invoke-InPwsh $pwsh $cmd
+        $line = @($txt -split "`r?`n" | Where-Object { $_.Trim().StartsWith('{') }) | Select-Object -Last 1
+        if ($line) { return ($line | ConvertFrom-Json) }
+        return $null
+    }
+    return (& ([scriptblock]::Create($Script)) $Arg)
+}
+
+function Get-VeeamPolicyComputers($State, [string[]]$Policies) {
+    # Agent policies' computers (Get-VeeamPolicyScript), read at most hourly; the last answer in between
+    $Policies = @($Policies | Where-Object { $_ } | Sort-Object -Unique)
+    if (-not $Policies.Count) { return @() }
+    $nowSecs = [int64]([DateTime]::UtcNow - [DateTime]'1970-01-01').TotalSeconds
+    $key = $Policies -join "`n"
+    if ($State.veeam_policy -and $State.veeam_policy_key -eq $key -and ($nowSecs - [int64]$State.veeam_policy_checked) -lt 3600) {
+        try { return @(@(ConvertFrom-Json $State.veeam_policy) | Where-Object { $_ }) } catch { }
+    }
+    $rows = @()
+    try {
+        $r = Invoke-VeeamScript (Get-VeeamPolicyScript) $key
+        if ($r) { $rows = @(@($r.computers) | Where-Object { $_ } | ForEach-Object { [ordered]@{ policy = [string]$_.policy; computer = [string]$_.computer
+            result = [string]$_.result; finished = (ConvertTo-IsoText $_.finished); last_success = (ConvertTo-IsoText $_.last_success)
+            runs = @(@($_.runs) | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }); from = [string]$_.from } }) }
+    } catch { Write-AgentLog "WARN Veeam PowerShell couldn't read the agent policies' computers: $($_.Exception.Message)" }
+    $State.veeam_policy = (ConvertTo-Json @($rows) -Depth 5 -Compress); $State.veeam_policy_key = $key; $State.veeam_policy_checked = $nowSecs
+    return $rows
+}
+
 function Find-Pwsh {
     # PowerShell 7, for modules that need it
     foreach ($c in @((Get-Command pwsh.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source),
@@ -2150,9 +2237,21 @@ function Get-VeeamJobs($State) {
         $j.issue = Get-VeeamRunIssue -Log 'Veeam Backup' -Session $j.session -JobId $k -Since $since -Until $j.finished
     }
     $State.veeam = ($jobs | ConvertTo-Json -Depth 7 -Compress)
-    return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
+    $list = @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
         [ordered]@{ source = 'Backup & Replication'; id = $k; name = $j.name; type = $j.type; result = $j.result; finished = $j.finished
             retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.session; runs = @($j.runs); issue = $j.issue } })
+    # Agent policies: each computer's own backups, listed under the policy as "<policy>\<computer>"
+    $pol = @($list | Where-Object { [string]$_.type -match '(?i)\b(agent|backup) policy\b' })
+    if ($pol.Count) {
+        foreach ($c in @(Get-VeeamPolicyComputers $State @($pol | ForEach-Object { [string]$_.name }))) {
+            $p = $pol | Where-Object { [string]$_.name -eq [string]$c.policy } | Select-Object -First 1
+            $list += [ordered]@{ source = 'Backup & Replication'; id = "$(if ($p) { $p.id } else { $c.policy })\$($c.computer)"
+                name = "$($c.policy)\$($c.computer)"; type = 'Agent backup'; result = $c.result; finished = $c.finished; retry = $false
+                detail = $(if ($c.from -eq 'restore points') { 'from its restore points' } else { '' }); last_success = $c.last_success
+                session = $c.finished; runs = @($c.runs); issue = $null }
+        }
+    }
+    return $list
 }
 
 function Get-VeeamAgentJobs($State) {
@@ -2218,6 +2317,126 @@ function Get-VeeamAgentJobs($State) {
     return @(foreach ($k in $jobs.Keys) { $j = $jobs[$k]
         [ordered]@{ source = 'Veeam Agent'; id = $k; name = $j.name; type = 'Agent backup (this device)'; result = $j.result; finished = $j.finished
             retry = [bool]$j.retry; detail = $j.detail; last_success = $j.last_success; session = $j.finished; runs = @($j.runs); issue = $j.issue } })
+}
+
+# ---- Other backup products ----------------------------------------------------------------------------------------
+# Each is a small definition: how to find its command on this computer, and how to turn the command's output into
+# job results ({ id; name; type; result = Success | Warning | Failed; finished (UTC); detail }). Get-BackupProductJobs
+# keeps each job's history in the state file (as for Veeam), so a job that stops running is spotted too, and feeds
+# the same Backups check and tab. Only read: each command lists jobs and changes nothing.
+function Get-NbuStatusText([int]$Code) {
+    $t = @{ 1 = 'partially successful: some files were not backed up'; 2 = 'none of the requested files were backed up'
+    13 = 'file read failed'; 24 = 'socket write failed'; 25 = 'cannot connect on socket'; 41 = 'network connection timed out'
+    42 = 'network read failed'; 48 = 'client hostname could not be found'; 50 = 'client process aborted'
+    54 = 'timed out connecting to client'; 58 = "can't connect to client"; 59 = 'access to the client was not allowed'
+    71 = 'none of the files in the file list exist'; 84 = 'media write error'; 96 = 'unable to allocate new media for backup'
+    150 = 'termination requested by administrator'; 156 = 'snapshot error encountered'
+    196 = 'client backup was not attempted because the backup window closed'; 800 = 'resource request failed'
+    2074 = 'disk volume is down'; 2106 = 'disk storage server is down' }
+    if ($t.ContainsKey($Code)) { return $t[$Code] }
+    return 'see the NetBackup status code reference'
+}
+
+function ConvertFrom-NbuJobs([string[]]$Lines) {
+    # bpdbjobs -report -all_columns: one job per line, commas between fields ("\," inside one). Fields: jobid, jobtype,
+    # state, status, policy, schedule, client, server, started, elapsed, ended (Unix times), ... Backups (type 0) and
+    # catalog backups (6) that are done (state 3); status 0 is success, 1 partly successful, anything else failed.
+    $out = @()
+    foreach ($ln in $Lines) {
+        $f = @([regex]::Split([string]$ln, '(?<!\\),') | ForEach-Object { $_ -replace '\\,', ',' })
+        if ($f.Count -lt 11 -or $f[0] -notmatch '^\d+$') { continue }
+        if ($f[1] -notin '0', '6' -or $f[2] -ne '3' -or $f[3] -notmatch '^\d+$' -or $f[10] -notmatch '^\d+$' -or [int64]$f[10] -le 0) { continue }
+        $code = [int]$f[3]
+        $res = if ($code -eq 0) { 'Success' } elseif ($code -eq 1) { 'Warning' } else { 'Failed' }
+        $policy = $(if ($f[1] -eq '6') { 'Catalog backup' } else { $f[4] }); $client = $f[6]
+        $why = if ($code -eq 0) { '' } else { "status ${code}: $(Get-NbuStatusText $code)" }
+        $out += [ordered]@{ id = "nbu:$policy|$client"; name = "$policy / $client"; type = "NetBackup $(if ($f[5]) { $f[5] } else { 'backup' })"
+            result = $res; finished = ([DateTime]'1970-01-01Z').AddSeconds([int64]$f[10]).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            detail = $why; job = $f[0] }
+    }
+    return $out
+}
+
+function ConvertFrom-DpSessions([string[]]$Lines) {
+    # omnirpt -report list_sessions -tab: lines starting # are headings (the last one names the columns), the rest
+    # one session each, tabs between. Backup sessions that have finished: Completed is a success, Completed/Errors and
+    # Completed/Failures finished with warnings, Failed and Aborted failed.
+    $head = $null; $out = @()
+    foreach ($ln in $Lines) {
+        if ([string]$ln -match '^#') { if ($ln -match "`t") { $head = @(($ln -replace '^#\s*', '') -split "`t" | ForEach-Object { $_.Trim() }) }; continue }
+        if (-not $head -or [string]$ln -notmatch "`t") { continue }
+        $v = @($ln -split "`t"); $r = @{}
+        for ($i = 0; $i -lt [Math]::Min($head.Count, $v.Count); $i++) { $r[$head[$i]] = ([string]$v[$i]).Trim() }
+        if ($r['Session Type'] -and $r['Session Type'] -ne 'Backup') { continue }
+        $res = switch -regex ([string]$r['Status']) { '^Completed$' { 'Success' } '^Completed/' { 'Warning' } '^(Failed|Aborted)' { 'Failed' } default { '' } }
+        if (-not $res) { continue }  # in progress, queuing, waiting for a mount
+        $end = $null
+        foreach ($k in 'End Time_t', 'Start Time_t') { if ($r[$k] -match '^\d{9,}$') { $end = ([DateTime]'1970-01-01Z').AddSeconds([int64]$r[$k]).ToUniversalTime(); break } }
+        if (-not $end) { foreach ($k in 'End Time', 'Start Time') { $t = [DateTime]::MinValue; if ($r[$k] -and [DateTime]::TryParse($r[$k], [ref]$t)) { $end = $t.ToUniversalTime(); break } } }
+        if (-not $end) { continue }
+        $spec = $(if ($r['Specification']) { $r['Specification'] } else { 'Interactive' })
+        $bits = @()
+        if ($res -ne 'Success') { $bits += ([string]$r['Status']).ToLower() -replace '/', ' with ' }
+        foreach ($k in 'Errors', 'Warnings') { if ($r[$k] -match '^\d+$' -and [int]$r[$k] -gt 0) { $bits += "$($r[$k]) $($k.ToLower().TrimEnd('s'))(s)" } }
+        if ($r['Failed DA'] -match '^\d+$' -and [int]$r['Failed DA'] -gt 0) {
+            $all = [int]$r['Failed DA'] + $(if ($r['Completed DA'] -match '^\d+$') { [int]$r['Completed DA'] } else { 0 })
+            $bits += "$($r['Failed DA']) of $all disk agents failed"
+        }
+        $out += [ordered]@{ id = "dp:$spec"; name = $spec; type = "Data Protector $(if ($r['Mode']) { $r['Mode'] } else { 'backup' })"
+            result = $res; finished = $end.ToString('yyyy-MM-ddTHH:mm:ssZ'); detail = ($bits -join '; '); job = [string]$r['Session ID'] }
+    }
+    return $out
+}
+
+function Get-BackupProducts {
+    return @(
+        @{ name = 'NetBackup'; key = 'nbu'
+           find = { foreach ($c in @("$env:ProgramFiles\Veritas\NetBackup\bin\admincmd\bpdbjobs.exe", (Get-Command bpdbjobs.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source))) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } } }
+           read = { param($exe) ConvertFrom-NbuJobs @(& $exe -report -all_columns 2>$null) } },
+        @{ name = 'Data Protector'; key = 'dp'
+           find = { foreach ($c in @("$env:ProgramFiles\OmniBack\bin\omnirpt.exe", (Get-Command omnirpt.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source))) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } } }
+           read = { param($exe) ConvertFrom-DpSessions @(& $exe -report list_sessions -timeframe 168 168 -tab 2>$null) } }
+    )
+}
+
+function Get-BackupProductJobs($State, $Products = (Get-BackupProducts)) {
+    # Every product found on this computer: its jobs' latest results, with their history kept here. $null if none.
+    $all = @(); $found = $false
+    foreach ($p in $Products) {
+        $exe = & $p.find
+        $key = "bp_$($p.key)"
+        if (-not $exe -and -not $State.$key) { continue }
+        $found = $true
+        $jobs = @{}
+        if ($State.$key) {
+            try { foreach ($q in ($State.$key | ConvertFrom-Json).PSObject.Properties) { $v = $q.Value
+                $jobs[$q.Name] = @{ name = [string]$v.name; type = [string]$v.type; result = [string]$v.result; finished = (ConvertTo-IsoText $v.finished)
+                    detail = [string]$v.detail; last_success = (ConvertTo-IsoText $v.last_success); job = [string]$v.job
+                    runs = @($v.runs | Where-Object { $_ } | ForEach-Object { ConvertTo-IsoText $_ }) } } } catch { }
+        }
+        if ($exe) {
+            $rows = @()
+            try { $rows = @(& $p.read $exe) } catch { Write-AgentLog "WARN $($p.name): couldn't read its jobs: $($_.Exception.Message)" }
+            foreach ($r in @($rows | Sort-Object { $_.finished })) {
+                $j = if ($jobs.ContainsKey($r.id)) { $jobs[$r.id] } else { @{ runs = @(); last_success = '' } }
+                if ($j.finished -and [string]$r.finished -lt [string]$j.finished) { continue }
+                $j.name = $r.name; $j.type = $r.type; $j.result = $r.result; $j.finished = $r.finished; $j.detail = Limit-Text $r.detail 300; $j.job = $r.job
+                if ($r.result -ne 'Failed') { $j.last_success = $r.finished }
+                if (@($j.runs) -notcontains $r.finished) { $j.runs = @(@($j.runs) + $r.finished | Select-Object -Last 12) }
+                $jobs[$r.id] = $j
+            }
+        }
+        $cutoff = (Get-Date).ToUniversalTime().AddDays(-60).ToString('yyyy-MM-ddTHH:mm:ssZ')
+        foreach ($k in @($jobs.Keys)) { if ($jobs[$k].finished -and [string]$jobs[$k].finished -lt $cutoff) { $jobs.Remove($k) } }
+        $State.$key = ($jobs | ConvertTo-Json -Depth 5 -Compress)
+        foreach ($k in $jobs.Keys) { $j = $jobs[$k]
+            $issue = if ($j.result -in 'Warning', 'Failed' -and $j.detail) { [ordered]@{ session = $j.finished; source = $p.name; objects = @()
+                log = @([ordered]@{ status = $j.result; text = $j.detail }) } } else { $null }
+            $all += [ordered]@{ source = $p.name; id = $k; name = $j.name; type = $j.type; result = $j.result; finished = $j.finished
+                retry = $false; detail = $j.detail; last_success = $j.last_success; session = "$($j.job)"; runs = @($j.runs); issue = $issue } }
+    }
+    if (-not $found) { return $null }
+    return $all
 }
 
 function Get-VboJobs($State) {
@@ -2827,7 +3046,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         $vbo = $null
         try { $vbo = Measure-Step 'veeam m365' { Get-VboJobs $State } } catch { Add-CollectorError 'veeam m365' $_ }
         if ($null -ne $vbo) { $bjobs += @($vbo) }
-        if ($null -ne $vbr -or $null -ne $vbo -or $null -ne $vaw) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
+        $other = $null
+        try { $other = Measure-Step 'other backups' { Get-BackupProductJobs $State } } catch { Add-CollectorError 'other backups' $_ }
+        if ($null -ne $other) { $bjobs += @($other) }
+        if ($null -ne $vbr -or $null -ne $vbo -or $null -ne $vaw -or $null -ne $other) { $report.checks.backups = [ordered]@{ jobs = @($bjobs) } }
     } catch { Add-CollectorError 'veeam' $_ }
     try {
         $laps = Measure-Step 'laps' { Get-LapsStatus $State ($discovery.roles -contains 'Domain controller') $(if ($sys) { [bool]$sys.part_of_domain } else { $false }) }

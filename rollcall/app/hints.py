@@ -168,6 +168,27 @@ KNOWN: list[dict] = [
      "means": "The backup couldn't take a shadow copy (VSS) of the volume.",
      "try": "vssadmin list writers shows any writer in a failed state; restarting the service it belongs to usually clears it. "
             "Check there's free space for shadow copies."},
+    # NetBackup status codes (as the agent words them: "status 58: can't connect to client")
+    {"words": [r"status 1: partially successful"], "checks": ["backups"],
+     "means": "NetBackup backed up most of the client but skipped some files, usually ones that were open, locked or "
+              "removed while it ran.",
+     "try": "The job's details in the NetBackup console list the files. Exclude temporary or always-locked files, or use "
+            "snapshots (Windows Open File Backup / VSS) for files that are open."},
+    {"words": [r"status (54|58|59|25|41): "], "checks": ["backups"],
+     "means": "The NetBackup server couldn't reach the client, or the client turned it away.",
+     "try": "Check the client is on and its NetBackup client service is running, that ports 1556 and 13724 are open "
+            "between them, that each can resolve the other's name, and that the server is in the client's server list."},
+    {"words": [r"status (84|96|2074|2106|800): "], "checks": ["backups"],
+     "means": "NetBackup couldn't write the backup: no media or disk was available, or the storage was down.",
+     "try": "Check the storage unit and disk pool are up and have free space, and that tapes are available in the pool."},
+    {"words": [r"status 196: "], "checks": ["backups"],
+     "means": "The backup window closed before the job could start, often because earlier jobs ran long.",
+     "try": "Widen the schedule's window, or spread the clients across more streams or times."},
+    # Data Protector
+    {"words": [r"disk agents? failed", r"completed with (errors|failures)"], "checks": ["backups"],
+     "means": "Data Protector finished the session, but some objects (a disk agent per drive or database) failed or had errors.",
+     "try": "Open the session's messages in the Data Protector GUI (or omnidb -session <ID> -report) to see which "
+            "object failed and why; locked files and unreachable clients are the usual reasons."},
     {"words": [r"not run since", r"missed", r"didn't run"], "checks": ["backups"],
      "means": "The backup job hasn't run when it should have: the server was off, the job is disabled, or its schedule changed.",
      "try": "Check the job's schedule and that the backup service is running."},
