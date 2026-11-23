@@ -95,6 +95,17 @@ together). Remove each once it's released.
   only. Must survive pfSense upgrades (install under /usr/local, cron via the cron package or /etc/crontab note).
   Give the owner a read-only test script for his pfSense first (output with names/addresses blanked), as for
   Starlink and Fire TV.
+  Owner's test (23 Nov, pfSense 2.9.0 on FreeBSD 16, a Hyper-V VM, UFS, one gateway, no CARP/OpenVPN, IPsec
+  mobile clients configured): every read under 1 s except the update check (~7 s: run daily, not every 5 min).
+  CPU from two kern.cp_time reads (user nice sys intr idle); memory from vm.stats page counts x hw.pagesize; no
+  temperature sysctls in a VM (say so); uptime from kern.boottime; gateways from `pfSsh.php playback gatewaystatus`
+  (name, monitor, delay, stddev, loss, status) or the dpinger sockets ("name delay_us stddev_us loss"); pf states
+  from pfctl -si "current entries" against pfctl -sm "states hard limit"; IPsec SAs from swanctl --list-sas (empty
+  when nothing's up; --list-conns has the configured ones); interface errors from netstat -ibn <Link#> rows.
+  Updates: use pfSense-upgrade -c only ("Your system is up to date"); `pkg version -l '<'` lists php etc. as older
+  even when pfSense is current (they come with the next pfSense release), so don't use it. Interface names
+  (WAN/LAN) and whether curl/php are there for posting (FreeBSD fetch can't POST): asked the owner to check.
+  Gateway and tunnel names are user-defined: never put the owner's in tests or docs.
 
 ## Built, waiting for release
 
