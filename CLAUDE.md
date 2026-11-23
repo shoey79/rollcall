@@ -58,6 +58,16 @@ together). Remove each once it's released.
   rebuilding; cache each row's HTML and rebuild only rows whose data changed on a poll; don't recount tabs on a
   keystroke. Measure render time with ~150 test devices before and after (Playwright), and keep the result in a test.
 
+- Veeam agent policies on the server's Backups tab (owner asked 23 Nov). A job of type "Agent Policy" (agents
+  managed by Veeam B&R) shows the policy's own session, which only runs when the policy's configuration is applied,
+  so the row says "no successful run for 198 h" while the agent on the PC backs up nightly (its own Backups tab is
+  right: e.g. a Warning for low repository space). Fix: on the B&R server, read each policy's real per-computer
+  backup sessions / latest restore point (Get-VBRComputerBackupJobSession, Get-VBRBackup restore points, or the
+  agent-backup sessions in the database) and show one sub-row per computer like copy jobs; judge the policy by them,
+  not by the config session. Fallback: when a Rollcall device's own agent reports that policy's backup, fill the
+  server row from that report (match by computer name; say where it came from). Don't count a config-apply session as
+  a backup run.
+
 - Fire TV / Android TV monitoring (owner asked 22 Nov; one stick, network ADB already on). No agent on the stick:
   the add-on connects over network ADB (port 5555, its own RSA key; the TV asks "Allow USB debugging?" once) and runs
   read-only shell commands. A "Fire TV" preset and tab like Starlink: online and ADB still trusted, model, Fire OS
