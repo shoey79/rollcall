@@ -2421,7 +2421,7 @@ function applyStatus(fresh) {
     document.getElementById("tlsPlain").hidden = !(data.tls_plain_prompt && data.can_admin && Date.now() - laterPlain > 7 * 86400000);
     const lost = data.tls_plain_lost || [];
     document.getElementById("tlsLost").hidden = !lost.length;
-    if (lost.length) document.getElementById("tlsLostText").innerHTML = `⚠ Since plain HTTP was turned off on the agent port, <b>${esc(nameList(lost))}</b> ${lost.length === 1 ? "hasn't" : "haven't"} reported. ${lost.length === 1 ? "It" : "They"} may still need plain HTTP (e.g. through a reverse proxy, or an agent too old for HTTPS).`;
+    if (lost.length) document.getElementById("tlsLostText").innerHTML = `⚠ Since plain HTTP was turned off on the agent port, <b>${esc(nameList(lost))}</b> ${lost.length === 1 ? "hasn't" : "haven't"} reported. ${lost.length === 1 ? "It" : "They"} may still need plain HTTP (e.g. through a reverse proxy, a router without TLS support, or an agent too old for HTTPS).`;
     const vo = document.querySelector(".viewonly");
     if (vo) { vo.textContent = data.edit_blocked ? "View only for now" : "View only";
       vo.title = data.edit_blocked ? "Rollcall can't read Home Assistant's user list just now, so it can't tell who's an admin, and changes are off until it can. To make changes meanwhile, add your Home Assistant username to 'editors' in the add-on's Configuration tab." : "Only Home Assistant admins can add, edit, pause or reset"; }
@@ -4955,6 +4955,7 @@ function tlsNotReady(rd) {
   if (!rd) return "";
   const p = [];
   if ((rd.http || []).length) p.push(`Still reaching Rollcall over plain HTTP (directly, or through a reverse proxy that forwards to it): ${nameList(rd.http)}.`);
+  if ((rd.no_tls || []).length) p.push(`Can't use HTTPS at all, so they'd stop reporting: routers without TLS support (install libustream-mbedtls, or curl, if there's room): ${nameList(rd.no_tls)}.`);
   if ((rd.unknown || []).length) p.push(`Not reported since Rollcall started checking which port reports arrive on: ${nameList(rd.unknown)}.`);
   if ((rd.quiet || []).length) p.push(`Not reported for over 2 days, so can't tell: ${nameList(rd.quiet)}.`);
   return p.join("\n");
@@ -4978,7 +4979,7 @@ function tlsHtml(t) {
       ${admin ? `<button type="button" class="primary" data-tls="on">Turn on HTTPS</button>` : `<p class="hint">Only Home Assistant admins can turn it on.</p>`}`;
   else {
     const rd = t.readiness || {};
-    const left = (rd.http || []).concat(rd.unknown || []);
+    const left = (rd.http || []).concat(rd.unknown || [], rd.no_tls || []);
     if (t.port_off) { body = `<p>⚠ <b>HTTPS is on, but its port isn't open</b>: open port ${t.port} in the add-on's <b>Configuration → Network</b>. Until then agents carry on over plain HTTP.</p>`
       + (admin ? `<button type="button" class="danger" data-tls="off">Turn HTTPS off</button>` : ""); return `<h4 class="subh" style="margin-top:14px">HTTPS</h4>${body}`; }
     body = `<p>✓ <b>HTTPS is on</b>, on port ${t.port} with Rollcall's own key (<code>${esc((t.pin || "").slice(0, 12))}…</code>). ${t.agents_https} agent${t.agents_https === 1 ? "" : "s"} use${t.agents_https === 1 ? "s" : ""} it.

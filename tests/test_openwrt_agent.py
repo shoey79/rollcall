@@ -131,7 +131,7 @@ def test_report(openwrt):
     assert p.returncode == 0, p.stderr
     r = json.loads(p.stdout)
     assert "agent_token" not in r                                     # --report never shows the token
-    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.3"
+    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.4" and r["tls_capable"] is False
     assert r["hostname"] == "Lab-Router" and r["os"].startswith("OpenWrt 23.05.5 r24106") and r["os_id"] == "openwrt"
     assert r["hw_model"] == "Test Router Model X" and r["roles"] == ["Router (OpenWrt)"] and r["errors"] == []
     assert isinstance(r["cpu_pct"], float) and r["mem_total_mb"] > 0 and len(r["load"]) == 3 and r["uptime_s"] > 0
@@ -394,5 +394,30 @@ def test_real_openwrt_moves_to_https_when_it_can(tmp_path):
             assert sent == f"https://host.docker.internal:{addon.https_port}", log
         else:
             assert sent == url, log
+    finally:
+        addon.stop()
+
+
+def test_router_without_tls_stays_on_http_and_holds_plain_http_on(openwrt):
+    """Issue #17: most routers have uclient-fetch without its TLS library (and no curl), so they can't use HTTPS at
+    all. Router agent 1.0.4 doesn't try, says so in its report, and Rollcall lists it before plain HTTP can go off."""
+    env, tmp = openwrt                                # BusyBox wget only: no curl, no TLS library
+    addon = _addon(tmp).start()
+    from test_update_signing_e2e import UI, call
+    try:
+        script = tmp / "agent.sh"
+        script.write_text(AGENT.read_text().replace('SERVER="__PM_SERVER__"', f'SERVER="{addon.agent_url}"', 1)
+                          .replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{addon.enrol_key("windows", addon.agent_url)}"', 1))
+        run(env, script=script)
+        addon.approve_all()
+        run(env, script=script)
+        run(env, script=script)                       # has the certificate, but can't use it
+        log = (tmp / "agent.log").read_text()
+        assert "didn't answer" not in log and f"Report sent to {addon.agent_url}" in log, log   # no HTTPS attempt
+        rd = addon.api("/api/agents")["tls"]["readiness"]
+        assert rd["no_tls"] == [addon.agent()["hostname"]] and rd["ready"] is False, rd
+        assert addon.api("/api/status")["tls_plain_prompt"] is False
+        st, body = call(addon.ui + "/api/agents/tls", {"plain_http": False}, UI, "POST")
+        assert st == 409 and json.loads(body)["readiness"]["no_tls"], body[:300]
     finally:
         addon.stop()

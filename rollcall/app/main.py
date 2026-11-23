@@ -3424,7 +3424,7 @@ class Monitor:
         on, so one behind a reverse proxy that forwards to plain HTTP counts as plain HTTP), for the prompt to turn
         plain HTTP off and the warning before it's turned off. Active: reported in the last TLS_ACTIVE_DAYS days."""
         now = now or time.time()
-        out = {"https": [], "http": [], "unknown": [], "quiet": [], "lost": []}
+        out = {"https": [], "http": [], "unknown": [], "quiet": [], "lost": [], "no_tls": []}
         off_at = float(AGENT_TLS.state.get("plain_off_at") or 0)
         for a in (self.agents.agents.values() if self.agents else []):
             name = a.get("hostname") or "?"
@@ -3436,10 +3436,13 @@ class Monitor:
                 out["quiet"].append(name)
                 continue
             via = a.get("via")
+            if a.get("tls_capable") is False and via not in ("https", "own_cert"):
+                out["no_tls"].append(name)  # a router without TLS support: it can only ever use plain HTTP
+                continue
             out["https" if via in ("https", "own_cert") else "http" if via == "http" else "unknown"].append(name)
         for k in out:
             out[k].sort(key=str.lower)
-        out["ready"] = bool(out["https"]) and not out["http"] and not out["unknown"]
+        out["ready"] = bool(out["https"]) and not out["http"] and not out["unknown"] and not out["no_tls"]
         return out
 
     def tls_reply(self, agent: dict) -> dict:
@@ -3672,6 +3675,8 @@ class Monitor:
         now = time.time()
         if via:  # which of Rollcall's listeners the report came in on (not the address the agent says it used)
             agent["via"], agent["via_at"] = via, now
+        if isinstance(report, dict) and isinstance(report.get("tls_capable"), bool):
+            agent["tls_capable"] = report["tls_capable"]  # the router agent (1.0.4+): whether it can do HTTPS at all
         acks = report.pop("messages_shown", None) if isinstance(report, dict) else None  # which messages it showed
         if acks is not None and agent.get("host_key"):
             self.messages.record(agent["host_key"], acks, now)
@@ -6359,7 +6364,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 if not keep and not AGENT_TLS.on:
                     return web.json_response({"error": "Turn on HTTPS first"}, status=400)
                 rd = monitor.tls_readiness()
-                if not keep and (rd["http"] or rd["unknown"]) and body.get("force") is not True:
+                if not keep and (rd["http"] or rd["unknown"] or rd["no_tls"]) and body.get("force") is not True:
                     return web.json_response({"error": "Some agents haven't reported over Rollcall's own HTTPS yet",
                                               "readiness": rd}, status=409)
                 if keep:

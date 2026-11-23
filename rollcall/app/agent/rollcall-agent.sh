@@ -14,7 +14,7 @@
 # The first report asks to join; approve it in the Rollcall dashboard (Manage > Agents).
 # Downloaded from the dashboard, the add-on's address and enrolment key are already filled in.
 
-AGENT_VERSION="1.0.3"
+AGENT_VERSION="1.0.4"
 SERVER="__PM_SERVER__"
 ENROL_KEY="__PM_ENROL_KEY__"
 IGNORE_CERT=0
@@ -40,6 +40,12 @@ log() {
 }
 err() { ERRORS="$ERRORS${ERRORS:+,}$(js "$1")"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+# HTTPS needs curl built with TLS, or uclient-fetch with its TLS library (libustream-mbedtls, -openssl or -wolfssl),
+# which many routers don't have room for. Without either, this agent stays on plain HTTP and tells Rollcall so.
+tls_ok() {
+    if have curl; then curl --version 2>/dev/null | head -1 | grep -qiE 'ssl|tls' && return 0; fi
+    have uclient-fetch && ls /lib/libustream-ssl*.so* /usr/lib/libustream-ssl*.so* >/dev/null 2>&1
+}
 
 # A JSON string: backslashes, quotes and control characters escaped, at most $2 characters.
 js() {
@@ -187,8 +193,9 @@ security() {
 
 build_report() {
     started=$(date +%s)
-    printf '{"agent_version":"%s","agent_kind":"sh","os_family":"linux","ps_version":%s,"collected":"%s",' \
-        "$AGENT_VERSION" "$(js "$(bbver)" 60)" "$(utc)"
+    tls=false; tls_ok && tls=true
+    printf '{"agent_version":"%s","agent_kind":"sh","os_family":"linux","ps_version":%s,"collected":"%s","tls_capable":%s,' \
+        "$AGENT_VERSION" "$(js "$(bbver)" 60)" "$(utc)" "$tls"
     system_info || err "system info failed"
     printf '"disks":[%s],' "$(disks)"
     sv=$(services) || err "services failed"
@@ -256,7 +263,7 @@ send() {
     for SRV in $(echo "$SERVER" | tr ',;' '  '); do
         SRV=${SRV%/}
         case "$SRV" in http://*)
-            if [ -s "$PEM" ] && [ -s "$TLSPORT" ] && { have curl || have uclient-fetch; }; then
+            if [ -s "$PEM" ] && [ -s "$TLSPORT" ] && tls_ok; then
                 h=${SRV#http://}; h=${h%%/*}; case "$h" in \[*) h=${h%%]*}]; ;; *) h=${h%%:*} ;; esac
                 list="$list https://$h:$(cat "$TLSPORT")"
             fi ;;
