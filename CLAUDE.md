@@ -49,4 +49,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Router agent 1.0.4: HTTPS only with TLS support, reports tls_capable; routers without it listed and hold plain HTTP
+  on (#17).
