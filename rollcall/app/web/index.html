@@ -801,6 +801,9 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           </div>
           <p class="hint">To find the token, open any film or episode in Plex Web, choose <b>Get Info</b>, then <b>View XML</b>: it's at the very end of the <b>address</b> of the tab that opens (<code>…&amp;X-Plex-Token=<i>token</i></code>), not in the page itself. Or, on the Plex server, it's <code>PlexOnlineToken</code> in Plex's <code>Preferences.xml</code> (Linux, Docker) or, on Windows, in the registry under <code>HKEY_CURRENT_USER\Software\Plex, Inc.\Plex Media Server</code>. Rollcall reads the version, an update (amber, no alert) and what's playing, by whom; it goes red, with an alert, if Plex stops answering. The token is only ever sent to this address, and isn't shown again; moving the address to another machine means entering it again (switching to https, the port or its name is fine). Leave the address blank for port 32400 on this device; if Plex only accepts secure connections, HTTPS is used.</p>
         </div>
+        <div id="firetvBox" hidden class="snmpbox">
+          <p class="hint"><b>Fire TV / Android TV.</b> Turn on network debugging on the stick: <b>Settings → My Fire TV → Developer options → ADB debugging</b> (on Android TV, in Developer options too). Rollcall connects to port 5555 at this device's address with a key of its own; the first time, the TV shows <b>Allow USB debugging?</b>: tick <b>Always allow from this computer</b> and choose <b>Allow</b>. Until then the check is amber and says so. Rollcall only runs commands that read; it never presses keys, installs anything or changes a setting. <b>Network ADB gives full control of the stick to anything on the network the TV has allowed</b>, and anything can ask (the TV shows the prompt), so keep sticks on a network of their own if you can, and turn ADB debugging off on sticks you don't monitor. Another port: use the check <code>firetv:5556</code>.</p>
+        </div>
         <div id="starlinkBox" hidden class="snmpbox">
           <div class="fields">
             <label class="field">Read the dish<select id="fSlSrc"><option value="local">From the dish, on the local network</option><option value="account">Through the Starlink account</option></select></label>
@@ -1096,7 +1099,27 @@ function render() {
   document.getElementById("empty").hidden = data.hosts.length > 0;
   document.getElementById("emptyTab").hidden = !data.hosts.length || hosts.length > 0;
   document.getElementById("emptyTab").textContent = q ? "Nothing in this tab matches the search." : "Nothing in this tab right now.";
-  document.getElementById("rows").innerHTML = hosts.map(h => {
+  // Each row's HTML is kept with what it was built from: a search (same data) reuses every row, and a refresh
+  // rebuilds only the rows whose device changed. The table is only replaced if something in it did.
+  const html = hosts.map(h => {
+    const sig = JSON.stringify(h) + "|" + now + "|" + (data.name_line || "");
+    const c = rowCache.get(h.key);
+    if (c && c.sig === sig) return c.html;
+    const out = rowHtml(h, now);
+    rowCache.set(h.key, {sig, html: out});
+    return out;
+  }).join("");
+  if (rowCache.size > data.hosts.length * 2) {
+    const keep = new Set(data.hosts.map(h => h.key));
+    for (const k of rowCache.keys()) if (!keep.has(k)) rowCache.delete(k);
+  }
+  const rowsEl = document.getElementById("rows");
+  if (html !== lastRowsHtml) { rowsEl.innerHTML = html; lastRowsHtml = html; fitTable(); }
+}
+const rowCache = new Map();
+let lastRowsHtml = null;
+function rowHtml(h, now) {
+  {
     const up = h.uptime_24h;
     const strip = stripSegs(h.history, h.history_start);
     const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
@@ -1118,8 +1141,7 @@ function render() {
         <button class="edit-only" data-edit="${esc(h.key)}" title="Change name, address or checks">Edit</button>
       </div></td>
     </tr>`;
-  }).join("");
-  fitTable();
+  }
 }
 // If the table is wider than its box (long names, many columns, browser zoom...), put the buttons on two
 // rows so none of them is cut off; checked again whenever the box changes size.
@@ -2521,7 +2543,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -2559,7 +2581,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 // "Up for" from the last report would freeze, and a device that's been off since yesterday kept saying "Up
 // for 2 h". Down (or unreachable): since when. Up but its agent silent: since its last report. Up and
@@ -3177,16 +3199,17 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       return (is.objects.length ? `<table class="bkwhy"><tr><th>VM or item</th><th>Result</th><th>Reason</th></tr>${is.objects.map(o =>
           `<tr><td>${esc(o.name)}</td><td>${st(o.status)}</td><td class="msg">${esc(o.reason || "")}${(o.details || []).filter(d => d !== o.reason).map(d => `<br><small>${esc(d)}</small>`).join("")}${bkHint(o)}</td></tr>`).join("")}</table>` : "")
         + (is.log.length ? `<ul class="bklog">${is.log.map(l => `<li>${st(l.status)} ${esc(l.text)}</li>`).join("")}</ul>` : "") + bkHint(is)
-        + `<small class="muted">From ${is.source === "Veeam PowerShell" ? "Veeam's own record of the run" : "the Veeam event log during the run"}.</small>`; };
-    html += sect(`Veeam jobs (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map((x, i) => {
+        + `<small class="muted">From ${is.source === "Veeam PowerShell" ? "Veeam's own record of the run" : is.source === "event log" ? "the Veeam event log during the run" : esc(is.source) + "'s own job list"}.</small>`; };
+    const onlyVeeam = jobs.every(x => /^(Backup & Replication|Veeam Agent|Microsoft 365)$/.test(x.source || "Backup & Replication"));
+    html += sect(`${onlyVeeam ? "Veeam jobs" : "Backup jobs"} (${jobs.length})`, jobs.length ? tbl(["Job", "Last result", "Finished", "Last success", ""], jobs.map((x, i) => {
       const bad = x._level ? x._level !== "ok" : /failed|warning|stopped|disconnected/i.test(x.result || "");
-      return `<tr class="${rowCls(bad, "backup", x.name)}"><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.source === "Microsoft 365" ? "Microsoft 365 · " : "")}${esc(x.type || "")}${x.source === "Microsoft 365" && x.enabled === false ? " · disabled" : ""}</small></td>
-        <td>${res(x)}${x.issue && (x.issue.objects.length || x.issue.log.length) ? ` <button type="button" class="mini" data-bkwhy="${i}" aria-expanded="false" title="What went wrong in this run">Why?</button>` : ""}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
+      return `<tr class="${rowCls(bad, "backup", x.name)}"><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.source === "Microsoft 365" ? "Microsoft 365 · " : "")}${esc(x.type || "")}${x.from_device ? ` · reported by ${esc(x.from_device)}'s own agent` : ""}${x.source === "Microsoft 365" && x.enabled === false ? " · disabled" : ""}</small></td>
+        <td>${res(x)}${x.issue && (x.issue.objects.length || x.issue.log.length) ? ` <button type="button" class="mini" data-bkwhy="${i}" aria-expanded="false" title="What went wrong in this run">Why?</button>` : ""}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.policy != null ? `<br><small class="muted">${x.policy ? `Backs up ${x.policy} computer${x.policy === 1 ? "" : "s"}, each listed and checked on its own; this run is the policy's settings being sent to them` : "This run is the policy's settings being sent to its computers, not their backups, so it isn't judged by its age. Their backups show here once Veeam's PowerShell lists them, or their own Rollcall agents report them"}</small>` : x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
         <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
         <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
         <td>${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`
         + (x.issue && (x.issue.objects.length || x.issue.log.length) ? `<tr class="bkwhyrow" data-bkwhyrow="${i}" hidden><td colspan="5">${why(x)}</td></tr>` : "");
-    })) : `<p class="empty-note">Veeam is installed but no job has finished in the last 30 days.</p>`);
+    })) : `<p class="empty-note">No backup job has finished in the last 30 days.</p>`);
     const fg = Object.entries(st.backup_forgot || {});
     if (fg.length) html += `<p class="hint">Forgotten (hidden until they run again): ${fg.map(([k, f]) => `${esc(f.name || k)}${data && data.can_edit ? ` <button type="button" class="mini" data-bkback="${esc(k)}">Bring back</button>` : ""}`).join(" · ")}</p>`;
   }
@@ -3680,6 +3703,7 @@ function deviceSources(h) {
   if (h && h.services.some(x => x.kind === "jellyfin")) out.push(["jellyfin", "Jellyfin"]);
   if (h && h.services.some(x => x.kind === "plex")) out.push(["plex", "Plex"]);
   if (h && h.services.some(x => x.kind === "starlink")) out.push(["starlink", "Starlink"]);
+  if (h && h.services.some(x => x.kind === "firetv")) out.push(["firetv", "Fire TV"]);
   if (h && h.ha_device) out.push(["ha", "Home Assistant"]);
   return out;
 }
@@ -3691,7 +3715,7 @@ function srcBadge(h, kind) {
 function showSourceTabs(key, active) {
   const h = data && data.hosts.find(x => x.key === key), src = deviceSources(h), nav = document.getElementById("detTabs");
   if (src.length < 2) { nav.hidden = true; return; }
-  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : ""}</button>`).join("");
+  nav.innerHTML = src.map(([k, n]) => `<button type="button" role="tab" class="dtab${k === active ? " on" : ""}" data-dsrc="${k}" aria-selected="${k === active}">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "logs" ? srcBadge(h, "syslog") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : k === "firetv" ? srcBadge(h, "firetv") : ""}</button>`).join("");
   nav.hidden = false;
 }
 // In agent view: SNMP and Logs added after the agent's tabs.
@@ -3700,14 +3724,14 @@ function appendSourceTabs(key) {
   const extra = deviceSources(h).filter(([k]) => k !== "agent");
   if (!extra.length) return;
   nav.insertAdjacentHTML("beforeend", `<span class="tabsep"></span>` + extra.map(([k, n]) =>
-    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : srcBadge(h, "syslog")}</button>`).join(""));
+    `<button type="button" role="tab" class="dtab" data-dsrc="${k}" aria-selected="false">${n}${k === "snmp" ? srcBadge(h, "snmp") : k === "ha" ? srcBadge(h, "hadev") : k === "ilo" ? srcBadge(h, "ilo") : k === "jellyfin" ? srcBadge(h, "jellyfin") : k === "plex" ? srcBadge(h, "plex") : k === "starlink" ? srcBadge(h, "starlink") : k === "firetv" ? srcBadge(h, "firetv") : srcBadge(h, "syslog")}</button>`).join(""));
 }
 document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dsrc]");
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
   if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey);
-  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "plex") openPlex(detKey); else if (k === "starlink") openStarlink(detKey); else openLogs(detKey);
+  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "plex") openPlex(detKey); else if (k === "starlink") openStarlink(detKey); else if (k === "firetv") openFireTV(detKey); else openLogs(detKey);
 });
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
@@ -3850,6 +3874,53 @@ function openPlex(key) {
     `<tr><td><b>${esc(a.title)}</b>${a.subtitle ? `<br><small class="muted">${esc(a.subtitle)}</small>` : ""}</td><td>${a.progress == null ? "—" : `<div class="bar" style="width:110px"><i style="width:${Math.min(100, a.progress)}%"></i></div><small class="muted">${a.progress}%</small>`}</td></tr>`)));
   if ((px.library || []).length) html += sect("Libraries", `<div class="kv">${px.library.map(l => kv(esc(l.name),
     `${Number(l.count).toLocaleString()} ${({movie: "films", show: "series", artist: "artists", photo: "items"})[l.type] || "items"}${l.episodes != null ? `<br><small class="muted">${Number(l.episodes).toLocaleString()} episodes</small>` : ""}`)).join("")}</div>`);
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+// ---- Fire TV / Android TV (firetv.py): read over network ADB, read only ----
+const ftGb = mb => mb == null ? "—" : mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : mb + " MB";
+function ftTiles(f) {
+  if (!f) return [];
+  const t = [], w = f.wifi || {};
+  t.push([f.is_fire ? "Fire OS" : "Android", f.fire_os || f.android || "?", f.screen ? "screen " + f.screen : "", ""]);
+  if (f.cpu_pct != null) t.push(["CPU", Math.round(f.cpu_pct) + "%", `${f.cores || "?"} cores, over 2 s`, f.cpu_pct >= 90 ? "warm" : ""]);
+  if (f.storage_free_mb != null) t.push(["Storage free", ftGb(f.storage_free_mb), "of " + ftGb(f.storage_total_mb),
+    f.storage_total_mb && f.storage_free_mb * 100 / f.storage_total_mb < 10 ? "warm" : ""]);
+  if (w.rssi_dbm != null) t.push(["Wi-Fi", w.rssi_dbm + " dBm", [w.band, w.link_mbps ? w.link_mbps + " Mb/s" : ""].filter(Boolean).join(" · "), w.rssi_dbm < -80 ? "warm" : ""]);
+  return t;
+}
+function openFireTV(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  document.getElementById("detTitle").textContent = h.name;
+  detMode = "firetv"; detKey = key; renderDetActions();
+  showSourceTabs(key, "firetv");
+  if (!detDlg.open) detDlg.showModal();
+  const f = h.firetv, chk = h.services.find(x => x.kind === "firetv"), body = document.getElementById("detBody"), top = body.scrollTop;
+  document.getElementById("detSub").textContent = f ? [f.make, f.model, f.fire_os ? "Fire OS " + f.fire_os : "Android " + (f.android || "")].filter(Boolean).join(" · ") : "Fire TV";
+  const fp = data.firetv_key ? `<p class="hint">Rollcall's key, as the TV's prompt shows it: <code>${esc(data.firetv_key)}</code></p>` : "";
+  if (!f) { body.innerHTML = sect("Fire TV", `<p class="empty-note">${esc(chk && chk.detail ? "Couldn't read it: " + chk.detail : "Not read yet: it's read at each check.")}</p>${fp}`); return; }
+  const now = data.now || Date.now() / 1000, kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "", w = f.wifi || {};
+  const tiles = ftTiles(f).map(([l, v, sub, cls]) => `<div class="tile ${cls || ""}"><span class="lbl">${esc(l)}</span><b>${esc(v)}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`).join("");
+  let html = `<div class="tiles" style="margin-bottom:14px">${tiles}</div>`;
+  html += sect("Checks", chk && chk.status !== "green" && chk.detail ? `<div class="checklist">${chk.detail.split("; ").map(x => `<div><span class="dot amber" style="margin-top:4px"></span><span><b>${esc(x.charAt(0).toUpperCase() + x.slice(1))}</b></span></div>`).join("")}</div>`
+    : `<p class="empty-note">✓ Answering, nothing needs attention.</p>`);
+  html += sect("Device", `<div class="kv">${[kv("Model", esc([f.make, f.model, f.device && `(${f.device})`].filter(Boolean).join(" "))),
+    kv("Software", esc((f.fire_os ? "Fire OS " + f.fire_os + " · " : "") + "Android " + (f.android || "?") + (f.sdk ? ` (SDK ${f.sdk})` : "") + (f.build ? ", build " + f.build : ""))),
+    kv("Security patch", esc(f.security_patch || "")), kv("Up", f.uptime_s != null ? esc(fmtUp(f.uptime_s)) + (f.boot_count != null ? ` <small class="muted">started ${f.boot_count} times in all</small>` : "") : ""),
+    kv("Memory", f.mem_free_mb != null ? `${ftGb(f.mem_free_mb)} free of ${ftGb(f.mem_total_mb)}` : ""),
+    kv("Wi-Fi", w.off ? "not on Wi-Fi (wired?)" : w.rssi_dbm != null ? esc(`${w.rssi_dbm} dBm · ${w.band || ""} · ${w.link_mbps || "?"} Mb/s link`) : ""),
+    kv("Temperature", f.temp_c != null ? f.temp_c + " °C" : esc(f.temp_note || "")),
+    kv("Screen", esc(f.screen || "") + (f.app_in_front ? ` <small class="muted">${esc(f.app_in_front)} in front</small>` : "")),
+    kv("Disabled apps", f.disabled != null ? `${f.disabled} <small class="muted">a drop means an update turned some back on</small>` : ""),
+    kv("Read", f.read_at ? `${ago(f.read_at, now)}${f.read_ms ? ` <small class="muted">took ${(f.read_ms / 1000).toFixed(1)} s</small>` : ""}` : "")].join("")}</div>`);
+  const run = f.sideloaded_running || {};
+  html += sect(`Apps you've installed (${(f.apps || []).length})`, (f.apps || []).length ? tbl(["App", "Version", "From", ""], f.apps.map(a => {
+    const r = run[a.package];
+    return `<tr><td><b>${esc(a.package)}</b></td><td>${esc(a.version || "—")}</td><td>${a.from === "sideloaded" ? `<b class="old">sideloaded</b>` : esc(a.from)}</td>
+      <td>${r ? (r.running ? `<span class="okc">running</span>${r.services != null ? ` <small class="muted">${r.services} service${r.services === 1 ? "" : "s"}</small>` : ""}` : `<span class="muted">not running</span>`) : ""}</td></tr>`; }))
+    : `<p class="empty-note">None besides what came with it.</p>`);
+  html += `<p class="hint">Read over network ADB with Rollcall's own key, using commands that only read; it never presses keys, installs anything or changes a setting. Network ADB gives full control of the stick to anything the TV has allowed, so keep it on a network of its own if you can, and turn ADB debugging off on sticks you don't monitor.</p>${fp}`;
   body.innerHTML = html;
   body.scrollTop = top;
 }
@@ -4192,6 +4263,7 @@ function renderOverview(h, sn, lg, ha) {
     tiles.push(tile(esc(r.label.replace(/^Temperature \((\w+)\)$/, "Temp $1")), `${esc(String(r.value))} ${esc(r.unit)}`, spark(r.series) || (r.min === r.max ? "steady" : `${r.min}–${r.max}`),
       r.level === "crit" ? "hot" : r.level === "warn" ? "warm" : "", "logs"));
   for (const t of slTiles(h.starlink)) tiles.push(tile(esc(t[0]), esc(t[1]), esc(t[2] || ""), t[3] || "", "starlink"));
+  for (const t of ftTiles(h.firetv)) tiles.push(tile(esc(t[0]), esc(t[1]), esc(t[2] || ""), t[3] || "", "firetv"));
   const hd = ha && ha.data;
   for (const t of (hd && hd.tiles) || [])
     tiles.push(tile(esc(t.label), typeof t.value === "number" ? t.value.toLocaleString() + (t.unit ? esc(t.unit) : "") : esc(String(t.value)), esc(t.sub || ""),
@@ -4264,6 +4336,7 @@ document.getElementById("detBody").addEventListener("click", e => {
   if (!j || detMode !== "overview" || !detKey) return;
   if (j.dataset.ovjump === "snmp") openSnmp(detKey); else if (j.dataset.ovjump === "logs") openLogs(detKey);
   else if (j.dataset.ovjump === "starlink") openStarlink(detKey);
+  else if (j.dataset.ovjump === "firetv") openFireTV(detKey);
   else if (j.dataset.ovjump === "ha") { const el = document.getElementById("ovHa"); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); }
 });
 document.getElementById("detBody").addEventListener("keydown", e => {
@@ -4487,16 +4560,25 @@ document.getElementById("detBody").addEventListener("click", async e => {
 // The 24-hour uptime strip: each segment is a half hour on the clock (16:00-16:30 ...), the last one
 // running up to now. Hovering one shows its time span and how it went.
 const SEG_WORD = {g: "Up", a: "Partly down", r: "Down", m: "Paused", n: "No data"};
+// The 24-hour bars on every row. The bars' times are the same for every device, so they're worked out once
+// (making a time format is slow: with 150 devices it took most of a second per search keystroke)
+const HM = new Intl.DateTimeFormat([], {hour: "2-digit", minute: "2-digit"});
+let stripTimes = {key: "", list: []};
 function stripSegs(hist, start) {
   hist = hist || [];
   const n = hist.length, size = 86400000 / Math.max(n, 1), today = new Date().toDateString();
   const t0 = start ? start * 1000 : Math.floor(Date.now() / size) * size - (n - 1) * size;
-  const hm = d => d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-  return hist.map((c, i) => {
-    const a = new Date(t0 + i * size), b = new Date(t0 + (i + 1) * size);
-    const day = a.toDateString() === today ? "" : "Yesterday ";
-    return `<span class="${c}" title="${day}${hm(a)} – ${i === n - 1 ? "now" : hm(b)}: ${SEG_WORD[c] || c}"></span>`;
-  }).join("");
+  const key = `${t0}|${n}|${today}`;
+  if (stripTimes.key !== key) {
+    const list = [];
+    for (let i = 0; i < n; i++) {
+      const a = new Date(t0 + i * size), b = new Date(t0 + (i + 1) * size);
+      list.push(`${a.toDateString() === today ? "" : "Yesterday "}${HM.format(a)} – ${i === n - 1 ? "now" : HM.format(b)}`);
+    }
+    stripTimes = {key, list};
+  }
+  const times = stripTimes.list;
+  return hist.map((c, i) => `<span class="${c}" title="${times[i]}: ${SEG_WORD[c] || c}"></span>`).join("");
 }
 // Networks Rollcall uses: Home Assistant's host sends each check out of the interface on the device's
 // subnet, or the one with the default route. Mirrors discovery.route_for on the server.
@@ -5590,6 +5672,7 @@ function updatePicked() {
   document.getElementById("jellyfinBox").hidden = !form.querySelector('.preset input[value="jellyfin-api"]:checked');
   document.getElementById("plexBox").hidden = !form.querySelector('.preset input[value="plex-api"]:checked');
   document.getElementById("starlinkBox").hidden = !form.querySelector('.preset input[value="starlink"]:checked');
+  document.getElementById("firetvBox").hidden = !form.querySelector('.preset input[value="firetv"]:checked');
   const names = [...form.querySelectorAll(".preset input:checked")]
     .map(cb => cb.closest(".preset").querySelector("b").textContent);
   document.getElementById("picked").innerHTML = names.length
@@ -5680,7 +5763,8 @@ document.getElementById("haResults").addEventListener("click", e => {
 // Readings as chips (readings.py): what this device's integrations read now, each addable as a check
 const RD_DEFAULT = {"starlink.latency": ">100", "starlink.drops": ">2", "starlink.obstructed": ">1", "starlink.sky_blocked": ">5",
   "starlink.rotation_off": ">15", "starlink.elevation_off": ">10", "starlink.signal": "=weak", "starlink.download": "<20",
-  "jellyfin.failed_tasks": ">0", "ups.charge": "<50", "ups.runtime": "<10", "ups.load": ">80", "ups.on_battery": "=yes"};
+  "jellyfin.failed_tasks": ">0", "ups.charge": "<50", "ups.runtime": "<10", "ups.load": ">80", "ups.on_battery": "=yes",
+  "firetv.storage_free": "<500", "firetv.wifi_signal": "<-75", "firetv.memory_free": "<100", "firetv.sideloaded_stopped": ">0", "firetv.cpu": ">95"};
 async function rdLoad() {
   const box = document.getElementById("rdResults");
   if (!editing) { box.innerHTML = ""; return; }
@@ -6052,7 +6136,9 @@ document.getElementById("presetFilter").addEventListener("keydown", e => { if (e
 document.getElementById("addHost").addEventListener("click", () => openDialog(null));
 document.getElementById("addFirst").addEventListener("click", () => openDialog(null));
 
-document.getElementById("filter").addEventListener("input", render);
+// Searching waits for a pause in typing (about a keystroke's worth), so a fast typist doesn't redraw every letter
+let filterTimer = 0;
+document.getElementById("filter").addEventListener("input", () => { clearTimeout(filterTimer); filterTimer = setTimeout(render, 120); });
 document.getElementById("head").addEventListener("click", e => {
   const th = e.target.closest("th[data-sort]");
   if (th) setSort(th.dataset.sort);
