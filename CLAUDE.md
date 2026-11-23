@@ -42,50 +42,6 @@ together). Remove each once it's released.
   already on disk isn't loaded when the download fails (it tries the download first). Docs: what needs the
   internet, and installing the add-on without it (base image and Alpine packages from a local mirror).
 
-- Other backup products: Veritas NetBackup and HPE/OpenText Data Protector (owner asked 22 Nov; used by other Rollcall
-  users, not the owner). First a common framework in the Windows agent so each product is a small definition (where
-  to read, success/warning/failure, job name, reason), feeding the same Backups check and tab, "Why?" and alerts as
-  Veeam. NetBackup: on the master/primary server, its job list (bpdbjobs) with status, client and policy; status codes
-  explained in the hints table. Data Protector: on the Cell Manager, session reports (omnirpt) with status, failed /
-  completed with errors. Neither can be tested here: build from vendor docs, then ask a user for a sample (output or
-  events, names replaced) and confirm before release; say so in the docs. Windows Server Backup is the easy next
-  one if wanted (own event log).
-
-- Fast search with many devices (owner asked 22 Nov; 127 devices, typing in the search box is slow). Cause found:
-  nothing is fetched; each keystroke runs render() in full (summary, tabs with every tab's rule counts, and every
-  row's HTML rebuilt: chips, uptime bars, sparklines), and the 5-second status poll re-renders too. Fix: debounce
-  the search box (~120 ms); on a search, show/hide existing rows from a cached per-device search text instead of
-  rebuilding; cache each row's HTML and rebuild only rows whose data changed on a poll; don't recount tabs on a
-  keystroke. Measure render time with ~150 test devices before and after (Playwright), and keep the result in a test.
-
-- Veeam agent policies on the server's Backups tab (owner asked 23 Nov). A job of type "Agent Policy" (agents
-  managed by Veeam B&R) shows the policy's own session, which only runs when the policy's configuration is applied,
-  so the row says "no successful run for 198 h" while the agent on the PC backs up nightly (its own Backups tab is
-  right: e.g. a Warning for low repository space). Fix: on the B&R server, read each policy's real per-computer
-  backup sessions / latest restore point (Get-VBRComputerBackupJobSession, Get-VBRBackup restore points, or the
-  agent-backup sessions in the database) and show one sub-row per computer like copy jobs; judge the policy by them,
-  not by the config session. Fallback: when a Rollcall device's own agent reports that policy's backup, fill the
-  server row from that report (match by computer name; say where it came from). Don't count a config-apply session as
-  a backup run.
-
-- Fire TV / Android TV monitoring (owner asked 22 Nov; one stick, network ADB already on). No agent on the stick:
-  the add-on connects over network ADB (port 5555, its own RSA key; the TV asks "Allow USB debugging?" once) and runs
-  read-only shell commands. A "Fire TV" preset and tab like Starlink: online and ADB still trusted, model, Fire OS
-  version, uptime/restarts, free storage, memory, Wi-Fi signal/link speed/band, temperature where reported, app in
-  front, installed apps with versions (flag sideloaded). Every value usable as a readings chip with limits. Say
-  plainly that network ADB gives full control to anything on the network (suggest a separate network, or ADB off on
-  sticks not monitored). Never send input, install, or change settings. Build against a stand-in ADB device in
-  tests; give the owner a read-only test script for his stick before release (as for Starlink).
-  Owner's test (22 Nov, Fire TV Stick 4K, Fire OS 6): full read ~4 s (each `pm`/`settings` call ~1.5 s, starts Java).
-  Fire OS version from `ro.build.mktg.fireos` first (`ro.build.version.fireos` is only the generation, "6.0").
-  Load average is useless (5-6 on an idle 4-core stick): use CPU % from two `/proc/stat` reads, never the router
-  load rule. `/sys/class/thermal` is permission-denied over ADB: say "not readable on this model". Also add: count
-  of disabled packages (`pm list packages -d`; a drop means an update re-enabled debloated apps) and, for each
-  sideloaded app, whether it's running (`pidof`) and its service count (e.g. a custom launcher's Home helper).
-  CPU swings with video (13% then 47.5%, both YouTube): sample 2-3 s and only go amber when it stays high over
-  several checks.
-  Don't scrub version numbers as IP addresses. TV approval with Rollcall's own key not yet tested (he used adb).
-
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
@@ -94,3 +50,7 @@ releasing; remove each line once it's released. Built changes waiting for releas
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
 - Starlink map errors always JSON and logged (#18); cause of Tom's error not yet known (needs his log line).
+- Fast search (row cache, bar times once, debounce; test_search_speed). Veeam agent policies judged by their computers
+  (PowerShell sessions/restore points, fallback from devices' agents). Fire TV over network ADB (firetv.py; owner to run
+  firetv-rollcall-test.py on his stick to confirm Allow works with Rollcall's key). NetBackup + Data Protector in Windows
+  agent 1.0.56 (untested on real installs: ask users for samples after release).
