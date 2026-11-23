@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import re
 
-SOURCES = {"starlink": "Starlink", "jellyfin": "Jellyfin", "plex": "Plex", "ilo": "iLO", "ups": "UPS"}
+SOURCES = {"starlink": "Starlink", "jellyfin": "Jellyfin", "plex": "Plex", "ilo": "iLO", "ups": "UPS", "firetv": "Fire TV"}
 # What each source is, for hints from AI
 READING_WHAT = {"starlink": "Starlink satellite dish", "jellyfin": "Jellyfin media server", "plex": "Plex media server",
-                "ilo": "HPE server's iLO management controller", "ups": "UPS (read over SNMP)"}
+                "ilo": "HPE server's iLO management controller", "ups": "UPS (read over SNMP)",
+                "firetv": "Fire TV stick or Android TV (read over network ADB)"}
 RE = re.compile(r"^reading:([a-z]+)\.([a-z0-9_]{1,40})\s*(?:(>=|<=|!=|>|<|=)\s*(\S.{0,60}))?$", re.I)
 
 
@@ -30,6 +31,15 @@ def _turn(a: dict | None) -> float | None:
 def _num(v) -> float | None:
     m = re.search(r"-?\d+(?:\.\d+)?", str(v or ""))
     return float(m.group(0)) if m else None
+
+
+def _days_since(day) -> int | None:
+    import datetime
+    try:
+        d = datetime.date.fromisoformat(str(day))
+    except ValueError:
+        return None
+    return (datetime.date.today() - d).days
 
 
 def catalog(source: str, d: dict | None, extra: dict | None = None) -> list[dict]:
@@ -76,6 +86,24 @@ def catalog(source: str, d: dict | None, extra: dict | None = None) -> list[dict
         for f in d.get("fans") or []:
             if f.get("label") and _num(f.get("speed")) is not None:
                 add("fan_" + _slug(f["label"]), f"{f['label']}", f.get("unit") or "%", _num(f.get("speed")))
+    elif source == "firetv":
+        w = d.get("wifi") or {}
+        add("cpu", "CPU", "%", d.get("cpu_pct"), "busy over 2 seconds (a video makes it jump; a limit is best kept high)")
+        add("memory_free", "Memory free", "MB", d.get("mem_free_mb"))
+        add("storage_free", "Storage free", "MB", d.get("storage_free_mb"))
+        add("wifi_signal", "Wi-Fi signal", "dBm", w.get("rssi_dbm"), "-50 is excellent, -70 fair, below -80 poor")
+        add("link_speed", "Wi-Fi link", "Mb/s", w.get("link_mbps"))
+        add("uptime", "Uptime", "h", None if d.get("uptime_s") is None else round(d["uptime_s"] / 3600, 1))
+        add("temperature", "Temperature", "°C", d.get("temp_c"))
+        add("disabled_apps", "Disabled apps", "", d.get("disabled"), "if it drops, an update has turned debloated apps back on")
+        add("apps", "Apps installed", "", len(d.get("apps") or []))
+        add("sideloaded", "Sideloaded apps", "", len(d.get("sideloaded") or []))
+        add("sideloaded_stopped", "Sideloaded apps not running", "",
+            sum(1 for r in (d.get("sideloaded_running") or {}).values() if not r.get("running")))
+        add("screen", "Screen", "", d.get("screen") or None)
+        add("app_in_front", "App in front", "", d.get("app_in_front") or None)
+        add("fire_os", "Fire OS", "", d.get("fire_os") or None)
+        add("security_patch_days", "Security patch age", "days", _days_since(d.get("security_patch")))
     elif source == "ups":
         u = d.get("ups") or {}
         if u:
@@ -94,7 +122,8 @@ def available(h) -> list[dict]:
     out = []
     for src, data, extra in (("starlink", getattr(h, "sl_data", None), {"map": getattr(h, "sl_map", None)}),
                              ("jellyfin", getattr(h, "jf_data", None), None), ("plex", getattr(h, "px_data", None), None),
-                             ("ilo", getattr(h, "ilo_data", None), None), ("ups", getattr(h, "snmp_data", None), None)):
+                             ("ilo", getattr(h, "ilo_data", None), None), ("ups", getattr(h, "snmp_data", None), None),
+                             ("firetv", getattr(h, "ft_data", None), None)):
         if {"ups": "snmp"}.get(src, src) not in kinds:
             continue
         for r in catalog(src, data, extra):
