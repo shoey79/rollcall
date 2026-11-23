@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.97.2 - 2026-11-23
+
+- **Turning off plain HTTP for agents waits until it's safe** ([#17](https://github.com/shoey79/rollcall/issues/17), thanks to [tomvining](https://github.com/tomvining) for the report). The Overview's *Turn off plain HTTP* reminder went by the address each agent said it reported to, and only held back for agents that said plain HTTP. One that reached Rollcall through a reverse proxy (an `https://` address of its own that forwards to plain HTTP), or hadn't said, counted as ready, and stopped reporting once plain HTTP was off. Rollcall now notes which port each report actually arrives on:
+  - The reminder only appears once every agent that reported in the last 2 days did so over Rollcall's own HTTPS.
+  - **Manage → Agents** lists agents still on plain HTTP (directly or through a proxy), ones not seen since the update, and ones quiet for over 2 days. Turning plain HTTP off asks first if any active agent isn't on HTTPS.
+  - If agents that were reporting stop for half an hour after plain HTTP is turned off, the Overview names them, with a button to turn it back on.
+
 ## 1.97.1 - 2026-11-22
 
 ### Changed
