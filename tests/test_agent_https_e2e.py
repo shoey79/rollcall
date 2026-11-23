@@ -102,6 +102,24 @@ def scenario(agent, tmp: Path):
 
         # Every agent is on HTTPS, plain HTTP still open: the Overview suggests closing it
         assert addon.api("/api/status")["tls_plain_prompt"] is True
+        assert addon.api("/api/agents")["tls"]["readiness"]["https"] == [addon.agent()["hostname"]]
+
+        if isinstance(agent, LinuxAgent):
+            # Issue #17: an agent behind a reverse proxy says it sent to an https:// address, but the proxy forwards
+            # to plain HTTP. Judged by where the report arrived, it's on plain HTTP: no prompt, and turning plain
+            # HTTP off is refused (409) unless forced
+            token = json.loads((agent.prefix / "var/lib/pingmonitor/state.json").read_text())["token"]
+            st, _ = call(addon.agent_url + "/agent/report", {"hostname": addon.agent()["hostname"], "agent_version": "1.0.22",
+                         "os_family": "linux", "sent_to": "https://proxy.example.local:8443"}, {"Authorization": "Bearer " + token})
+            assert st == 200
+            assert addon.api("/api/status")["tls_plain_prompt"] is False
+            rd = addon.api("/api/agents")["tls"]["readiness"]
+            assert rd["http"] == [addon.agent()["hostname"]] and rd["ready"] is False
+            st, body = call(addon.ui + "/api/agents/tls", {"plain_http": False}, UI, "POST")
+            assert st == 409 and json.loads(body)["readiness"]["http"], body[:300]
+            assert addon.api("/api/agents")["tls"]["plain_http"] is True
+            agent.run()                                                       # back over Rollcall's own HTTPS
+            assert addon.api("/api/status")["tls_plain_prompt"] is True
 
         # 3. Plain HTTP off: still reporting
         addon.api("/api/agents/tls", {"plain_http": False}, "POST")

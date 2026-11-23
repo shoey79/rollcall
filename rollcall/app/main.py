@@ -3380,6 +3380,32 @@ class Monitor:
         except Exception as err:  # noqa: BLE001
             log.warning("Couldn't update the agent HTTPS certificate: %s", err)
 
+    TLS_ACTIVE_DAYS = 2      # an agent quiet for longer can't be judged: listed, but it doesn't hold the prompt back
+    TLS_LOST_AFTER = 30 * 60  # after plain HTTP goes off, an agent that was reporting and hasn't since: say so
+
+    def tls_readiness(self, now: float | None = None) -> dict:
+        """Which agents have actually reported over Rollcall's own HTTPS (judged by the listener each report came in
+        on, so one behind a reverse proxy that forwards to plain HTTP counts as plain HTTP), for the prompt to turn
+        plain HTTP off and the warning before it's turned off. Active: reported in the last TLS_ACTIVE_DAYS days."""
+        now = now or time.time()
+        out = {"https": [], "http": [], "unknown": [], "quiet": [], "lost": []}
+        off_at = float(AGENT_TLS.state.get("plain_off_at") or 0)
+        for a in (self.agents.agents.values() if self.agents else []):
+            name = a.get("hostname") or "?"
+            last = float(a.get("last_report") or 0)
+            if off_at and not AGENT_TLS.plain_http and last < off_at and last > off_at - self.TLS_ACTIVE_DAYS * 86400 \
+                    and now > off_at + self.TLS_LOST_AFTER:
+                out["lost"].append(name)
+            if now - last > self.TLS_ACTIVE_DAYS * 86400:
+                out["quiet"].append(name)
+                continue
+            via = a.get("via")
+            out["https" if via in ("https", "own_cert") else "http" if via == "http" else "unknown"].append(name)
+        for k in out:
+            out[k].sort(key=str.lower)
+        out["ready"] = bool(out["https"]) and not out["http"] and not out["unknown"]
+        return out
+
     def tls_reply(self, agent: dict) -> dict:
         """For the reply to a report: the HTTPS port and key, signed with the update key agents already trust, so
         it can't be changed on the way; the router agent (which can't check either) gets the certificate itself."""
@@ -3605,8 +3631,11 @@ class Monitor:
         log.info("Revoked the agent on %s", agent["hostname"])
         return agent
 
-    async def receive_report(self, agent: dict, report: dict, source_ip: str | None, forwarded_for: str | None = None) -> None:
+    async def receive_report(self, agent: dict, report: dict, source_ip: str | None, forwarded_for: str | None = None,
+                             via: str | None = None) -> None:
         now = time.time()
+        if via:  # which of Rollcall's listeners the report came in on (not the address the agent says it used)
+            agent["via"], agent["via_at"] = via, now
         acks = report.pop("messages_shown", None) if isinstance(report, dict) else None  # which messages it showed
         if acks is not None and agent.get("host_key"):
             self.messages.record(agent["host_key"], acks, now)
@@ -5767,9 +5796,10 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         # Agents report over plain HTTP and Rollcall's own HTTPS isn't on: admins are offered it
         snap["tls_prompt"] = bool(not AGENT_TLS.on and not monitor.opts.get("agent_ssl") and monitor.agents and monitor.agents.agents)
         # Rollcall's own HTTPS is on and every agent has moved to it, but plain HTTP is still open: suggest closing it
-        rows = list(monitor.agents.agents.values()) if monitor.agents else []
-        snap["tls_plain_prompt"] = bool(monitor.tls_builtin() and AGENT_TLS.plain_http and rows
-                                        and not any(str(a.get("sent_to") or "").startswith("http://") for a in rows))
+        rd = monitor.tls_readiness()
+        snap["tls_plain_prompt"] = bool(monitor.tls_builtin() and AGENT_TLS.plain_http and rd["ready"])
+        # Plain HTTP is off and agents that were reporting haven't since: say who, and offer it back
+        snap["tls_plain_lost"] = rd["lost"] if monitor.tls_builtin() and not AGENT_TLS.plain_http and snap["can_admin"] else []
         snap["networks"] = await monitor.network_view()
         if user["can_edit"] and monitor.agents:
             snap["agents_pending"] = len(monitor.agents.pending)
@@ -6241,6 +6271,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
 
     def _tls_info() -> dict:
         rows = [a for a in monitor.agents.agents.values()] if monitor.agents else []
+        rd = monitor.tls_readiness()  # judged by the port each report arrived on
         tp = getattr(monitor, "tls_public_port", AGENT_HTTPS_PORT) or AGENT_HTTPS_PORT
         https = [a for a in rows if str(a.get("sent_to") or "").startswith("https://") and str(a.get("sent_to") or "").rstrip("/").endswith(f":{tp}")]
         plain = [a for a in rows if str(a.get("sent_to") or "").startswith("http://")]
@@ -6248,7 +6279,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return {"on": AGENT_TLS.on, "builtin": monitor.tls_builtin(), "own_cert": bool(monitor.opts.get("agent_ssl")),
                 "plain_http": AGENT_TLS.plain_http, "port": port or AGENT_HTTPS_PORT, "port_off": not port, "http_port": AGENT_PORT,
                 "pin": AGENT_TLS.pin() if AGENT_TLS.on else "", "names": AGENT_TLS.names() if AGENT_TLS.on else [],
-                "agents_https": len(https), "agents_http": sorted(a.get("hostname") or "?" for a in plain)}
+                "agents_https": len(rd["https"]), "agents_http": sorted(a.get("hostname") or "?" for a in plain),
+                "readiness": rd}
 
     async def agents_tls(req):
         """Turn Rollcall's own HTTPS for agents on or off, or plain HTTP off once agents have moved (admins only)."""
@@ -6267,6 +6299,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                     AGENT_TLS.set(https=True)
                     await listener.set_builtin(True)
                 else:
+                    AGENT_TLS.state.pop("plain_off_at", None)
                     AGENT_TLS.set(https=False, plain_http=True)
                     await listener.set_plain(True)
                     await listener.set_builtin(False)
@@ -6275,7 +6308,15 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 keep = body["plain_http"] is not False
                 if not keep and not AGENT_TLS.on:
                     return web.json_response({"error": "Turn on HTTPS first"}, status=400)
-                AGENT_TLS.set(plain_http=keep)
+                rd = monitor.tls_readiness()
+                if not keep and (rd["http"] or rd["unknown"]) and body.get("force") is not True:
+                    return web.json_response({"error": "Some agents haven't reported over Rollcall's own HTTPS yet",
+                                              "readiness": rd}, status=409)
+                if keep:
+                    AGENT_TLS.state.pop("plain_off_at", None)
+                    AGENT_TLS.set(plain_http=True)
+                else:
+                    AGENT_TLS.set(plain_http=False, plain_off_at=time.time())
                 await listener.set_plain(keep)
                 log.info("%s turned plain HTTP for agents %s", user["display"] or "an admin", "back on" if keep else "off")
         except Exception as err:  # noqa: BLE001
@@ -7517,6 +7558,20 @@ def _script_version() -> str | None:
         return None
 
 
+def _arrived_via(req) -> str:
+    """"https": Rollcall's own HTTPS port; "own_cert": the agent port with your own certificate; "http": plain HTTP on
+    the agent port (including anything a reverse proxy forwards to it)."""
+    tr = req.transport
+    try:
+        port = (tr.get_extra_info("sockname") or (None, None))[1] if tr else None
+        tls = bool(tr and tr.get_extra_info("sslcontext"))
+    except Exception:  # noqa: BLE001
+        return ""
+    if tls:
+        return "own_cert" if port == AGENT_PORT else "https"
+    return "http"
+
+
 def build_agent_app(monitor: Monitor) -> web.Application:
     """The small API the agents talk to, on its own LAN port.
 
@@ -7573,7 +7628,7 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         # original address. Shown for information only: it's whatever the proxy (or client) says.
         fwd = (req.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or None
         try:
-            await monitor.receive_report(agent, body, req.remote, fwd)
+            await monitor.receive_report(agent, body, req.remote, fwd, _arrived_via(req))
         except Exception as err:  # noqa: BLE001
             log.exception("Couldn't process the report from %s: %s", agent["hostname"], err)
             try:  # keep a copy to diagnose with

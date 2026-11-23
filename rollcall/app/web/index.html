@@ -592,6 +592,8 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <span><button type="button" class="mini primary" id="tlsGo">Set it up</button> <button type="button" class="mini" id="tlsLater">Not now</button></span></div>
   <div class="tlsprompt" id="tlsPlain" hidden><span>🔒 Every agent now reports over Rollcall's own HTTPS, but plain HTTP is still open on the agent port. <b>Turn it off</b> so nothing can report, or listen, without encryption.</span>
     <span><button type="button" class="mini primary" id="tlsPlainOff">Turn off plain HTTP</button> <button type="button" class="mini" id="tlsPlainLater">Not now</button></span></div>
+  <div class="tlsprompt" id="tlsLost" hidden><span id="tlsLostText"></span>
+    <span><button type="button" class="mini primary" id="tlsLostOn">Turn plain HTTP back on</button></span></div>
   <section id="home" aria-label="Overview"><div class="tiles"><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div><div class="tile skel"><span class="lbl">&nbsp;</span><b>&nbsp;</b><small>&nbsp;</small></div></div><div class="panel"><h2>Alerts</h2><div class="allok">Loading…</div></div></section>
   <div class="wrap">
     <table>
@@ -2395,6 +2397,9 @@ function applyStatus(fresh) {
     document.getElementById("tlsPrompt").hidden = !(data.tls_prompt && data.can_admin && Date.now() - later > 7 * 86400000);
     let laterPlain = 0; try { laterPlain = +localStorage.getItem("pm_tls_plain_later") || 0; } catch (e) { }
     document.getElementById("tlsPlain").hidden = !(data.tls_plain_prompt && data.can_admin && Date.now() - laterPlain > 7 * 86400000);
+    const lost = data.tls_plain_lost || [];
+    document.getElementById("tlsLost").hidden = !lost.length;
+    if (lost.length) document.getElementById("tlsLostText").innerHTML = `⚠ Since plain HTTP was turned off on the agent port, <b>${esc(nameList(lost))}</b> ${lost.length === 1 ? "hasn't" : "haven't"} reported. ${lost.length === 1 ? "It" : "They"} may still need plain HTTP (e.g. through a reverse proxy, or an agent too old for HTTPS).`;
     const vo = document.querySelector(".viewonly");
     if (vo) { vo.textContent = data.edit_blocked ? "View only for now" : "View only";
       vo.title = data.edit_blocked ? "Rollcall can't read Home Assistant's user list just now, so it can't tell who's an admin, and changes are off until it can. To make changes meanwhile, add your Home Assistant username to 'editors' in the add-on's Configuration tab." : "Only Home Assistant admins can add, edit, pause or reset"; }
@@ -4860,6 +4865,27 @@ function mbText(mb) {
   return !isFinite(n) ? "" : n < 1024 ? `${Math.round(n)} MB` : `${Math.round(n / 1024)} GB`;
 }
 // Rollcall's own HTTPS for agents (agenttls.py): on, off, and plain HTTP off once agents have moved
+function nameList(a, max = 8) { return a.slice(0, max).join(", ") + (a.length > max ? ` and ${a.length - max} more` : ""); }
+// Agents not (yet) seen reporting over Rollcall's own HTTPS, judged by where their reports actually arrived
+function tlsNotReady(rd) {
+  if (!rd) return "";
+  const p = [];
+  if ((rd.http || []).length) p.push(`Still reaching Rollcall over plain HTTP (directly, or through a reverse proxy that forwards to it): ${nameList(rd.http)}.`);
+  if ((rd.unknown || []).length) p.push(`Not reported since Rollcall started checking which port reports arrive on: ${nameList(rd.unknown)}.`);
+  if ((rd.quiet || []).length) p.push(`Not reported for over 2 days, so can't tell: ${nameList(rd.quiet)}.`);
+  return p.join("\n");
+}
+async function plainOff(confirmText) {
+  let r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({plain_http: false})});
+  let d = await r.json().catch(() => ({}));
+  if (r.status === 409) {
+    if (!confirm(`${tlsNotReady(d.readiness)}\n\nThose agents will stop reporting until they reach Rollcall's own HTTPS port. Turn off plain HTTP anyway?`)) return null;
+    r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({plain_http: false, force: true})});
+    d = await r.json().catch(() => ({}));
+  } else if (!r.ok) { /* fall through to the error */ }
+  if (!r.ok) { alert(d.error || `That didn't work (${r.status})`); return null; }
+  return d;
+}
 function tlsHtml(t) {
   const admin = data && data.can_admin;
   let body;
@@ -4867,11 +4893,12 @@ function tlsHtml(t) {
   else if (!t.on) body = `<p><b>Agents report over plain HTTP</b>, so anyone on the network path could read their reports. Turn on HTTPS and Rollcall makes its own certificate: agents move across at their next report and only trust Rollcall's own key, so nothing can stand in for it. Nothing to buy or install, and plain HTTP stays on until you turn it off.</p>
       ${admin ? `<button type="button" class="primary" data-tls="on">Turn on HTTPS</button>` : `<p class="hint">Only Home Assistant admins can turn it on.</p>`}`;
   else {
-    const left = t.agents_http || [];
+    const rd = t.readiness || {};
+    const left = (rd.http || []).concat(rd.unknown || []);
     if (t.port_off) { body = `<p>⚠ <b>HTTPS is on, but its port isn't open</b>: open port ${t.port} in the add-on's <b>Configuration → Network</b>. Until then agents carry on over plain HTTP.</p>`
       + (admin ? `<button type="button" class="danger" data-tls="off">Turn HTTPS off</button>` : ""); return `<h4 class="subh" style="margin-top:14px">HTTPS</h4>${body}`; }
     body = `<p>✓ <b>HTTPS is on</b>, on port ${t.port} with Rollcall's own key (<code>${esc((t.pin || "").slice(0, 12))}…</code>). ${t.agents_https} agent${t.agents_https === 1 ? "" : "s"} use${t.agents_https === 1 ? "s" : ""} it.
-        ${left.length ? `Still on plain HTTP: ${esc(left.slice(0, 8).join(", "))}${left.length > 8 ? ` and ${left.length - 8} more` : ""} (agents move at their next report; older agents once they're updated: Windows 1.0.54, Linux 1.0.22, router 1.0.3).` : ""}</p>
+        ${left.length || (rd.quiet || []).length ? `</p><p class="hint" style="white-space:pre-line">${esc(tlsNotReady(rd))}\nAgents move at their next report; older agents once they're updated (Windows 1.0.54, Linux 1.0.22, router 1.0.3). Agents behind a reverse proxy with its own certificate stay on it, and need plain HTTP.` : ""}</p>
       <p>Plain HTTP on port ${t.http_port}: <b>${t.plain_http ? "on" : "off"}</b>.</p>
       ${admin ? `<div style="display:flex;gap:8px;flex-wrap:wrap">${t.plain_http ? `<button type="button" data-tls="plain-off"${left.length ? ` data-left="${left.length}"` : ""}>Turn off plain HTTP</button>` : `<button type="button" data-tls="plain-on">Turn plain HTTP back on</button>`}
         <button type="button" class="danger" data-tls="off">Turn HTTPS off</button></div>` : ""}
@@ -4882,8 +4909,13 @@ function tlsHtml(t) {
 document.getElementById("agBody") && document.getElementById("agBody").addEventListener("click", async e => {
   const b = e.target.closest("[data-tls]"); if (!b) return;
   const act = b.dataset.tls;
-  if (act === "plain-off" && !confirm((b.dataset.left ? `${b.dataset.left} agent(s) still report over plain HTTP and will stop reporting until they move to HTTPS. ` : "") +
-      "Turn off plain HTTP on the agent port?\n\nA reverse proxy that forwards to it over plain HTTP (e.g. a firewall's web server protection) will stop working too.")) return;
+  if (act === "plain-off") {
+    if (!b.dataset.left && !confirm("Turn off plain HTTP on the agent port?\n\nA reverse proxy that forwards to it over plain HTTP (e.g. a firewall's web server protection) will stop working too.")) return;
+    b.disabled = true;
+    const d = await plainOff();
+    if (!d) { b.disabled = false; return; }
+    agInfo.tls = d.tls; document.getElementById("agTls").innerHTML = tlsHtml(d.tls); load(); return;
+  }
   if (act === "off" && !confirm("Turn HTTPS off? Agents go back to plain HTTP (it's turned back on).")) return;
   b.disabled = true;
   const body = act === "on" ? {https: true} : act === "off" ? {https: false} : {plain_http: act === "plain-on"};
@@ -5098,10 +5130,15 @@ document.getElementById("tlsPlainLater").addEventListener("click", () => {
   document.getElementById("tlsPlain").hidden = true;
 });
 document.getElementById("tlsPlainOff").addEventListener("click", async () => {
-  if (!confirm("Turn off plain HTTP on the agent port?\n\nEvery agent already reports over HTTPS. An agent that hasn't moved (e.g. one switched off for a while) moves over the next time it reports, as long as it can reach Rollcall's HTTPS port. You can turn plain HTTP back on under Manage → Agents.")) return;
-  const r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({plain_http: false})});
-  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "That didn't work (" + r.status + ")"); return; }
+  if (!confirm("Turn off plain HTTP on the agent port?\n\nEvery agent that reported in the last 2 days did so over Rollcall's own HTTPS. One switched off for longer moves over the next time it reports, as long as it can reach Rollcall's HTTPS port. If any stop reporting, Rollcall says so here, and you can turn plain HTTP back on.")) return;
+  if (!await plainOff()) return;
   document.getElementById("tlsPlain").hidden = true;
+  load();
+});
+document.getElementById("tlsLostOn").addEventListener("click", async () => {
+  const r = await fetch("api/agents/tls", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({plain_http: true})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || "That didn't work (" + r.status + ")"); return; }
+  document.getElementById("tlsLost").hidden = true;
   load();
 });
 
