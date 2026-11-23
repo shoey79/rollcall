@@ -75,6 +75,16 @@ together). Remove each once it's released.
   violations, with a hint (sfc /scannow, DISM /RestoreHealth first); shown on the device's Security or Overview tab
   with when it last ran.
 
+- Rename the agents to Rollcall (owner asked 23 Nov). Windows: PingMonitorAgent.ps1 → RollcallAgent.ps1,
+  C:\ProgramData\PingMonitor → C:\ProgramData\Rollcall, task "Ping Monitor Agent" → "Rollcall Agent" (and the
+  installer's names). Linux: pingmonitor-agent.py, /var/lib/pingmonitor, unit pingmonitor-agent → rollcall-agent
+  (the router agent is already rollcall-agent.sh). Existing agents move themselves at an update, safely: copy the
+  script, token and state to the new place, create the new task/unit, let the new one run and report, and only once
+  Rollcall has had a report from the new name remove the old task/unit and folder (the old one stays as the fallback
+  until then; a failed move leaves the old one running and says why). Rollcall accepts both names during the move;
+  install/uninstall commands, docs and the Agents page use the new names. The add-on's own slug (ping_monitor)
+  stays: changing it would make Home Assistant see a different add-on.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
