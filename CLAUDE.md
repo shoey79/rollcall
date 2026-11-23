@@ -110,6 +110,15 @@ together). Remove each once it's released.
   "lan = <description> = hn1" (read only; descriptions are the user's own, and not every box has a "wan" key).
   Gateway and tunnel names are user-defined: never put the owner's in tests or docs.
 
+- "What's new" after an update (owner asked 23 Nov). The first time an admin opens Rollcall after it's updated, a
+  pop-up gives a short overview of what changed since the version they last saw, with a link to the full changelog
+  (an in-app view of CHANGELOG.md, and the GitHub page). Admins only; once per admin, not per browser: the version
+  each admin last saw is kept server-side with their user, set to the current version on a fresh install (so no
+  pop-up the first time) and when they close it. Several versions skipped: one pop-up covering them all, newest
+  first. The overview is each entry's bold lead line from CHANGELOG.md (the image doesn't include CHANGELOG.md yet:
+  copy it in the Dockerfile, or into app/ at build). Also a "What's new" link under the version in the menu to open
+  it again. Keep it light; never for non-admins or view-only users.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
