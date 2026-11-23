@@ -103,8 +103,11 @@ together). Remove each once it's released.
   from pfctl -si "current entries" against pfctl -sm "states hard limit"; IPsec SAs from swanctl --list-sas (empty
   when nothing's up; --list-conns has the configured ones); interface errors from netstat -ibn <Link#> rows.
   Updates: use pfSense-upgrade -c only ("Your system is up to date"); `pkg version -l '<'` lists php etc. as older
-  even when pfSense is current (they come with the next pfSense release), so don't use it. Interface names
-  (WAN/LAN) and whether curl/php are there for posting (FreeBSD fetch can't POST): asked the owner to check.
+  even when pfSense is current (they come with the next pfSense release), so don't use it. pfSense has
+  /usr/local/bin/curl (8.x, OpenSSL) and php: post with curl, so HTTPS to Rollcall works from the start (unlike most
+  OpenWrt routers). Interface names: `php -r 'require_once("config.inc"); foreach
+  (get_configured_interface_with_descr() as $k => $v) echo "$k = $v = " . get_real_interface($k) . "\n";'` gives
+  "lan = <description> = hn1" (read only; descriptions are the user's own, and not every box has a "wan" key).
   Gateway and tunnel names are user-defined: never put the owner's in tests or docs.
 
 ## Built, waiting for release
