@@ -85,6 +85,7 @@ options:
   agent_bitlocker_require: workstations
   agent_sql_backup_hours: 36
   printer_supply_warn: 10
+  offline: false
   software_updates: true
   vuln_checks: true
   vuln_min_score: 9
@@ -191,6 +192,7 @@ schema:
   agent_bitlocker_require: list(off|workstations|all)
   agent_sql_backup_hours: int(1,8760)
   printer_supply_warn: int(1,50)
+  offline: bool
   software_updates: bool
   vuln_checks: bool
   vuln_min_score: int(1,10)

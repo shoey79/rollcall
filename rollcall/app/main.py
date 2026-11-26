@@ -72,6 +72,7 @@ import vulns as vulnlib
 import msi as msilib
 import settingslib
 import whatsnew as wnlib
+import offline as offlib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -125,6 +126,7 @@ LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 SH_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.sh"  # OpenWrt / BusyBox: no Python needed
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
 VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vulnerability data, refreshed daily
+OFFLINE_PATH = DB_PATH.parent / "offline.json"  # the last offline data bundle imported: when it was made and imported
 SOFTWARE_DIR = Path(os.environ.get("PM_SOFTWARE", str(DB_PATH.parent / "software")))  # each agent's installed software
 SECRETS_DIR = Path(os.environ.get("PM_SECRETS", str(DB_PATH.parent / "secrets")))  # where each agent found passwords (never the passwords)
 VIEWS_PATH = Path(os.environ.get("PM_VIEWS", str(DB_PATH.parent / "views.json")))
@@ -223,6 +225,7 @@ DEFAULTS = {
     "agent_bitlocker_require": "workstations",
     "agent_sql_backup_hours": 36,
     "printer_supply_warn": 10,
+    "offline": False,
     "software_updates": True,
     "vuln_checks": True,
     "vuln_min_score": 9,
@@ -3073,7 +3076,7 @@ class Monitor:
             h.jf_data = None
             return (False, None, str(err), "warn") if err.login else (False, None, str(err))
         h.jf_data = d
-        return jflib.evaluate(d, await jflib.latest_release())
+        return jflib.evaluate(d, None if self.offline() else await jflib.latest_release())
 
     async def plex_check(self, h: Host) -> tuple:
         """Plex: what's playing and the server's state (plex.py), read with its token at each check."""
@@ -3997,6 +4000,22 @@ class Monitor:
                     meta = json.loads(meta_path.read_text())
                 except (OSError, ValueError):
                     meta = {}
+                # The copy already here first, so a failed download (or no internet at all) still has a catalogue
+                if WINGET_PATH.exists() and (self.winget is None or loaded != WINGET_PATH.stat().st_mtime):
+                    stamp = WINGET_PATH.stat().st_mtime
+                    try:
+                        idx = await asyncio.get_running_loop().run_in_executor(None, lambda: wingetidx.Index.from_msix(WINGET_PATH.read_bytes()))
+                        self.winget, loaded = idx, stamp
+                        self._newer.clear()
+                        log.info("Software updates: the winget catalogue has %d packages", len(idx.packages))
+                    except Exception as err:  # noqa: BLE001 - damaged: downloaded again below (when online)
+                        log.warning("Software updates: the saved winget catalogue couldn't be read (%s)", err)
+                        meta = {}
+                if self.offline():
+                    self.winget_info = {"offline": True, "fetched": meta.get("fetched"), "imported": meta.get("imported"),
+                                        "packages": len(self.winget.packages) if self.winget else 0}
+                    await asyncio.sleep(300)  # an imported catalogue is picked up within 5 minutes
+                    continue
                 if not WINGET_PATH.exists() or time.time() - (meta.get("fetched") or 0) > 20 * 3600:
                     hdrs = {"If-None-Match": meta["etag"]} if WINGET_PATH.exists() and meta.get("etag") else {}
                     async with ClientSession(timeout=ClientTimeout(total=900)) as session:
@@ -4123,7 +4142,33 @@ class Monitor:
         return {"found": sorted(found or [], key=lambda f: (not f["exploited"], -(f["score"] or 0), f["cve"]))[:500],
                 "checked": found is not None, "why_not": None if found is not None else self._vuln_why_not(h),
                 "min_score": int(self.opts.get("vuln_min_score", 9)), "linux_source": str(self.opts.get("vuln_linux_source") or "local"),
-                "info": self.vulnfeeds.info}
+                "info": {**self.vulnfeeds.info, **({"offline": True, "bundle": self.offline_bundle()} if self.offline() else {})}}
+
+    def offline(self) -> bool:
+        """Offline mode: nothing is downloaded (an airgapped network); imported data is used instead."""
+        return bool(self.opts.get("offline"))
+
+    @staticmethod
+    def offline_bundle() -> dict:
+        """The last offline data bundle imported: {"made", "imported", "made_by"} ({} if none)."""
+        try:
+            return json.loads(OFFLINE_PATH.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    async def import_offline(self, path: Path, who: str | None) -> dict:
+        manifest = await asyncio.to_thread(offlib.import_bundle, path, VULN_DIR, WINGET_PATH, WINGET_PATH.with_suffix(".json"))
+        info = {"made": manifest.get("made"), "made_by": manifest.get("made_by"), "imported": manifest["imported"]["at"],
+                "by": who or "", "vulns": manifest.get("vulns"), "winget": manifest.get("winget")}
+        OFFLINE_PATH.write_text(json.dumps(info))
+        if manifest["imported"]["vulns"]:
+            await asyncio.to_thread(self.vulnfeeds.load)
+            self._vf.clear()
+            for h in list(self.hosts.values()):
+                if h.agent_id:
+                    await self.reevaluate(h)
+        log.info("Offline data imported (made %s)%s", time.strftime("%Y-%m-%d %H:%M", time.gmtime(manifest.get("made") or 0)), f" by {who}" if who else "")
+        return info
 
     def _vuln_wanted(self, mode: str) -> tuple[set, list]:
         """The Linux releases the agents run, and (online) every package and version to ask OSV about."""
@@ -4150,7 +4195,15 @@ class Monitor:
         await asyncio.sleep(first_wait)
         while True:
             try:
-                if self.opts.get("vuln_checks", True):
+                if self.opts.get("vuln_checks", True) and self.offline():
+                    # Offline: nothing downloaded and no warnings; the imported data is used as it is
+                    if reeval:
+                        self._vf.clear()
+                        for h in list(self.hosts.values()):
+                            if h.agent_id:
+                                await self.reevaluate(h)
+                        reeval = False
+                elif self.opts.get("vuln_checks", True):
                     mode = str(self.opts.get("vuln_linux_source") or "local")
                     wanted, queries = self._vuln_wanted(mode)
                     async with ClientSession(timeout=ClientTimeout(total=3600, sock_connect=30, sock_read=300)) as session:
@@ -6222,6 +6275,51 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         restarting = await monitor.ha.restart_self()
         return web.json_response({"ok": True, "manifest": manifest, "restarting": restarting, "options": options_note})
 
+    async def offline_status(req):
+        wm = {}
+        try:
+            wm = json.loads(WINGET_PATH.with_suffix(".json").read_text())
+        except (OSError, ValueError):
+            pass
+        vi = monitor.vulnfeeds.info
+        return web.json_response({"offline": monitor.offline(), "bundle": monitor.offline_bundle(),
+                                  "vulns": {"msrc_at": vi.get("msrc_at"), "kev_at": vi.get("kev_at"), "osv_at": vi.get("osv_at"),
+                                            "msrc_months": vi.get("msrc_months"), "osv_releases": vi.get("osv_releases")},
+                                  "winget": {"fetched": wm.get("fetched"), "packages": len(monitor.winget.packages) if monitor.winget else 0}})
+
+    async def offline_export(req):
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        path = upload_dir / f"offline-{secrets.token_hex(8)}.zip"
+        user = await access.who(req)
+        wm = {}
+        try:
+            wm = json.loads(WINGET_PATH.with_suffix(".json").read_text())
+        except (OSError, ValueError):
+            pass
+        try:
+            m = await asyncio.to_thread(offlib.export_bundle, path, VULN_DIR, WINGET_PATH, wm, os.environ.get("PM_VERSION") or "")
+        except OSError as err:
+            path.unlink(missing_ok=True)
+            return web.json_response({"error": f"Couldn't make the bundle: {err}"}, status=500)
+        log.info("Offline data bundle exported by %s", user.get("display") or "someone")
+        name = "rollcall-offline-data-" + time.strftime("%Y-%m-%d", time.gmtime(m["made"])) + ".zip"
+        resp = web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{name}"', "Content-Type": "application/zip"})
+        asyncio.get_running_loop().call_later(600, lambda: path.unlink(missing_ok=True))
+        return resp
+
+    async def offline_import(req):
+        path = _upload_path(req)
+        if not req.query.get("upload") or not path.exists():
+            return web.json_response({"error": "Upload not found; try again"}, status=400)
+        user = await access.who(req)
+        try:
+            info = await monitor.import_offline(path, user.get("display"))
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        finally:
+            path.unlink(missing_ok=True)
+        return web.json_response({"ok": True, "bundle": info})
+
     async def ha_entities(req):
         """Home Assistant sensors for the Edit dialog's search, best matches first."""
         q = (req.query.get("q") or "").strip().lower()
@@ -7599,6 +7697,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/whats-new/seen", admin_only(whats_new_seen))
     app.router.add_post("/api/hosts/{key}/agent/sfc", editor_only(agent_sfc))
     app.router.add_get("/api/changelog", admin_only(changelog))
+    app.router.add_get("/api/offline", admin_only(offline_status))
+    app.router.add_get("/api/offline/export", admin_only(offline_export))
+    app.router.add_post("/api/offline/import", admin_only(offline_import))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))

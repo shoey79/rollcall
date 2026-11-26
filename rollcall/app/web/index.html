@@ -595,6 +595,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="swBtn" role="menuitem" title="Which devices have a program installed, and which version"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5 8 2.5 13.5 5v6L8 13.5 2.5 11zM2.5 5 8 7.5 13.5 5M8 7.5v6"/></svg>Find software</button>
         <button type="button" id="settingsBtn" role="menuitem" title="Check intervals, notifications, alert limits and agent options"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="8" r="4.6"/><path d="M12.6 8.0L14.2 8.0 M11.3 11.3L12.4 12.4 M8.0 12.6L8.0 14.2 M4.7 11.3L3.6 12.4 M3.4 8.0L1.8 8.0 M4.7 4.7L3.6 3.6 M8.0 3.4L8.0 1.8 M11.3 4.7L12.4 3.6"/></svg>Settings</button>
         <button type="button" id="backupBtn" role="menuitem" hidden title="Export everything to move it to another install, or import an export"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2.5v10M2.5 10 5 12.5 7.5 10M11 13.5v-10M8.5 6 11 3.5 13.5 6"/></svg>Export / import</button>
+        <button type="button" id="offBtn" role="menuitem" hidden title="Vulnerability lists and the winget catalogue for a Rollcall without the internet"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10v8H3zM5.5 4.5V3h5v1.5M8 7v3.5M6.3 8.8 8 10.5l1.7-1.7"/></svg>Offline data</button>
         <button type="button" id="logBtn" role="menuitem" title="Rollcall's own log, as in Home Assistant's Settings > Apps > Rollcall > Log"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="1.8" width="10" height="12.4" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>Log</button>
         <button type="button" id="dbBtn" role="menuitem" title="How big Rollcall's database is, what takes the room, and whether it's healthy"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="3.8" rx="5" ry="1.8"/><path d="M3 3.8v8.4c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V3.8M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8"/></svg>Database</button>
         <button type="button" id="msgBtn" role="menuitem" hidden title="Send a short message to the screens of agent devices (admins only)"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Messages</button>
@@ -715,6 +716,28 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <label class="row-inline" style="margin-top:8px;font-size:13px"><input type="checkbox" id="bkOptions" checked> Also restore the Configuration-tab settings (notifications, thresholds, agent options)</label>
         <p style="margin-top:10px"><button type="button" class="danger" id="bkImport" disabled>Import and restart</button></p>
         <p class="hint" id="bkStatus"></p>
+      </div>
+    </div>
+    <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="offDlg">
+  <form method="dialog">
+    <div class="dlg-head"><h2>Offline data</h2><div class="sub">For a Rollcall without the internet: the vulnerability lists and the winget catalogue, made on one that has it.</div></div>
+    <div class="dlg-body">
+      <div id="offState"><p class="empty-note">Loading…</p></div>
+      <div class="bk">
+        <h3>Export</h3>
+        <p>Downloads one file with this Rollcall's vulnerability data (Microsoft, CISA and OSV.dev) and the winget catalogue. Nothing else: no devices, settings or keys.</p>
+        <button type="button" class="primary" id="offExport">Download offline data</button> <span class="hint" id="offExportNote"></span>
+      </div>
+      <div class="bk">
+        <h3>Import</h3>
+        <p>Replaces this Rollcall's vulnerability data and winget catalogue with the file's. Devices are checked against it straight away; no restart.</p>
+        <div class="row-inline"><input type="file" id="offFile" accept=".zip,application/zip"></div>
+        <p style="margin-top:10px"><button type="button" class="primary" id="offImport" disabled>Import</button></p>
+        <p class="hint" id="offStatus"></p>
       </div>
     </div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
@@ -2349,6 +2372,62 @@ document.getElementById("stForm").addEventListener("submit", e => e.preventDefau
 
 // ---- Export / import ----
 const bkDlg = document.getElementById("bkDlg");
+// Offline data: export the downloaded reference data here, import it on a Rollcall without the internet
+const dateOf = t => t ? new Date(t * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"}) : "";
+const ageOf = t => t ? (d => d < 1 ? "today" : d < 2 ? "1 day old" : Math.floor(d) + " days old")((Date.now() / 1000 - t) / 86400) : "";
+async function offLoad() {
+  const box = document.getElementById("offState");
+  const r = await fetch("api/offline", {cache: "no-store"}).catch(() => null), j = r && r.ok ? await r.json() : null;
+  if (!j) { box.innerHTML = `<p class="empty-note">Couldn't read the status.</p>`; return; }
+  const v = j.vulns || {}, w = j.winget || {}, b = j.bundle || {};
+  const newest = Math.max(v.msrc_at || 0, v.kev_at || 0);
+  box.innerHTML = `<div class="kv" style="margin-bottom:10px">
+    <div><span>Mode</span>${j.offline ? "<b>Offline</b>: nothing is downloaded" : "Online: downloaded daily"}</div>
+    <div><span>Vulnerability data</span>${newest ? `${dateOf(newest)} <small class="muted">(${ageOf(newest)})</small>` : "None yet"}</div>
+    <div><span>winget catalogue</span>${w.fetched ? `${dateOf(w.fetched)} <small class="muted">(${ageOf(w.fetched)}; ${(w.packages || 0).toLocaleString()} packages)</small>` : "None yet"}</div>
+    ${b.imported ? `<div><span>Last import</span>${dateOf(b.imported)}${b.by ? " by " + esc(b.by) : ""}<br><small class="muted">made ${dateOf(b.made)}</small></div>` : ""}</div>
+    ${j.offline ? "" : `<p class="hint">To stop Rollcall trying to download (and warning that it can't), turn on <b>Offline (no internet)</b> in Settings.</p>`}`;
+}
+document.getElementById("offBtn").addEventListener("click", () => {
+  document.getElementById("mainMenu").hidden = true;
+  document.getElementById("offStatus").textContent = ""; document.getElementById("offExportNote").textContent = "";
+  document.getElementById("offDlg").showModal(); offLoad();
+});
+document.getElementById("offExport").addEventListener("click", async e => {
+  const b = e.target, note = document.getElementById("offExportNote");
+  b.disabled = true; note.textContent = "Making the file (a minute for the larger lists)…";
+  try {
+    const r = await fetch("api/offline/export", {cache: "no-store"});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    const blob = await r.blob();
+    const name = (/filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "") || [])[1] || "rollcall-offline-data.zip";
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    note.textContent = `Downloaded ${name} (${(blob.size / 1048576).toFixed(1)} MB).`;
+  } catch (err) { note.textContent = "Export failed (" + err.message + ")."; }
+  b.disabled = false;
+});
+document.getElementById("offFile").addEventListener("change", e => { document.getElementById("offImport").disabled = !e.target.files.length; });
+document.getElementById("offImport").addEventListener("click", async e => {
+  const f = document.getElementById("offFile").files[0], st = document.getElementById("offStatus");
+  if (!f) return;
+  e.target.disabled = true;
+  try {
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(10)), x => x.toString(16).padStart(2, "0")).join("");
+    const CHUNK = 1024 * 1024;  // Home Assistant's ingress proxy rejects large requests
+    for (let off = 0; off < f.size; off += CHUNK) {
+      st.textContent = `Uploading… ${Math.round(100 * off / f.size)}%`;
+      const c = await fetch(`api/import/chunk?upload=${id}&offset=${off}`, {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: f.slice(off, off + CHUNK)});
+      if (!c.ok) { const d = await c.json().catch(() => ({})); throw new Error(d.error || `upload failed (${c.status})`); }
+    }
+    st.textContent = "Checking the file…";
+    const r = await fetch(`api/offline/import?upload=${id}`, {method: "POST"}), d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `import failed (${r.status})`);
+    st.textContent = `Imported data made ${dateOf(d.bundle.made)}.`;
+    offLoad();
+  } catch (err) { st.textContent = err.message; }
+  e.target.disabled = false;
+});
 document.getElementById("backupBtn").addEventListener("click", () => {
   document.getElementById("bkStatus").textContent = ""; document.getElementById("bkExportNote").textContent = "";
   document.getElementById("bkFile").value = ""; document.getElementById("bkImport").disabled = true;
@@ -2443,7 +2522,8 @@ function applyStatus(fresh) {
     document.getElementById("verTxt").textContent = data.version ? "Version " + data.version : "Rollcall";
     if (data.can_admin && (data.whats_new || []).length && !wnShown) { wnShown = true; wnOpen(data.whats_new); }
     document.getElementById("dbCompact").hidden = !data.can_admin;
-    document.getElementById("backupBtn").hidden = !data.can_admin;  // exports hold private keys: admins only
+    document.getElementById("backupBtn").hidden = !data.can_admin;
+    document.getElementById("offBtn").hidden = !data.can_admin;  // exports hold private keys: admins only
     let later = 0; try { later = +localStorage.getItem("pm_tls_later") || 0; } catch (e) { }
     document.getElementById("tlsPrompt").hidden = !(data.tls_prompt && data.can_admin && Date.now() - later > 7 * 86400000);
     let laterPlain = 0; try { laterPlain = +localStorage.getItem("pm_tls_plain_later") || 0; } catch (e) { }
@@ -3278,12 +3358,15 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const inf = vu.info || {}, errs = Object.entries(inf.errors || {});
       const srcs = [linux ? (vu.linux_source === "online" ? "OSV.dev (asked online)" : "OSV.dev data downloaded daily") : `Microsoft's security updates (${inf.msrc_months || 0} months)`,
         `CISA's known-exploited list (${(inf.kev || 0).toLocaleString()} CVEs)`];
+      // Offline: the data is whatever was imported, so say how old it is
+      const offAt = inf.offline ? Math.max(inf.msrc_at || 0, inf.kev_at || 0, inf.osv_at || 0) : 0;
+      const offNote = inf.offline ? `<p class="hint">📴 Offline: Rollcall doesn't download this data. ${offAt ? `It's from ${new Date(offAt * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})} (${Math.floor((Date.now() / 1000 - offAt) / 86400)} days old)` : "None has been imported yet"}; import newer data under <b>Manage, Offline data</b>.</p>` : "";
       const cveLink = c => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
-      const body = !vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
+      const body = offNote + (!vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
         : !vu.found.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : ""}.</p>`
         : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], vu.found.map(f =>
             `<tr><td>${cveLink(f.cve)}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
-             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`));
+             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`)));
       html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
         + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
     }
@@ -3299,6 +3382,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const user = sw.apps.some(a => a.scope === "user"), nNew = sw.apps.filter(a => a.newer).length, nVul = sw.apps.filter(a => a.vulns).length;
       const wg = sw.winget || {};
       const src = linux ? "Newer versions come from the package manager's own list of updates."
+        : sw.updates_from === "winget" && wg.offline ? `📴 Offline: newer versions come from the imported winget catalogue${wg.fetched ? `, from ${new Date(wg.fetched * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})} (${Math.floor((Date.now() / 1000 - wg.fetched) / 86400)} days old)` : ""}; import a newer one under <b>Manage, Offline data</b>.`
+        : !wg.packages && wg.offline ? "📴 Offline: no winget catalogue has been imported, so newer versions aren't checked. Import one under <b>Manage, Offline data</b>."
         : sw.updates_from === "winget" ? `Newer versions come from the winget catalogue (${wg.packages ? wg.packages.toLocaleString() + " packages, " : ""}checked daily); programs it doesn't list aren't checked.`
         : wg.off ? "Checking for newer versions is turned off (the <code>software_updates</code> option)."
         : wg.error ? `Newer versions can't be checked at the moment: the winget catalogue couldn't be downloaded (${esc(wg.error)}).`
