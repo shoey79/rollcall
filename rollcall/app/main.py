@@ -64,6 +64,7 @@ import iprange
 import jellyfin as jflib
 import vmware as vmlib
 import opnsense as opnlib
+import oslife
 import plex as pxlib
 import starlink as sllib
 import firetv as ftlib
@@ -4349,12 +4350,24 @@ class Monitor:
         its own (both for end-of-life systems kept on purpose)."""
         if ((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip")):
             return "this device is excluded as end of life"
-        os_name = str((h.agent_report or {}).get("os") or "")
         for pat in self.opts.get("vuln_skip_os") or []:
             pat = str(pat).strip()
-            if pat and re.search(r"(?<![A-Za-z0-9])" + re.escape(pat) + r"(?![A-Za-z0-9])", os_name, re.I):
+            if oslife.matches(pat, h.agent_report):
                 return f"{pat} is excluded as end of life"
         return None
+
+    def os_releases(self) -> list[dict]:
+        """The operating system releases agents report, with how many devices run each and when support ends: the
+        ticks for vuln_skip_os in Settings."""
+        count: dict[str, int] = {}
+        for h in self.hosts.values():
+            rel = oslife.group(h.agent_report) if h.agent_id else None
+            if rel:
+                count[rel] = count.get(rel, 0) + 1
+        kind = lambda r: 0 if r.startswith("Windows") and "Server" not in r else 1 if "Server" in r else 2  # noqa: E731
+        nat = lambda r: [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", r)]  # noqa: E731
+        return [{"name": r, "devices": n, "ends": oslife.end(r), "ended": oslife.ended(r)}
+                for r, n in sorted(count.items(), key=lambda x: (kind(x[0]), nat(x[0])))]
 
     async def set_vuln_skip(self, h: Host, skip: bool, who: str | None) -> None:
         hs = self.agent_settings["hosts"].setdefault(h.key, {})
@@ -6396,6 +6409,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "values": settingslib.values(monitor.opts),
             "can_admin": await access.is_admin(req),
             "notify_services": notify,
+            "os_releases": monitor.os_releases(),
             "ssl_files": live.ssl_files() if live else [],
             "agent_port": "HTTPS" if live and live.agent_listener and live.agent_listener.https else "HTTP",
             "agent_tls": _tls_info(),  # Rollcall's own HTTPS (Manage → Agents), so the Agent port note tells the whole story
