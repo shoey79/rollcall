@@ -90,6 +90,10 @@ options:
   vuln_min_score: 9
   vuln_linux_source: local
   agent_secret_scan: "off"
+  agent_sfc: "off"
+  agent_sfc_day: sunday
+  agent_sfc_hour: 3
+  agent_sfc_dism: false
   name_line: auto
   ip_ranges: []
   agent_exchange_queue_warn: 250
@@ -192,6 +196,10 @@ schema:
   vuln_min_score: int(1,10)
   vuln_linux_source: list(local|online|off)
   agent_secret_scan: list(off|servers|workstations|all)
+  agent_sfc: list(off|servers|workstations|all)
+  agent_sfc_day: list(monday|tuesday|wednesday|thursday|friday|saturday|sunday)
+  agent_sfc_hour: int(0,23)
+  agent_sfc_dism: bool
   name_line: list(auto|model|os|address|user|none)
   ip_ranges:
     - str

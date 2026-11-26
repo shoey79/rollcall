@@ -341,6 +341,8 @@ def normalize_report(r) -> dict:
         d["signature_version"] = str(d.get("signature_version") or "")[:40] or None
         age = d.get("signature_age_days")
         d["signature_age_days"] = int(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+    if "sfc" in c:  # Windows agent 1.0.59+: the weekly read-only system file check
+        c["sfc"] = clean_sfc(c["sfc"])
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
     if "laps" in c:
@@ -778,6 +780,45 @@ def secrets_state(status: dict, findings: list, ign: "Ignore", ack_at: float = 0
 
 def fmt_speed(mbps: int) -> str:
     return f"{mbps / 1000:g} Gb/s" if mbps >= 1000 else f"{mbps} Mb/s"
+
+
+SFC_STATES = ("ok", "violations", "failed", "running", "never")
+DISM_STATES = ("healthy", "repairable", "not_repairable", "failed")
+
+
+def clean_sfc(raw) -> dict:
+    """The system file check as the agent reports it, with only the fields Rollcall shows."""
+    d = _as_dict(raw)
+    st = d.get("state") if d.get("state") in SFC_STATES else "never"
+    out = {"state": st, "started": str(d.get("started") or "")[:30] or None, "finished": str(d.get("finished") or "")[:30] or None,
+           "files": [str(f)[:200] for f in _as_list(d.get("files")) if isinstance(f, str) and f][:30],
+           "count": int(d["count"]) if isinstance(d.get("count"), int) and not isinstance(d.get("count"), bool) else None,
+           "detail": str(d.get("detail") or "")[:300] or None, "trigger": d.get("trigger") if d.get("trigger") in ("schedule", "now") else None}
+    dm = d.get("dism")
+    if isinstance(dm, dict) and dm.get("state") in DISM_STATES:
+        out["dism"] = {"state": dm["state"], "detail": str(dm.get("detail") or "")[:300] or None}
+    return out
+
+
+def sfc_check(sfc: dict | None) -> dict | None:
+    """The "System files" check: amber when the read-only check found files that don't match what Windows
+    expects (or DISM says its repair store is damaged). Never red: nothing is down because of it."""
+    if not sfc or sfc.get("state") == "never":
+        return None
+    when = (sfc.get("finished") or sfc.get("started") or "")[:10]
+    dm = sfc.get("dism") or {}
+    store = {"repairable": "; component store damaged (repairable)", "not_repairable": "; component store damaged and can't be repaired"}.get(dm.get("state"), "")
+    if sfc["state"] == "running":
+        return _check("sfc", "System files", OK, f"Checking now (started {(sfc.get('started') or '')[:16].replace('T', ' ')})")
+    if sfc["state"] == "violations":
+        n = sfc.get("count") or len(sfc.get("files") or []) or None
+        return _check("sfc", "System files", WARN,
+                      f"Integrity violations found{f' in {n} file(s)' if n else ''} ({when}){store}. Run DISM /Online /Cleanup-Image /RestoreHealth, then sfc /scannow")
+    if store:
+        return _check("sfc", "System files", WARN, f"No integrity violations ({when}){store}. Run DISM /Online /Cleanup-Image /RestoreHealth")
+    if sfc["state"] == "failed":
+        return _check("sfc", "System files", OK, f"Couldn't run ({when}): {sfc.get('detail') or 'see the details'}")
+    return _check("sfc", "System files", OK, f"No integrity violations ({when})")
 
 
 def _check(key, label, level, detail, confirm=False, info=None):
@@ -1869,6 +1910,10 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
         checks.append(_check("hyperv", "Hyper-V", CRIT if bad else OK,
                              ("Critical state: " + ", ".join(f"{v['name']} ({v['state']})" for v in bad)) if bad
                              else f"{running} of {len(vms)} VMs running"))
+
+    sc = sfc_check(rc.get("sfc"))  # off for a device in its details, not by Ignore
+    if sc:
+        checks.append(sc)
 
     printers = rc.get("printers")
     if printers:

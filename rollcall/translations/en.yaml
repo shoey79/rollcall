@@ -194,6 +194,18 @@ configuration:
   agent_secret_scan:
     name: Scan for passwords left in files
     description: Which devices' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each device can be turned on or off in its details.
+  agent_sfc:
+    name: System file check (Windows)
+    description: Which Windows devices' agents run a weekly read-only system file check (sfc /verifyonly), which never repairs anything. It takes 10 to 30 minutes of CPU and disk, in the background. Each device can be turned on or off, or run now, in its details.
+  agent_sfc_day:
+    name: System file check day
+    description: The day of the week the system file check runs, in each device's own time.
+  agent_sfc_hour:
+    name: System file check hour
+    description: The hour it starts (0 to 23), in each device's own time. A device that's off then runs it the next time it's on.
+  agent_sfc_dism:
+    name: Also check the component store (DISM)
+    description: After the system file check, run DISM /ScanHealth (also read only), which checks the store Windows repairs system files from. Takes a few more minutes.
   ip_ranges:
     name: Named IP ranges
     description: "Names for parts of your network, shown next to each device's address, e.g. Servers=10.0.1.0/24 or IoT=192.168.20.10-200. A range can be a subnet, a span (10.0.1.10-50) or end in a wildcard (10.0.1.*); separate several with commas. Where ranges overlap, the smallest one wins."

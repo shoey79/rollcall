@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.58'
+$AgentVersion = '1.0.59'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -165,6 +165,8 @@ function Read-State {
                 try { $state.veeam_policy_checked = [int64]$raw.veeam_policy_checked } catch { } }
             foreach ($p in @($raw.PSObject.Properties | Where-Object { $_.Name -like 'bp_*' })) { $state[$p.Name] = [string]$p.Value }
             if ($raw.sig_serial) { try { $state.sig_serial = [int64]$raw.sig_serial } catch { } }
+            if ($raw.sfc_job) { $state.sfc_job = [string]$raw.sfc_job }
+            if ($raw.sfc_conf) { try { $state.sfc_conf = @{ on = [bool]$raw.sfc_conf.on; day = [int]$raw.sfc_conf.day; hour = [int]$raw.sfc_conf.hour; dism = [bool]$raw.sfc_conf.dism; run_now = [int64]$raw.sfc_conf.run_now } } catch { } }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
             if ($raw.secrets_sent) { $state.secrets_sent = [string]$raw.secrets_sent }
@@ -1569,6 +1571,155 @@ function Get-DomainSecurity($State) {
     $out.stale_computers = @(Find-AdObjects "(&(objectCategory=computer)$enabled$stale)" $props 200 | ForEach-Object { & $acct $_ })
     $State.ad_report = ($out | ConvertTo-Json -Depth 5 -Compress)
     $State.ad_checked = $nowTs
+    return $out
+}
+
+# ---------------------------------------------------------------------------
+# System file check (1.0.59): sfc /verifyonly, read only, never repairs. It takes 10-30 minutes of CPU and disk,
+# so it runs as its own scheduled task in the background; each report says how it's going and, once it's done,
+# what it found (from CBS.log: sfc's own output is UTF-16 and in the device's language).
+# ---------------------------------------------------------------------------
+$SfcTaskName = "$TaskName (system file check)"
+$SfcRunner = @'
+param([switch]$Dism)
+$ErrorActionPreference = 'Continue'
+$out = Join-Path $PSScriptRoot 'sfc-result.json'
+$r = [ordered]@{ started = (Get-Date).ToUniversalTime().ToString('o') }
+$sys = if (Test-Path "$env:SystemRoot\Sysnative") { "$env:SystemRoot\Sysnative" } else { "$env:SystemRoot\System32" }
+function Run([string]$Exe, [string[]]$Arguments, [string]$Log) {
+    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $Log
+    try { $p.PriorityClass = 'BelowNormal' } catch { }
+    $p.WaitForExit()
+    return $p.ExitCode
+}
+try { $r.sfc_exit = Run "$sys\sfc.exe" @('/verifyonly') (Join-Path $PSScriptRoot 'sfc-output.txt') } catch { $r.error = $_.Exception.Message }
+if ($Dism) {
+    try { $r.dism_exit = Run "$sys\dism.exe" @('/Online', '/Cleanup-Image', '/ScanHealth', '/English') (Join-Path $PSScriptRoot 'dism-output.txt') } catch { $r.dism_error = $_.Exception.Message }
+}
+$r.finished = (Get-Date).ToUniversalTime().ToString('o')
+$r | ConvertTo-Json | Set-Content -Path $out -Encoding ASCII
+'@
+
+function Read-TextLoose([string]$Path) {
+    # sfc writes UTF-16 with stray NULs; this reads either kind as plain text
+    if (-not (Test-Path $Path)) { return '' }
+    $b = [IO.File]::ReadAllBytes($Path)
+    $nul = @($b | Where-Object { $_ -eq 0 }).Count
+    $enc = if ($b.Length -and $nul * 4 -gt $b.Length) { [Text.Encoding]::Unicode } else { [Text.Encoding]::ASCII }  # sfc: UTF-16; DISM: one byte each
+    return ($enc.GetString($b) -replace "`0", '') -replace "[^\x09\x0A\x0D\x20-\x7E]", ''
+}
+
+function Read-CbsSince([DateTime]$Since) {
+    # The lines CBS.log has from the run on (the last 40 MB at most); its times are local
+    $path = Join-Path $env:SystemRoot 'Logs\CBS\CBS.log'
+    if (-not (Test-Path $path)) { return @() }
+    $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $len = $fs.Length; $max = 40MB
+        if ($len -gt $max) { $null = $fs.Seek(-$max, 'End') }
+        $text = (New-Object IO.StreamReader($fs)).ReadToEnd()
+    } finally { $fs.Dispose() }
+    $from = $Since.ToLocalTime().AddMinutes(-1).ToString('yyyy-MM-dd HH:mm:ss')
+    return @($text -split "`r?`n" | Where-Object { $_.Length -gt 19 -and $_.Substring(0, 19) -ge $from })
+}
+
+function Get-SfcVerdict($Job, $Done) {
+    $lines = @(Read-CbsSince ([DateTime]::Parse([string]$Job.started, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal')))
+    $files = New-Object System.Collections.ArrayList
+    foreach ($l in $lines) {
+        foreach ($pat in @("do not match actual file \[l:\d+\]'([^']+)'", "Hashes for file member \[l:\d+\]'([^']+)' do not match", "Cannot (?:repair|verify) member file \[l:\d+\]'([^']+)'")) {
+            if ($l -match $pat -and -not $files.Contains($Matches[1])) { $null = $files.Add($Matches[1]) }
+        }
+    }
+    $complete = [bool]($lines | Where-Object { $_ -match '\[SR\] Verify complete' } | Select-Object -First 1)
+    $out = Read-TextLoose (Join-Path $DataPath 'sfc-output.txt')
+    $v = [ordered]@{ state = 'failed'; started = $Job.started; finished = $(if ($Done) { [string]$Done.finished } else { $null }); trigger = $Job.trigger; files = @($files | Select-Object -First 30); count = $files.Count; detail = $null }
+    if ($files.Count) { $v.state = 'violations' }
+    elseif ($out -match 'did not find any integrity violations') { $v.state = 'ok' }
+    elseif ($out -match 'found (?:integrity violations|corrupt files)') { $v.state = 'violations' }
+    elseif ($complete) { $v.state = 'ok' }
+    else {
+        $last = @($out -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^(Beginning|Verification)\b' }) | Select-Object -Last 1
+        $v.detail = $(if ($out -match 'repair pending|requires? (?:a )?reboot') { 'a repair is waiting for a restart' }
+            elseif ($out -match 'could not perform|servicing operation') { 'another servicing operation (Windows Update, an install) was running' }
+            elseif ($Done -and $Done.error) { [string]$Done.error } elseif ($last) { $last } else { "no result (exit code $($Done.sfc_exit))" })
+    }
+    if ($Done -and $null -ne $Done.dism_exit) {
+        $d = Read-TextLoose (Join-Path $DataPath 'dism-output.txt')
+        $v.dism = [ordered]@{ state = $(if ($d -match 'No component store corruption detected') { 'healthy' } elseif ($d -match 'component store is repairable') { 'repairable' }
+                elseif ($d -match 'cannot be repaired') { 'not_repairable' } else { 'failed' }); detail = $null }
+        if ($v.dism.state -eq 'failed') { $v.dism.detail = (@($d -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -Last 1) }
+    }
+    return $v
+}
+
+function Start-SystemFileCheck([bool]$Dism) {
+    $runner = Join-Path $DataPath 'sfc-run.ps1'
+    Set-Content -Path $runner -Value $SfcRunner -Encoding ASCII
+    foreach ($f in 'sfc-result.json', 'sfc-output.txt', 'dism-output.txt') { Remove-Item (Join-Path $DataPath $f) -Force -ErrorAction SilentlyContinue }
+    $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`"" + $(if ($Dism) { ' -Dism' } else { '' })
+    $ErrorActionPreference = 'Continue'
+    $null = & schtasks.exe /Create /TN $SfcTaskName /TR $cmd /SC ONCE /SD 01/01/2000 /ST 00:00 /RU SYSTEM /RL HIGHEST /F 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't create the system file check task (schtasks exit code $LASTEXITCODE)" }
+    try { Set-TaskTimeLimit @($SfcTaskName) 'PT3H' } catch { }
+    $null = & schtasks.exe /Run /TN $SfcTaskName 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't start the system file check (schtasks exit code $LASTEXITCODE)" }
+}
+
+function Get-SfcSlot($Conf, [DateTime]$Now) {
+    # The latest weekly start time at or before now (local time)
+    $d = $Now.Date.AddHours([int]$Conf.hour)
+    $d = $d.AddDays(-((7 + [int]$d.DayOfWeek - [int]$Conf.day) % 7))
+    if ($d -gt $Now) { $d = $d.AddDays(-7) }
+    return $d
+}
+
+function Get-SystemFileCheck($State, $Conf) {
+    $job = $null
+    if ($State.sfc_job) { try { $job = $State.sfc_job | ConvertFrom-Json } catch { } }
+    $nowUtc = (Get-Date).ToUniversalTime()
+    if ($job -and $job.state -eq 'running') {
+        $done = $null; $res = Join-Path $DataPath 'sfc-result.json'
+        if (Test-Path $res) { try { $done = Get-Content $res -Raw | ConvertFrom-Json } catch { } }
+        $started = [DateTime]::Parse([string]$job.started, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal')
+        if ($done -and $done.finished) {
+            $v = Get-SfcVerdict $job $done
+            $v.requested_now = $job.requested_now; $v.since = $job.since
+            $job = $v
+            Write-AgentLog "System file check finished: $($v.state)$(if ($v.count) { " ($($v.count) file(s))" })"
+        } elseif (($nowUtc - $started).TotalHours -gt 3) {
+            $job = [ordered]@{ state = 'failed'; started = $job.started; finished = $null; trigger = $job.trigger; detail = "it didn't finish within 3 hours"; requested_now = $job.requested_now; since = $job.since }
+        }
+    }
+    $on = $Conf -and $Conf.on
+    $now = [int64]$Conf.run_now -gt [int64]$(if ($job) { $job.requested_now } else { 0 })
+    if (-not $on -and -not $now -and -not $job) { return $null }
+    if (-not $job) { $job = [ordered]@{ state = 'never'; since = ConvertTo-UtcString (Get-Date) } }
+    if (-not ($job.state -eq 'running')) {
+        $due = $false
+        if ($on) {
+            $slot = Get-SfcSlot $Conf (Get-Date)
+            $last = if ($job.started) { [DateTime]::Parse([string]$job.started, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal').ToLocalTime() } else { $null }
+            $since = if ($job.since) { [DateTime]::Parse([string]$job.since, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal').ToLocalTime() } else { [DateTime]::MinValue }
+            # Not straight away when it's first turned on (a weekday afternoon): from the next weekly time
+            $due = $slot -gt $since -and (-not $last -or $last -lt $slot)
+        }
+        if ($due -or $now) {
+            try {
+                Start-SystemFileCheck ([bool]$Conf.dism)
+                $job = [ordered]@{ state = 'running'; started = ConvertTo-UtcString (Get-Date); trigger = $(if ($now) { 'now' } else { 'schedule' })
+                    requested_now = $(if ($now) { [int64]$Conf.run_now } else { $job.requested_now }); since = $job.since }
+                Write-AgentLog "System file check started ($($job.trigger))"
+            } catch {
+                $job = [ordered]@{ state = 'failed'; started = ConvertTo-UtcString (Get-Date); trigger = $(if ($now) { 'now' } else { 'schedule' }); detail = $_.Exception.Message
+                    requested_now = $(if ($now) { [int64]$Conf.run_now } else { $job.requested_now }); since = $job.since }
+            }
+        }
+    }
+    $State.sfc_job = ($job | ConvertTo-Json -Compress -Depth 4)
+    if (-not $on -and $job.state -eq 'never') { return $null }
+    $out = [ordered]@{}
+    foreach ($k in 'state', 'started', 'finished', 'trigger', 'files', 'count', 'detail', 'dism') { if ($null -ne $job.$k) { $out[$k] = $job.$k } }
     return $out
 }
 
@@ -3100,6 +3251,10 @@ function Get-Report($State, [string[]]$ExtraWatch) {
         if ($laps) { $report.checks.laps = $laps }
     } catch { Add-CollectorError 'laps' $_ }
     try {
+        $sfc = Measure-Step 'system file check' { Get-SystemFileCheck $State $State.sfc_conf }
+        if ($sfc) { $report.checks.sfc = $sfc }
+    } catch { Add-CollectorError 'system file check' $_ }
+    try {
         $bl = Measure-Step 'bitlocker' { Get-BitLockerStatus }
         if ($bl) { $report.checks.bitlocker = $bl }
     } catch { Add-CollectorError 'bitlocker' $_ }
@@ -3662,6 +3817,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         $state.secret_scan = @{ on = [bool]$sc.on; paths = @(@($sc.paths) | Where-Object { $_ } | ForEach-Object { ([string]$_).Substring(0, [Math]::Min(260, ([string]$_).Length)) } | Select-Object -First 20)
             hours = $(if ($sc.hours) { [int]$sc.hours } else { 24 }) }
     } else { $state.secret_scan = @{ on = $false } }
+    $sf = if ($res.body) { $res.body.sfc } else { $null }
+    $state.sfc_conf = $(if ($sf) { @{ on = [bool]$sf.on; day = [int]$sf.day; hour = [int]$sf.hour; dism = [bool]$sf.dism; run_now = [int64]$sf.run_now } } else { $null })
     $state.last_run = ConvertTo-UtcString (Get-Date)
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
     # New addresses only with Rollcall's signature: a reply changed on the way can't send this agent elsewhere.
@@ -3785,16 +3942,16 @@ $TaskTimeLimit = 'PT30M'
 # and Windows doesn't start a task again while it's still running, so one stuck run (a check that never
 # answers) kept a device from reporting for days. Runs take seconds, a few minutes at most. Checked after
 # every report, so agents installed before this fix themselves; it can never fail a run.
-function Set-TaskTimeLimit([string[]]$Names = @($TaskName, "$TaskName (start-up)")) {
+function Set-TaskTimeLimit([string[]]$Names = @($TaskName, "$TaskName (start-up)"), [string]$Limit = $TaskTimeLimit) {
     $ErrorActionPreference = 'Continue'
     try {
         if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { return }  # before Windows 8 / Server 2012
         foreach ($n in $Names) {
             $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
-            if (-not $t -or [string]$t.Settings.ExecutionTimeLimit -eq $TaskTimeLimit) { continue }
-            $t.Settings.ExecutionTimeLimit = $TaskTimeLimit
+            if (-not $t -or [string]$t.Settings.ExecutionTimeLimit -eq $Limit) { continue }
+            $t.Settings.ExecutionTimeLimit = $Limit
             $null = Set-ScheduledTask -InputObject $t -ErrorAction Stop
-            Write-AgentLog "The scheduled task '$n' now stops a run after 30 minutes"
+            Write-AgentLog "The scheduled task '$n' now stops a run after $($Limit -replace '^PT', '' -replace 'M$', ' minutes' -replace 'H$', ' hours')"
         }
     } catch { Write-AgentLog "WARN Couldn't set the scheduled task's time limit: $($_.Exception.Message)" }
 }
@@ -3820,6 +3977,7 @@ function Uninstall-Agent {
     Stop-AgentProcess (Get-AgentProcess)  # a run still going (or stuck) would otherwise carry on, holding the lock
     $ErrorActionPreference = 'Continue'
     $null = & schtasks.exe /Delete /TN "$TaskName (start-up)" /F 2>&1  # may not exist
+    $null = & schtasks.exe /Delete /TN $SfcTaskName /F 2>&1  # the system file check's task, if it ever ran
     $ErrorActionPreference = 'Stop'
     if (Test-Path $DataPath) { Remove-Item -Path $DataPath -Recurse -Force }
     Write-Output 'Rollcall agent removed. Revoke it in the dashboard too if it was approved.'

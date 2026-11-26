@@ -91,6 +91,7 @@ button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
 .menu button:hover,.menu button:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .menu button.danger{color:var(--red)}
 .menu hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
+.sfcset{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:12px 0 0}.sfcset label{font-size:13px}
 .btnlink{display:inline-flex;align-items:center;padding:7px 12px;font-size:13.5px;color:var(--accent);text-decoration:none;border-radius:8px}.btnlink:hover{text-decoration:underline}
 .menuver{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 12px 2px;font-size:12px;color:var(--muted)}
 .menu .menuver button{padding:2px 6px;font-size:12px;color:var(--accent)}
@@ -3098,6 +3099,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   flush("domain");  // LAPS: the local administrator password the domain manages, so with Group Policy and Time
   if (c.laps) html += lapsSection(c.laps, (d.checks || []).find(x => x.key === "laps"));
   flush("security");
+  if (!linux && !sh && st.sfc) html += sfcSection(c.sfc, st.sfc, (d.checks || []).find(x => x.key === "sfc"), r.agent_version);
   if (c.bitlocker && (c.bitlocker.volumes || []).length) {
     // BitLocker: each fixed drive's encryption and protection state. Keys are never read.
     const chk = (d.checks || []).find(x => x.key === "bitlocker");
@@ -4646,6 +4648,44 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { b.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
   await openDetails(detKey, ["security", "Passwords left in files"]);
 });
+// System file check (Windows agent 1.0.59): the weekly read-only sfc /verifyonly, its result and its settings
+function sfcSection(sf, cf, chk, ver) {
+  const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const t = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
+  const old = ver && cmpVer("1.0.59", ver) > 0;
+  let inner = "";
+  if (old) inner += `<p class="empty-note">Needs Windows agent 1.0.59 or later (this one is ${esc(ver)}); it updates itself.</p>`;
+  else if (!sf || sf.state === "never") inner += `<p class="empty-note">${cf.on ? `Not run yet. It runs next ${DAYS[cf.day]} at ${String(cf.hour).padStart(2, "0")}:00, or use <b>Run now</b>.` : "Off for this device."}</p>`;
+  else {
+    const dm = sf.dism, DM = {healthy: "No corruption", repairable: "Damaged, repairable", not_repairable: "Damaged, can't be repaired", failed: "Couldn't run"};
+    const res = sf.state === "running" ? `Checking now <small class="muted">(started ${esc(t(sf.started))}; 10 to 30 minutes)</small>`
+      : sf.state === "ok" ? `<span class="okc">✓ No integrity violations</span>`
+      : sf.state === "violations" ? `<b class="old">Integrity violations${sf.count ? ` in ${sf.count} file${sf.count === 1 ? "" : "s"}` : ""}</b>`
+      : `<b class="old">Couldn't run</b>${sf.detail ? `: ${esc(sf.detail)}` : ""}`;
+    inner += `<div class="kv"><div><span>Result</span>${res}</div>${sf.state !== "running" ? `<div><span>Last run</span>${esc(t(sf.finished || sf.started))}${sf.trigger === "now" ? ` <small class="muted">(Run now)</small>` : ""}</div>` : ""}
+      ${dm ? `<div><span>Component store (DISM)</span>${dm.state === "healthy" ? `<span class="okc">${DM[dm.state]}</span>` : `<b class="old">${DM[dm.state]}</b>`}${dm.detail ? `<br><small class="muted">${esc(dm.detail)}</small>` : ""}</div>` : ""}
+      <div><span>Runs</span>${cf.on ? `${DAYS[cf.day]}s at ${String(cf.hour).padStart(2, "0")}:00` : "Only when asked"}</div></div>`;
+    if ((sf.files || []).length) inner += `<p style="margin:10px 0 4px"><b>Files that don't match:</b></p><ul class="bklog">${sf.files.map(f => `<li><code>${esc(f)}</code></li>`).join("")}</ul>`;
+    if (sf.state === "violations" || (dm && /repairable/.test(dm.state)))
+      inner += `<p class="hint">💡 To repair, on the device as an administrator: first <code>DISM /Online /Cleanup-Image /RestoreHealth</code> (it fixes the store sfc repairs from), then <code>sfc /scannow</code>, then restart. Rollcall only checks; it never repairs.</p>`;
+  }
+  if (data && data.can_edit && !old) inner += `<div class="sfcset"><label>This device <select class="sfcmode">
+      <option value="default"${cf.mode === "default" ? " selected" : ""}>As the add-on option says (${esc({off: "off", all: "all Windows devices", servers: "servers", workstations: "workstations"}[cf.default] || cf.default)})</option>
+      <option value="on"${cf.mode === "on" ? " selected" : ""}>Weekly</option><option value="off"${cf.mode === "off" ? " selected" : ""}>Off</option></select></label>
+      <label class="row-inline"><input type="checkbox" class="sfcdism"${cf.dism ? " checked" : ""}> Also check the component store (DISM)</label>
+      <button type="button" class="mini" data-sfcsave>Save</button> <button type="button" class="mini primary" data-sfcrun${sf && sf.state === "running" ? " disabled" : ""}>Run now</button></div>`;
+  return sect("System files", inner + `<p class="hint">A read-only <code>sfc /verifyonly</code>, in the background at low priority: it never changes anything. Amber when files don't match what Windows expects.${cf.run_now && (!sf || sf.state !== "running") && Date.now() / 1000 - cf.run_now < 900 ? " Run now was asked for: it starts at the agent's next report (within 5 minutes)." : ""}</p>`);
+}
+document.getElementById("detBody").addEventListener("click", async e => {
+  const b = e.target.closest("[data-sfcsave], [data-sfcrun]"); if (!b || detMode === "snmp") return;
+  const s = b.closest(".sfcset");
+  b.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/agent/sfc", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(b.dataset.sfcrun !== undefined ? {run_now: true, dism: s.querySelector(".sfcdism").checked}
+      : {mode: s.querySelector(".sfcmode").value, dism: s.querySelector(".sfcdism").checked})});
+  if (!r.ok) { b.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
+  await openDetails(detKey, ["security", "System files"]);
+});
 // The 24-hour uptime strip: each segment is a half hour on the clock (16:00-16:30 ...), the last one
 // running up to now. Hovering one shows its time span and how it went.
 const SEG_WORD = {g: "Up", a: "Partly down", r: "Down", m: "Paused", n: "No data"};
@@ -4857,7 +4897,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

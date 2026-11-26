@@ -228,6 +228,7 @@ DEFAULTS = {
     "vuln_min_score": 9,
     "vuln_linux_source": "local",
     "agent_secret_scan": "off",
+    "agent_sfc": "off", "agent_sfc_day": "sunday", "agent_sfc_hour": 3, "agent_sfc_dism": False,
     "name_line": "auto",
     "ip_ranges": [],
     "agent_exchange_queue_warn": 250,
@@ -3834,6 +3835,48 @@ class Monitor:
         sh = agent.get("agent_kind") == "sh"  # the OpenWrt agent doesn't scan files
         return {"on": bool(on and h and not sh), "paths": list(hs.get("paths") or []), "hours": int(hs.get("hours") or 24)}
 
+    SFC_DAYS = ("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
+
+    def sfc_config(self, agent: dict) -> dict:
+        """What a Windows agent is told about the system file check: whether it's on, when it runs each week
+        (day 0 = Sunday, in the device's own time), whether DISM runs after it, and a Run now request (a time:
+        the agent runs it once if it hasn't started one since). The add-on option picks the devices; each
+        device's details can turn it on or off."""
+        h = self.hosts.get(agent.get("host_key") or "")
+        if not h or agent.get("os_family") not in (None, "windows") or agent.get("agent_kind") == "sh":
+            return {"on": False}
+        hs = (self.agent_settings["hosts"].get(h.key) or {}).get("sfc") or {}
+        mode = hs.get("mode") or "default"
+        if mode == "default":
+            dflt = str(self.opts.get("agent_sfc", "off"))
+            ws = (h.agent_report or {}).get("workstation") is True
+            on = dflt == "all" or (dflt == "servers" and not ws) or (dflt == "workstations" and ws)
+        else:
+            on = mode == "on"
+        day = str(self.opts.get("agent_sfc_day", "sunday")).lower()
+        return {"on": bool(on), "day": self.SFC_DAYS.index(day) if day in self.SFC_DAYS else 0,
+                "hour": max(0, min(23, int(self.opts.get("agent_sfc_hour", 3) or 0))),
+                "dism": bool(hs["dism"]) if isinstance(hs.get("dism"), bool) else bool(self.opts.get("agent_sfc_dism")),
+                "run_now": int(hs.get("run_now") or 0)}
+
+    async def set_sfc(self, h: Host, mode: str | None, dism: bool | None, run_now: bool, who: str | None) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        cf = dict(hs.get("sfc") or {})
+        if mode is not None:
+            cf["mode"] = mode
+        if dism is not None:
+            cf["dism"] = dism
+        if run_now:
+            cf["run_now"] = int(time.time())
+        cf = {k: v for k, v in cf.items() if not (k == "mode" and v == "default")}
+        if cf:
+            hs["sfc"] = cf
+        else:
+            hs.pop("sfc", None)
+        self._save_agent_settings()
+        log.info("%s: system file check %s by %s", h.name, "asked to run now" if run_now else f"set to {mode or 'as before'}"
+                 + ("" if dism is None else f", DISM {'on' if dism else 'off'}"), who or "someone")
+
     async def set_secret_scan(self, h: Host, mode: str, paths: list, hours: int, who: str | None) -> None:
         hs = self.agent_settings["hosts"].setdefault(h.key, {})
         if mode == "default" and not paths and hours == 24:
@@ -4837,6 +4880,9 @@ class Monitor:
                 "secret_ack": self._ack_time(h, "secrets"),
                 "integrity_ack": self._ack_time(h, "integrity"),
                 "domain_ack": self._ack_time(h, "domain"),
+                "sfc": {**self.sfc_config({**(self.agents.agents.get(h.agent_id) or {}), "host_key": h.key}),
+                        "mode": ((self.agent_settings["hosts"].get(h.key) or {}).get("sfc") or {}).get("mode") or "default",
+                        "default": str(self.opts.get("agent_sfc", "off"))},
                 "secret_scan_on": self.secret_scan_config({**(self.agents.agents.get(h.agent_id) or {}), "host_key": h.key})["on"],
                 "sec_filters": list(self.agent_settings.get("global_sec_filters") or []) + list(hs.get("sec_filters") or [])}
 
@@ -6372,6 +6418,19 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             return web.json_response({"error": "that address change isn't waiting any more"}, status=404)
         return web.json_response({"ok": True, "host": h.host})
 
+    async def agent_sfc(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        mode = body.get("mode")
+        if mode is not None and mode not in ("default", "on", "off"):
+            return web.json_response({"error": "mode is default, on or off"}, status=400)
+        dism = body.get("dism") if isinstance(body.get("dism"), bool) else None
+        user = await access.who(req)
+        await monitor.set_sfc(h, mode, dism, body.get("run_now") is True, user.get("display"))
+        return web.json_response({"ok": True})
+
     async def whats_new_seen(req):
         wn = getattr(monitor, "whats_new", None)
         user = await access.who(req)
@@ -7538,6 +7597,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/backup-ack", editor_only(agent_backup_ack))
     app.router.add_post("/api/hosts/{key}/ip-change", editor_only(host_ip_change))
     app.router.add_post("/api/whats-new/seen", admin_only(whats_new_seen))
+    app.router.add_post("/api/hosts/{key}/agent/sfc", editor_only(agent_sfc))
     app.router.add_get("/api/changelog", admin_only(changelog))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
@@ -8011,6 +8071,8 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         if agent["id"] in monitor.want_apps:
             resp["send_apps"] = True
         resp["secret_scan"] = monitor.secret_scan_config(agent)
+        if agent.get("os_family") in (None, "windows") and agent.get("agent_kind") != "sh":
+            resp["sfc"] = monitor.sfc_config(agent)  # Windows agent 1.0.59 on
         if agent["id"] in monitor.want_secrets:
             resp["send_secrets"] = True
         monitor.rollout_seen(agent, body)
