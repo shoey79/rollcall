@@ -314,6 +314,10 @@ def normalize_report(r) -> dict:
         d["detections"] = [x for x in _as_list(d.get("detections")) if isinstance(x, dict)]
         for k in ("quick_scan_end", "full_scan_end"):  # agent 1.0.52+
             d[k] = str(d[k])[:30] if isinstance(d.get(k), str) and d[k] else None
+        d["signature_updated"] = str(d["signature_updated"])[:30] if isinstance(d.get("signature_updated"), str) and d["signature_updated"] else None  # 1.0.57+
+        d["signature_version"] = str(d.get("signature_version") or "")[:40] or None
+        age = d.get("signature_age_days")
+        d["signature_age_days"] = int(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else None
     if "rds" in c:
         c["rds"] = _as_dict(c["rds"])
     if "laps" in c:
@@ -2061,14 +2065,17 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
             level, bits = CRIT, ["Real-time protection is off"]
         if (defender.get("signature_age_days") or 0) > 7:
             level = max(level, WARN, key=[OK, WARN, CRIT].index)
-            bits.append(f"virus definitions {defender['signature_age_days']} days old")
+            age = defender["signature_age_days"]
+            bits.append("virus definitions never updated" if age >= 65535 else f"virus definitions {age} days old")
         dets = defender.get("detections") or []
         failed = [d for d in dets if not d.get("action_success", True)]
         if failed:
             level = CRIT
             bits.insert(0, "Threat not removed: " + ", ".join(sorted({d.get("threat") or "unknown" for d in failed})))
         notable["detections"] = dets
-        detail = "; ".join(bits) if bits else f"Protected, definitions {defender.get('signature_age_days', 0)} day(s) old"
+        age = defender.get("signature_age_days")
+        detail = "; ".join(bits) if bits else ("Protected" if age is None else
+                                               f"Protected, definitions {'updated today' if age == 0 else f'{age} day(s) old'}")
         checks.append(_check("defender", "Defender", level, detail[0].upper() + detail[1:]))
 
     # Events: Critical-level events and watched IDs are alerted as they arrive.

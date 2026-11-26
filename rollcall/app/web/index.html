@@ -3016,7 +3016,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     html += sect("Microsoft Defender", `<div class="kv">
       <div><span>Mode</span>${esc(df.mode || "?")}</div>
       <div><span>Real-time protection</span>${df.realtime ? "On" : "<b class='old'>Off</b>"}</div>
-      <div><span>Definitions</span>${df.signature_age_days ? df.signature_age_days + (df.signature_age_days === 1 ? " day" : " days") + " old" : "Up to date (today)"}</div>
+      <div><span>Definitions</span>${defsHtml(df, r)}</div>
       <div><span>Last quick scan</span>${scan(df.quick_scan_end)}</div>
       <div><span>Last full scan</span>${scan(df.full_scan_end)}</div></div>` +
       ("quick_scan_end" in df ? "" : `<p class="hint">Scan times are shown once the agent is updated to 1.0.52.</p>`));
@@ -4947,6 +4947,20 @@ function gbText(gb) {
 function mbText(mb) {
   const n = Number(mb);
   return !isFinite(n) ? "" : n < 1024 ? `${Math.round(n)} MB` : `${Math.round(n / 1024)} GB`;
+}
+// Defender's definitions: when they were updated, measured from now. The age the agent sends is as of its report,
+// so on a PC that's been off for days "0 days old" would read as "today" when it isn't.
+function defsHtml(df, r) {
+  const nowS = Date.now() / 1000, rep = r && r.collected ? Date.parse(r.collected) / 1000 : null;
+  const asOf = rep && nowS - rep > 86400 ? ` <small class="muted">as of its last report, ${ago(rep, nowS)}</small>` : "";
+  const ver = df.signature_version ? ` <small class="muted">version ${esc(df.signature_version)}</small>` : "";
+  let t = df.signature_updated ? Date.parse(df.signature_updated) / 1000 : null;
+  if (!t && rep && df.signature_age_days != null && df.signature_age_days < 65535) t = rep - df.signature_age_days * 86400;
+  if (df.signature_age_days >= 65535) return `<b class="old">Never updated</b>`;
+  if (!t) return `<span class="muted">Not known</span>`;
+  const days = Math.floor((nowS - t) / 86400);
+  const txt = df.signature_updated ? `Updated ${when(df.signature_updated)} (${ago(t, nowS)})` : (days < 1 ? "Updated today" : `About ${days} day${days === 1 ? "" : "s"} old`);
+  return `${days > 7 ? `<b class="old">${txt}</b>` : txt}${ver}${asOf}`;
 }
 // Rollcall's own HTTPS for agents (agenttls.py): on, off, and plain HTTP off once agents have moved
 function nameList(a, max = 8) { return a.slice(0, max).join(", ") + (a.length > max ? ` and ${a.length - max} more` : ""); }

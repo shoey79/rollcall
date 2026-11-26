@@ -99,6 +99,19 @@ def test_defender_scan_times_are_kept():
     assert r["checks"]["defender"]["quick_scan_end"] == "2026-11-19T03:12:00Z" and r["checks"]["defender"]["full_scan_end"] is None
 
 
+def test_defender_definitions_wording():
+    """The age is as of the agent's report; unknown isn't "today", and 65535 means never updated."""
+    def detail(df):
+        r = A.normalize_report({"os_family": "windows", "checks": {"defender": {"mode": "Normal", "realtime": True, **df}}})
+        assert r["checks"]["defender"]["signature_age_days"] == df.get("signature_age_days")
+        return next(c for c in A.evaluate(r, {})["checks"] if c["key"] == "defender")
+    assert detail({"signature_age_days": 0})["detail"] == "Protected, definitions updated today"
+    assert detail({})["detail"] == "Protected"
+    c = detail({"signature_age_days": 65535})
+    assert c["level"] == A.WARN and c["detail"] == "Virus definitions never updated"
+    assert detail({"signature_age_days": 9})["detail"] == "Virus definitions 9 days old"
+
+
 def test_nobody_signed_in_while_off_or_silent():
     import main
     me = types.SimpleNamespace(opts={"agent_stale_minutes": 15})
@@ -116,11 +129,12 @@ def test_agent_reads_defender_scan_times():
     script = f'''
 $ErrorActionPreference = 'Stop'
 function ConvertTo-UtcString($Date) {{ ([DateTime]$Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }}
-$mp = [pscustomobject]@{{ QuickScanEndTime = [DateTime]::new(2026, 11, 19, 3, 12, 0, [DateTimeKind]::Utc); FullScanEndTime = [DateTime]::FromFileTimeUtc(0) }}
-$def = [ordered]@{{ quick_scan_end = $null; full_scan_end = $null }}
+$mp = [pscustomobject]@{{ QuickScanEndTime = [DateTime]::new(2026, 11, 19, 3, 12, 0, [DateTimeKind]::Utc); FullScanEndTime = [DateTime]::FromFileTimeUtc(0)
+                         AntivirusSignatureLastUpdated = [DateTime]::new(2026, 11, 11, 8, 5, 0, [DateTimeKind]::Utc) }}
+$def = [ordered]@{{ quick_scan_end = $null; full_scan_end = $null; signature_updated = $null }}
 {snippet}
 $def | ConvertTo-Json -Compress
 '''
     p = subprocess.run([PWSH, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=120)
     assert p.returncode == 0, p.stderr
-    assert p.stdout.strip().splitlines()[-1] == '{"quick_scan_end":"2026-11-19T03:12:00Z","full_scan_end":null}'
+    assert p.stdout.strip().splitlines()[-1] == '{"quick_scan_end":"2026-11-19T03:12:00Z","full_scan_end":null,"signature_updated":"2026-11-11T08:05:00Z"}'

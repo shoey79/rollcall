@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.56'
+$AgentVersion = '1.0.57'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -1762,12 +1762,14 @@ function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
             $def = [ordered]@{
                 mode = $mode; antivirus_enabled = [bool]$mp.AntivirusEnabled
                 realtime = [bool]$mp.RealTimeProtectionEnabled
-                signature_age_days = [int]$mp.AntivirusSignatureAge
+                signature_age_days = $(if ($null -ne $mp.AntivirusSignatureAge) { [int]$mp.AntivirusSignatureAge } else { $null })
+                signature_updated = $null; signature_version = [string]$mp.AntivirusSignatureVersion
                 quick_scan_end = $null; full_scan_end = $null
                 detections = @()
             }
             # When the last quick and full scans finished (never: empty, or year 1601 on some builds)
-            foreach ($p in @(@('quick_scan_end', 'QuickScanEndTime'), @('full_scan_end', 'FullScanEndTime'))) {
+            # When the definitions were last updated on this PC (the age above is as of this report, not now)
+            foreach ($p in @(@('quick_scan_end', 'QuickScanEndTime'), @('full_scan_end', 'FullScanEndTime'), @('signature_updated', 'AntivirusSignatureLastUpdated'))) {
                 try { $t = $mp.($p[1]); if ($t -and ([DateTime]$t).Year -gt 2000) { $def[$p[0]] = ConvertTo-UtcString $t } } catch { }
             }
             try {
