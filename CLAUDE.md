@@ -32,7 +32,10 @@ Remove each line once it's released.
 
 ## Requested features (not started)
 
-(none)
+- WordPress (owner asked 26 Nov): a server with several WordPress sites, each with its own plugins. Find every install,
+  report its version and its plugins and themes (with versions), flag updates and known-vulnerable plugins. Proposed:
+  the agent reads version.php and plugin/theme headers on disk (Windows/IIS and Linux), never wp-config.php or the
+  database, so no passwords are read or sent.
 
 ## Built, waiting for release
 
