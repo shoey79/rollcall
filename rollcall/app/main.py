@@ -80,6 +80,16 @@ from agents import AgentStore, clean_enrol_info, evaluate
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
 
 
+NOTES_MAX = 4000
+
+
+def clean_notes(text) -> str:
+    """A device's notes: plain text, at most NOTES_MAX characters, control characters (but not line breaks) removed."""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(c for c in text if c in "\n\t" or c.isprintable())
+    return text.strip()[:NOTES_MAX]
+
+
 def write_options_file(options: dict) -> None:
     """Keep /data/options.json in step with the Supervisor. The Supervisor only writes it when the add-on starts:
     options saved through its API (the dashboard's Settings, the Configuration tab) don't reach it until a restart,
@@ -1840,6 +1850,9 @@ class Host:
     jf_url: str = ""                   # Jellyfin's address ("" = http://<host>:8096)
     jf_key: str = ""                   # Jellyfin API key: only ever sent to jf_url, never shown again
     jf_data: dict | None = None        # its latest reading
+    notes: str = ""                    # the admins' own notes on this device (plain text)
+    notes_by: str = ""                 # who last changed them, and when
+    notes_at: float | None = None
     op_url: str = ""                   # OPNsense's address ("" = https://<host>)
     op_key: str = ""                   # its API key and secret: only ever sent to op_url, never shown again
     op_secret: str = ""
@@ -2072,6 +2085,7 @@ class Monitor:
                 **({"ilo_user": h.ilo_user, "ilo_pass": h.ilo_pass} if h.ilo_user or h.ilo_pass else {}),
                 **({"ilo_acks": h.ilo_acks} if h.ilo_acks else {}),
                 **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
+                **({"notes": h.notes, "notes_by": h.notes_by, "notes_at": h.notes_at} if h.notes else {}),
                 **({"opnsense_url": h.op_url} if h.op_url else {}),
                 **({"opnsense_key": h.op_key, "opnsense_secret": h.op_secret} if h.op_key or h.op_secret else {}),
                 **({"vmware_url": h.vm_url} if h.vm_url else {}),
@@ -2119,6 +2133,9 @@ class Monitor:
         h.ilo_acks = ({str(k)[:100]: v for k, v in entry["ilo_acks"].items() if v in ("warn", "crit")}
                       if isinstance(entry.get("ilo_acks"), dict) else {})
         h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
+        h.notes = clean_notes(entry.get("notes"))
+        h.notes_by = str(entry.get("notes_by") or "")[:100] if h.notes else ""
+        h.notes_at = entry.get("notes_at") if h.notes and isinstance(entry.get("notes_at"), (int, float)) else None
         h.op_url = str(entry.get("opnsense_url") or "")[:300]
         h.op_key, h.op_secret = str(entry.get("opnsense_key") or "")[:128], str(entry.get("opnsense_secret") or "")[:128]
         h.vm_url = str(entry.get("vmware_url") or "")[:300]
@@ -3849,6 +3866,8 @@ class Monitor:
         for k in ("schedule", "icon", "model", "group"):
             if not entry.get(k) and getattr(other, k):
                 entry[k] = getattr(other, k)
+        if not h.notes and other.notes:  # its notes come too (this entry's own are kept if it has some)
+            entry.update(notes=other.notes, notes_by=other.notes_by, notes_at=other.notes_at)
         hs = self.agent_settings["hosts"]
         moved = hs.pop(other.key, None)
         if moved:
@@ -6009,6 +6028,7 @@ class Monitor:
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name, "ha_more": h.ha_more,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
+                "notes": h.notes, "notes_by": h.notes_by, "notes_at": h.notes_at,
                 "opnsense_url": h.op_url, "opnsense_key_set": bool(h.op_key), "opnsense": h.op_data,
                 "vmware_url": h.vm_url, "vmware_user": h.vm_user, "vmware_pass_set": bool(h.vm_pass),
                 "vmware": h.vm_data, "vmware_items": h.vm_items, "vmware_ignore": h.vm_ignore,
@@ -7644,6 +7664,30 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         _ilo_redo(h)
         return web.json_response({"ignore": h.ilo_ignore})
 
+    async def host_notes(req):
+        """Save a device's notes (admins and editors; anyone who can open Rollcall can read them)."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        raw = body.get("notes")
+        if not isinstance(raw, str):
+            return web.json_response({"error": "expected {\"notes\": \"...\"}"}, status=400)
+        if len(raw) > NOTES_MAX * 2:
+            return web.json_response({"error": f"Notes can be up to {NOTES_MAX} characters"}, status=413)
+        text = clean_notes(raw)
+        if len(raw.strip()) > NOTES_MAX:
+            return web.json_response({"error": f"Notes can be up to {NOTES_MAX} characters"}, status=400)
+        user = await access.who(req)
+        if text != h.notes:
+            h.notes = text
+            h.notes_by = (user.get("display") or "")[:100] if text else ""
+            h.notes_at = time.time() if text else None
+            monitor._save_hosts()
+            log.info("%s: notes %s by %s", h.name, "changed" if text else "cleared", user.get("display") or "someone")
+            monitor.publish_soon(h)
+        return web.json_response({"ok": True, "notes": h.notes, "notes_by": h.notes_by, "notes_at": h.notes_at})
+
     async def host_vuln_skip(req):
         """Exclude this device's vulnerabilities from alerting (an end-of-life system kept on purpose), or undo it."""
         h = monitor.hosts.get(req.match_info["key"])
@@ -7930,6 +7974,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
     app.router.add_post("/api/hosts/{key}/vmware/ignore", editor_only(host_vmware_ignore))
     app.router.add_post("/api/hosts/{key}/agent/vuln-skip", editor_only(host_vuln_skip))
+    app.router.add_post("/api/hosts/{key}/notes", editor_only(host_notes))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)

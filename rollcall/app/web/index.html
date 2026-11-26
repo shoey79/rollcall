@@ -208,6 +208,11 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+.notesbox{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
+.notesbox .ntext{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;margin:4px 0 0}
+.notesbox textarea{width:100%;min-height:120px;box-sizing:border-box;font:inherit;font-size:13.5px;resize:vertical}
+.notesbox .nhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.notesbox .nhead small{color:var(--muted)}
 .mergebox{border:1px solid var(--line);border-left:4px solid #d97706;border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
 .logbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}.logbar input[type=search]{flex:1;min-width:140px}
 .logout{height:min(60vh,560px);overflow:auto;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg2,rgba(0,0,0,.03));font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
@@ -1124,7 +1129,7 @@ function svcChips(h) {
 function upClass(p) { return p == null ? "muted" : p >= 99.9 ? "up-g" : p >= 95 ? "up-a" : "up-r"; }
 
 function textMatch(h, q) {
-  return !q || [h.name, h.host, h.ip || "", h.ip_range || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || [])].join(" ").toLowerCase().includes(q);
+  return !q || [h.name, h.host, h.ip || "", h.ip_range || "", ...h.services.map(s => s.label), ...((h.agent && h.agent.roles) || []), h.notes || ""].join(" ").toLowerCase().includes(q);
 }
 // Searching from the Overview opens a temporary Search tab over every device; clearing it goes back.
 let searchFrom = "home";
@@ -2716,6 +2721,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
 });
 // ---- Server details (Windows agent) ----
 const detDlg = document.getElementById("detDlg");
+detDlg.addEventListener("close", () => document.querySelectorAll("#detBody .notesbox.editing").forEach(x => x.classList.remove("editing")));
 let detKey = null;
 const when = iso => iso ? new Date(iso).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"}) : "—";
 const dur = sec => sec == null ? "—" : sec < 3600 ? Math.round(sec / 60) + " min" : sec < 86400 ? Math.round(sec / 3600) + " h" : Math.floor(sec / 86400) + " days";
@@ -3496,7 +3502,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
   if (T.sectop) { T.security = T.sectop + (T.security || ""); delete T.sectop; }
-  { const hh = data && data.hosts.find(x => x.key === detKey); if (hh) T.overview = ipBox(hh) + (T.overview || ""); }  // what needs acknowledging first
+  { const hh = data && data.hosts.find(x => x.key === detKey); if (hh) T.overview = ipBox(hh) + notesBox(hh) + (T.overview || ""); }  // what needs acknowledging first
   const order = Object.keys(names).filter(k => T[k] && !(sh && (k === "software" || k === "events")));  // nothing there from a router
   if (!order.includes(detTab)) detTab = "overview";
   const body = document.getElementById("detBody"), top = body.scrollTop;
@@ -3504,6 +3510,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   nav.innerHTML = order.map(k => `<button type="button" role="tab" class="dtab${k === detTab ? " on" : ""}" data-dtab="${k}" aria-selected="${k === detTab}">${names[k]}${bad[k] ? ` <span class="bad">${bad[k]}</span>` : ""}</button>`).join("");
   nav.hidden = false;
   appendSourceTabs(detKey);
+  if (notesEditing()) return;  // don't throw away notes being typed
   body.innerHTML = order.map(k => `<div class="dpane" data-pane="${k}"${k === detTab ? "" : " hidden"}>${T[k]}</div>`).join("");
   body.scrollTop = top;
   fillMetrics();
@@ -3984,6 +3991,41 @@ document.getElementById("detTabs").addEventListener("click", e => {
 // service checks, SNMP and syslog, on one page. The SNMP and Logs tabs hold the full detail. ----
 // The agent reports addresses that don't include the one the device is monitored on (DHCP gave it another):
 // switch to the new one, or keep the current one (it may be a second network card, a VPN or a docking station).
+// The admins' own notes on a device (where it lives, who to call, quirks): anyone can read them, editors change them.
+const NOTES_MAX = 4000;
+function notesBox(h) {
+  const t = h.notes || "", now = data.now || Date.now() / 1000;
+  const by = t && (h.notes_by || h.notes_at) ? `<small>${h.notes_by ? "by " + esc(h.notes_by) + " " : ""}${h.notes_at ? ago(h.notes_at, now) : ""}</small>` : "";
+  if (!t) return `<div class="notesbox edit-only" data-notes="${esc(h.key)}"><div class="nhead"><b>Notes</b><small>none yet: where it lives, who to call, its quirks</small>
+    <button type="button" class="mini" data-notesedit>Add notes</button></div></div>`;
+  return `<div class="notesbox" data-notes="${esc(h.key)}"><div class="nhead"><b>Notes</b>${by}<button type="button" class="mini edit-only" data-notesedit>Edit</button></div>
+    <div class="ntext">${esc(t)}</div></div>`;
+}
+const notesEditing = () => { const e = document.querySelector("#detBody .notesbox.editing"); return !!e && e.dataset.notes === detKey && detDlg.open; };
+document.addEventListener("click", async e => {
+  const box = e.target.closest(".notesbox");
+  if (!box) return;
+  const h = data && data.hosts.find(x => x.key === box.dataset.notes);
+  if (!h) return;
+  if (e.target.closest("[data-notesedit]")) {
+    box.classList.add("editing");
+    box.innerHTML = `<div class="nhead"><b>Notes</b><small>plain text, up to ${NOTES_MAX} characters · everyone who can open Rollcall can read them</small></div>
+      <textarea maxlength="${NOTES_MAX}" aria-label="Notes on ${esc(h.name)}">${esc(h.notes || "")}</textarea>
+      <div class="actions" style="margin-top:6px"><button type="button" class="mini primary" data-notessave>Save</button> <button type="button" class="mini" data-notescancel>Cancel</button></div>`;
+    const ta = box.querySelector("textarea"); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);  // carry on at the end
+  } else if (e.target.closest("[data-notescancel]")) {
+    box.outerHTML = notesBox(h);
+  } else if (e.target.closest("[data-notessave]")) {
+    const b = e.target.closest("[data-notessave]"); b.disabled = true;
+    const r = await fetch(`api/hosts/${encodeURIComponent(h.key)}/notes`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({notes: box.querySelector("textarea").value})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { b.disabled = false; return alert(j.error || `That didn't save (${r.status})`); }
+    Object.assign(h, {notes: j.notes, notes_by: j.notes_by, notes_at: j.notes_at});
+    box.outerHTML = notesBox(h);
+    load();
+  }
+});
 function ipBox(h) {
   const ch = h.agent && h.agent.ip_change;
   if (!ch) return "";
@@ -4675,7 +4717,7 @@ function renderOverview(h, sn, lg, ha) {
       <b>Merge</b> moves the agent, its checks, settings and graphs onto this entry and removes ${esc(h.same_as.name)}. This entry keeps its name, address, history and Home Assistant sensors.</p>
     <div class="actions"><button type="button" class="mini primary edit-only" data-merge="${esc(h.same_as.key)}" data-mergename="${esc(h.same_as.name)}">Merge into this entry</button>
       <button type="button" class="mini" data-mergeopen="${esc(h.same_as.key)}">Open ${esc(h.same_as.name)}</button></div></div>` : "");
-  html += `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
+  html += `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>` + notesBox(h);
   html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
     ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small>${a.ack === "restart" && data && data.can_edit === true ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
     : `<p class="empty-note">✓ Nothing needs attention.</p>`);
@@ -4710,6 +4752,7 @@ function renderOverview(h, sn, lg, ha) {
     kv("Monitoring", esc(h.schedule_text || (h.no_alerts ? "Never alerts" : "Always"))), kv("Alerts", h.critical ? "🚨 Critical: sounds even when the phone is on silent" : "")].join("");
   html += sect("Device", `<div class="kv">${info}</div>`);
   if (!h.snmp && !h.syslog && !h.ha_device) html += `<p class="hint">Tick <b>SNMP</b> or <b>Syslog</b>, or link its <b>Home Assistant device</b>, under Edit to see more about this device here, such as its ports, disks, UPS battery, log messages or integration readings.</p>`;
+  if (notesEditing()) return;  // don't throw away notes being typed
   body.innerHTML = html;
   body.scrollTop = top;
 }

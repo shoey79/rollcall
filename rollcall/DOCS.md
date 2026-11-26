@@ -93,7 +93,7 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as devic
 | Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
-The ✎ on the open tab edits it, deletes it or moves it left or right. **A–Z** (next to **+ New tab**) puts your own tabs in alphabetical order once; until then they stay in the order they were made. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab, and lists matches in other tabs below it (*N more in other tabs*, grouped by tab; **In** *tab name* goes there, keeping the search). Searching from the **Overview** opens a temporary **Search** tab with every matching device; clear the box, or choose × on the tab, to go back to the Overview.
+The ✎ on the open tab edits it, deletes it or moves it left or right. **A–Z** (next to **+ New tab**) puts your own tabs in alphabetical order once; until then they stay in the order they were made. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box (names, addresses, checks, roles and notes) filters within the open tab, and lists matches in other tabs below it (*N more in other tabs*, grouped by tab; **In** *tab name* goes there, keeping the search). Searching from the **Overview** opens a temporary **Search** tab with every matching device; clear the box, or choose × on the tab, to go back to the Overview.
 
 **Pause all in this tab** pauses every device in the tab at once, e.g. for a site's patch night. If something is typed in the search box, only the devices shown are paused. **Resume N paused** ends the pause early for all of them. See [Pausing](#pausing-for-reboots-maintenance-mode).
 
@@ -110,6 +110,8 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. **A–Z*
   - every check with its uptime, the latest warnings and errors from its logs, and the device's model, serial, firmware and location.
 - **Agent details** (devices with an agent): the agent's own tabs. See [Windows agent](#windows-agent).
 - **SNMP**, **Logs** and **Home Assistant**, when those are set up for the device.
+
+**Notes.** The top of every device's Overview has a **Notes** box for your own free text: where it lives, who to call, the button you hold for ten seconds when it hangs. Admins and editors choose **Add notes** or **Edit**; anyone who can open Rollcall can read them, with who last changed them and when. Plain text, up to 4,000 characters. They're saved with the device, so they're in exports and backups, editing the device leaves them alone, and the search box finds devices by what's in their notes.
 
 Along the bottom are **Check now**, **Pause** / **Resume** and **Edit**. Edit opens on top of Details, and Details refreshes when you save or cancel. It closes if you delete the device.
 
