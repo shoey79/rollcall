@@ -3879,7 +3879,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         throw 'This copy of the script has no add-on address or enrolment key. Download it from the Rollcall dashboard (Agents), or pass -Server and -EnrolKey.'
     }
     if (-not (Test-Path $DataPath)) { New-Item -ItemType Directory -Path $DataPath -Force | Out-Null; Protect-DataFolder }
-    if (@(Get-DataFolderWriters).Count) {
+    $opened = @(Get-DataFolderWriters)
+    if ($opened.Count) {
         Protect-DataFolder  # opened up since: put it back, and only carry on if that worked (review F9)
         $open = @(Get-DataFolderWriters)
         if ($open.Count) { throw "Not running: $DataPath could be changed by $($open -join ', '), and its permissions couldn't be put back" }
@@ -3887,6 +3888,12 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     }
     if ($script:FolderCheckNote) { Write-AgentLog "WARN $script:FolderCheckNote"; $script:FolderCheckNote = $null }
     $state = Read-State
+    if ($opened.Count) {
+        # Put back before this run, so the check after the report finds nothing: Rollcall is still told, as before
+        $state.integrity = @{ at = ConvertTo-UtcString (Get-Date); first = $false
+                              what = @($opened | Select-Object -First 9 | ForEach-Object { Limit-Text "$_ had access to the agent folder" 200 }) }
+        try { Save-State $state } catch { }
+    }
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     if ($script:LegacyLayout -and -not ($ReportOnly -or $ShowReport)) {
         $ns = Get-NewLayoutState

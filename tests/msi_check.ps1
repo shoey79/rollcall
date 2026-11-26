@@ -18,7 +18,7 @@ function Fail([string]$Why) { Write-Host "FAILED: $Why"; exit 1 }
 # 1. Silent install: must succeed, set up the scheduled task, and show no screen
 $p = Install 'silent' "$Out\silent.log"; $p.WaitForExit()
 if ($p.ExitCode -ne 0) { Fail "silent install exit code $($p.ExitCode)" }
-if (-not (Get-ScheduledTask -TaskName 'Ping Monitor Agent' -ErrorAction SilentlyContinue)) { Fail 'no scheduled task after the silent install' }
+if (-not (Get-ScheduledTask -TaskName 'Rollcall Agent' -ErrorAction SilentlyContinue)) { Fail 'no scheduled task after the silent install' }
 if ((Get-Content "$Out\silent.log" -Raw) -match 'Dialog created|Action start .*: RcDone') { Fail 'a screen was shown in a silent install' }
 Write-Host 'Silent install: OK, no screens'
 Remove-Agent
@@ -57,6 +57,6 @@ try {
 } catch { Write-Host "Couldn't capture the installer window: $($_.Exception.Message)" }
 Get-Process msiexec -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle } | Stop-Process -Force
 if (-not $shown) { Fail 'the "installed" screen was not shown in an interactive install' }
-if (-not (Get-ScheduledTask -TaskName 'Ping Monitor Agent' -ErrorAction SilentlyContinue)) { Fail 'no scheduled task after the interactive install' }
+if (-not (Get-ScheduledTask -TaskName 'Rollcall Agent' -ErrorAction SilentlyContinue)) { Fail 'no scheduled task after the interactive install' }
 Write-Host 'Interactive install: OK, "installed" screen shown'
 Remove-Agent
