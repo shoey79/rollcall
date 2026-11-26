@@ -28,31 +28,11 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Settings, AI hints (owner asked 26 Nov): lay out each provider's model and API key side by side on the same row
-  (Claude model | Anthropic key, OpenAI model | OpenAI key, Gemini model | Gemini key); today the models are one
-  column and the keys the other, so they don't line up.
-- Hyper-V table (Roles tab), owner asked 26 Nov: a VM that's off or saved looks misaligned (no usage on the first
-  line). Keep the two-line shape with a dash: Up "—"; CPU "—" over "4 CPUs"; Memory "—" over "16 GB at start" (or
-  "2 GB to 8 GB" when dynamic). Grey out the row a little when it's not running, with a tooltip "Off: no CPU or memory
-  in use".
-- Tabs, sort A to Z (owner asked 26 Nov): a button (admins/editors) that sorts the tab bar alphabetically, once, when
-  pressed; Overview, All and Needs attention stay first. Otherwise tabs stay in the order they were created (no
-  automatic sorting); after sorting, new tabs go on the end as now.
+(none)
 
 ## Requested features (not started)
 
-- Search across tabs (owner asked 26 Nov): searching while in a tab only looks in that tab, so matches elsewhere are
-  missed. Keep the tab's own results first, then "N more in other tabs" below with those matches (each with the tab
-  it's in, or "not in a tab"), so nothing is missed. Clearing the search goes back to the tab as it was.
-
-- Vulnerabilities: leave out end-of-life OSes (owner asked 26 Nov). Some devices run an OS known to be out of support
-  (e.g. Windows 10 without ESU) and are kept on purpose; their vulnerabilities shouldn't alert. A list of OSes (and
-  optionally single devices) to exclude, e.g. "Windows 10", "Windows Server 2012 R2", "Ubuntu 20.04": in Settings
-  (an option like `vuln_skip_os`) and per device in its Vulnerabilities tab. Excluded ones: no amber/red and no
-  notifications from the Vulnerabilities check, known-exploited ones included (owner's decision); no badge or count on
-  the Vulnerabilities tab itself. Opening the tab still lists everything found, with a note that the OS is excluded as
-  end of life. The Updates check and everything else unchanged. Devices on any OS not excluded (e.g. Windows 11)
-  keep the badge, colours and notifications exactly as now. Docs and changelog.
+(none)
 
 ## Built, waiting for release
 
@@ -61,4 +41,7 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- 26 Nov requests (on pending): end-of-life OSes excluded from vulnerability alerts (vuln_skip_os, or a device on
+  its own; listed, never alerted, no badge); search shows matches in other tabs (grouped by tab, "In <tab>" link);
+  A-Z button sorts the user's tabs once; Hyper-V rows for VMs that are off (dashes, greyed, tooltip); AI settings
+  model beside its key.
