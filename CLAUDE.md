@@ -37,10 +37,10 @@ Remove each line once it's released.
 - Vulnerabilities: leave out end-of-life OSes (owner asked 26 Nov). Some devices run an OS known to be out of support
   (e.g. Windows 10 without ESU) and are kept on purpose; their vulnerabilities shouldn't alert. A list of OSes (and
   optionally single devices) to exclude, e.g. "Windows 10", "Windows Server 2012 R2", "Ubuntu 20.04": in Settings
-  (an option like `vuln_skip_os`) and per device in its Vulnerabilities tab. Excluded ones: no amber/red or
-  notifications from the Vulnerabilities check, the tab still lists what's found with a note that the OS is excluded
-  as end of life (the Updates check and everything else unchanged). Consider whether known-exploited ones should
-  still alert (ask the owner). Docs and changelog.
+  (an option like `vuln_skip_os`) and per device in its Vulnerabilities tab. Excluded ones: no amber/red and no
+  notifications from the Vulnerabilities check, known-exploited ones included (owner's decision); no badge or count on
+  the Vulnerabilities tab itself. Opening the tab still lists everything found, with a note that the OS is excluded as
+  end of life. The Updates check and everything else unchanged. Docs and changelog.
 
 ## Built, waiting for release
 
