@@ -93,7 +93,7 @@ Tabs split a long list. Each is a saved filter, so it updates by itself as devic
 | Group | is, is not | One or more groups, separated by commas, e.g. `Lighting, Smart home`. Matches typed groups and the automatic ones from the icon |
 | Uptime (24 h) | is below / above % | below `99` |
 
-The ✎ on the open tab edits it, deletes it or moves it left or right. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab. Searching from the **Overview** opens a temporary **Search** tab with every matching device; clear the box, or choose × on the tab, to go back to the Overview.
+The ✎ on the open tab edits it, deletes it or moves it left or right. **A–Z** (next to **+ New tab**) puts your own tabs in alphabetical order once; until then they stay in the order they were made. Tabs are shared: everyone who opens the panel sees the same ones. The tab bar wraps onto more lines rather than scrolling. The search box filters within the open tab, and lists matches in other tabs below it (*N more in other tabs*, grouped by tab; **In** *tab name* goes there, keeping the search). Searching from the **Overview** opens a temporary **Search** tab with every matching device; clear the box, or choose × on the tab, to go back to the Overview.
 
 **Pause all in this tab** pauses every device in the tab at once, e.g. for a site's patch night. If something is typed in the search box, only the devices shown are paused. **Resume N paused** ends the pause early for all of them. See [Pausing](#pausing-for-reboots-maintenance-mode).
 
@@ -1384,6 +1384,7 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 - **Red, and notified:** any vulnerability, whatever its score (so it's listed even below `vuln_min_score`), on CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, or that Microsoft says is being exploited, whatever its score.
 - The **Software** tab in Details lists each one, worst first: the CVE (linked to cve.org), its score, what it's in, the installed version and the version or Windows build that fixes it. Vulnerable packages are marked in the list, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
 - **Acknowledge** keeps it green while the list stays the same; a new vulnerability alerts again. It clears by itself once the update is installed.
+- **End-of-life systems kept on purpose** (e.g. Windows 10 without extended security updates): list their OSes in `vuln_skip_os` (Settings, **End-of-life operating systems**), one per line, or tick **Treat this device as end of life** in one device's Vulnerabilities tab. Their vulnerabilities are still listed there, with a note saying why, but never turn the device amber or red or notify, known-exploited ones included. An entry is matched as whole words against the OS the agent reports: `Windows 10` doesn't match Windows 11 (but does match Windows 10 Enterprise LTSC), `Ubuntu 20.04` matches `Ubuntu 20.04.6 LTS`, and `Windows Server 2012` includes 2012 R2.
 - Like other security details, the list is only shown to Home Assistant admins and editors; others see the check's colour.
 - Turn it off with `vuln_checks`. Its alerts are emailed under **Security**.
 
@@ -1738,6 +1739,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
 | `offline` | false | For a network without the internet: download nothing, and use imported data instead (see [Offline use](#offline-use)) |
+| `vuln_skip_os` | `[]` | End-of-life operating systems whose vulnerabilities are listed but never alert (see [Known vulnerabilities](#known-vulnerabilities)) |
 | `vuln_checks` | true | The **Vulnerabilities** check on devices with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |

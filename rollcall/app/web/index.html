@@ -37,6 +37,9 @@ th.sortable.sorted .arrow{opacity:1}
 tr.red td{background:color-mix(in srgb,var(--red) 7%,transparent)}
 tr.amber td{background:color-mix(in srgb,var(--amber) 7%,transparent)}
 tr.maintenance td{background:color-mix(in srgb,var(--blue) 7%,transparent)}
+tr.othersep td{padding:14px 10px 4px;border-bottom:none;color:var(--muted)}tr.othergrp td{padding:2px 10px 4px;font-size:12.5px;color:var(--muted)}
+.linkish{background:none;border:none;padding:0;font:inherit;color:var(--accent);cursor:pointer;text-decoration:underline}
+tr.vmoff td{color:var(--muted)}tr.vmoff td b{color:var(--muted);font-weight:600}
 tr.degraded td{background:color-mix(in srgb,var(--orange) 7%,transparent)}
 .svcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:250px}
 .svc{display:inline-flex;align-items:center;gap:4px;font-size:11px;line-height:16px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--muted);font-weight:500;cursor:default}
@@ -1152,9 +1155,11 @@ function render() {
     .filter(h => textMatch(h, q))
     .sort(compare);
   shownHosts = hosts;
+  // Searching inside a tab: this tab's matches first, then the ones in other tabs, so nothing is missed
+  const others = q && tab.id !== "all" && !tab.quick ? data.hosts.filter(h => !tabMatch(h, tab) && textMatch(h, q)).sort(compare) : [];
   const pauseBtn = document.getElementById("pauseTab"), resumeBtn = document.getElementById("resumeTab");
   const paused = hosts.filter(h => h.maint_until);
-  const where = q ? "shown" : (tab.id === "all" ? "" : "in this tab");
+  const where = q ? (others.length ? "in this tab" : "shown") : (tab.id === "all" ? "" : "in this tab");
   pauseBtn.hidden = !hosts.length || (tab.id === "all" && !q);
   pauseBtn.textContent = `Pause all ${hosts.length}${where ? " " + where : ""}`;
   resumeBtn.hidden = paused.length < 2 && !(paused.length && !pauseBtn.hidden);
@@ -1166,14 +1171,29 @@ function render() {
   document.getElementById("emptyTab").textContent = q ? "Nothing in this tab matches the search." : "Nothing in this tab right now.";
   // Each row's HTML is kept with what it was built from: a search (same data) reuses every row, and a refresh
   // rebuilds only the rows whose device changed. The table is only replaced if something in it did.
-  const html = hosts.map(h => {
+  const row = h => {
     const sig = JSON.stringify(h) + "|" + now + "|" + (data.name_line || "");
     const c = rowCache.get(h.key);
     if (c && c.sig === sig) return c.html;
     const out = rowHtml(h, now);
     rowCache.set(h.key, {sig, html: out});
     return out;
-  }).join("");
+  };
+  let html = hosts.map(row).join("");
+  document.getElementById("emptyTab").hidden = !data.hosts.length || hosts.length > 0 || others.length > 0;
+  if (others.length) {
+    const cols = document.getElementById("rows").closest("table").querySelectorAll("thead th").length || 8;
+    const groups = new Map();
+    for (const h of others) {
+      const v = views.find(t => t.id !== tab.id && tabMatch(h, t));
+      const k = v ? v.id : "";
+      if (!groups.has(k)) groups.set(k, {name: v ? v.name : "", list: []});
+      groups.get(k).list.push(h);
+    }
+    html += `<tr class="othersep"><td colspan="${cols}">${hosts.length ? "" : "Nothing in this tab matches. "}<b>${others.length} more in other tabs</b></td></tr>`
+      + [...groups.values()].sort((x, y) => (!x.name) - (!y.name)).map(g => `<tr class="othergrp"><td colspan="${cols}">${g.name ? `In <button type="button" class="linkish" data-tab="${esc(views.find(v => v.name === g.name).id)}">${esc(g.name)}</button>` : "Not in a tab of your own"} (${g.list.length})</td></tr>`
+        + g.list.map(row).join("")).join("");
+  }
   if (rowCache.size > data.hosts.length * 2) {
     const keep = new Set(data.hosts.map(h => h.key));
     for (const k of rowCache.keys()) if (!keep.has(k)) rowCache.delete(k);
@@ -2023,8 +2043,12 @@ function renderTabs() {
   const b = tabs.filter(t => t.id === "all" || t.builtin), c = tabs.filter(t => !t.builtin && t.id !== "all");
   document.getElementById("tabs").innerHTML = b.map(one).join("") + (c.length ? `<span class="tabsep"></span>` + c.map(one).join("") : "") +
     (cur.quick ? `<span class="tabsep"></span>` + one(cur) : "") +
-    `<button type="button" class="tab add edit-only" id="tabNew" title="Create a tab from your own filters">+ New tab</button>`;
+    `<button type="button" class="tab add edit-only" id="tabNew" title="Create a tab from your own filters">+ New tab</button>` +
+    // Your own tabs stay in the order they were made; this sorts them A to Z once, when asked (the built-in ones stay first)
+    (views.length > 1 && views.some((v, i) => i && byName(views[i - 1], v) > 0)
+      ? `<button type="button" class="tab add edit-only" id="tabSort" title="Put your own tabs in alphabetical order (once; new tabs still go on the end)">A–Z</button>` : "");
 }
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: "base"});
 function describe(t) {
   if (!(t.rules || []).length) return "Every device";
   return t.rules.map(r => {
@@ -2032,11 +2056,30 @@ function describe(t) {
     return `${f.label} ${f.ops[r.op] || r.op} ${f.values ? (f.values[r.value] || r.value) : r.value}`;
   }).join(t.match === "any" ? " OR " : " AND ");
 }
+// A device's own end-of-life exclusion (Vulnerabilities tab)
+document.addEventListener("change", async e => {
+  const b = e.target.closest("[data-vulnskip]");
+  if (!b) return;
+  b.disabled = true;
+  const r = await fetch(`api/hosts/${encodeURIComponent(detKey)}/agent/vuln-skip`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({skip: b.checked})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); b.checked = !b.checked; b.disabled = false; return; }
+  await load();
+  openDetails(detKey);
+});
+// "In <tab>" under a search's matches in other tabs: go to that tab, keeping the search
+document.getElementById("rows").addEventListener("click", e => {
+  const b = e.target.closest("tr.othergrp [data-tab]");
+  if (!b) return;
+  tabId = b.dataset.tab;
+  try { localStorage.setItem("pm_tab", tabId); } catch (err) {}
+  render();
+});
 async function loadViews() {
   try { const r = await fetch("api/views", {cache: "no-store"}); if (r.ok) views = (await r.json()).views || []; } catch (e) {}
 }
 document.getElementById("tabs").addEventListener("click", e => {
   if (e.target.closest("#tabNew")) return openTab(null);
+  if (e.target.closest("#tabSort")) return saveViews([...views].sort(byName), tabId);
   const pen = e.target.closest("[data-tabedit]");
   if (pen) { e.stopPropagation(); return openTab(views.find(v => v.id === pen.dataset.tabedit)); }
   const t = e.target.closest(".x[data-tab]") || e.target.closest("[data-tab]");
@@ -3121,13 +3164,15 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     html += sect("Hyper-V virtual machines", tbl(more ? ["VM", "State", "Up", "CPU", "Memory", "Checkpoints", ""] : ["VM", "State", "Status", ""], c.hyperv.map(x => {
       const bad = /critical/i.test(x.state), on = /running/i.test(x.state);
       if (!more) return `<tr class="${rowCls(bad, "vm", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.state)}</td><td>${esc(x.status)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
+      // Not running: the same two lines as a running VM, with a dash where there's no usage, so the columns line up
+      const dash = `<span class="muted">—</span>`;
       const mem = on && x.mem_mb ? `${gb(x.mem_mb)}${x.mem_demand_mb ? ` <small class="muted">using ${gb(x.mem_demand_mb)}</small>` : ""}`
         + (x.dynamic ? `<br><small class="muted">dynamic, ${gb(x.mem_startup_mb)} to ${gb(x.mem_max_mb)}</small>` : "")
-        : `<small class="muted">${x.mem_startup_mb ? gb(x.mem_startup_mb) + (x.dynamic ? " to " + gb(x.mem_max_mb) : "") : ""}</small>`;
-      return `<tr class="${rowCls(bad, "vm", x.name)}"><td><b>${esc(x.name)}</b>${x.generation ? `<br><small class="muted">generation ${x.generation}${x.replication && !/notapplicable/i.test(x.replication) ? ", replication " + esc(x.replication) : ""}</small>` : ""}</td>
+        : dash + (x.mem_startup_mb ? `<br><small class="muted">${x.dynamic ? `${gb(x.mem_startup_mb)} to ${gb(x.mem_max_mb)}` : `${gb(x.mem_startup_mb)} at start`}</small>` : "");
+      return `<tr class="${rowCls(bad, "vm", x.name)}${on ? "" : " vmoff"}"${on ? "" : ` title="${esc(x.state)}: no CPU or memory in use"`}><td><b>${esc(x.name)}</b>${x.generation ? `<br><small class="muted">generation ${x.generation}${x.replication && !/notapplicable/i.test(x.replication) ? ", replication " + esc(x.replication) : ""}</small>` : ""}</td>
         <td>${esc(x.state)}${x.status && !/operating normally/i.test(x.status) ? `<br><small class="old">${esc(x.status)}</small>` : ""}</td>
-        <td>${on && x.uptime_s ? esc(fmtUp(x.uptime_s)) : ""}</td>
-        <td>${on && x.cpu_pct != null ? x.cpu_pct + "%" : ""}${x.cpus ? `<br><small class="muted">${x.cpus} CPU${x.cpus === 1 ? "" : "s"}</small>` : ""}</td>
+        <td>${on && x.uptime_s ? esc(fmtUp(x.uptime_s)) : on ? "" : dash}</td>
+        <td>${on && x.cpu_pct != null ? x.cpu_pct + "%" : on ? "" : dash}${x.cpus ? `<br><small class="muted">${x.cpus} CPU${x.cpus === 1 ? "" : "s"}</small>` : ""}</td>
         <td>${mem}</td><td>${ckpt(x)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
     })) + (more ? `<p class="hint">Checkpoints (snapshots) older than a week are highlighted: each one keeps a growing file of changes beside the VM's disk, and slows it down. Hover over the count for their names.</p>` : ""));
   }
@@ -3382,7 +3427,10 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const offAt = inf.offline ? Math.max(inf.msrc_at || 0, inf.kev_at || 0, inf.osv_at || 0) : 0;
       const offNote = inf.offline ? `<p class="hint">📴 Offline: Rollcall doesn't download this data. ${offAt ? `It's from ${new Date(offAt * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})} (${Math.floor((Date.now() / 1000 - offAt) / 86400)} days old)` : "None has been imported yet"}; import newer data under <b>Manage, Offline data</b>.</p>` : "";
       const cveLink = c => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
-      const body = offNote + (!vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
+      // End of life, kept on purpose: everything is still listed, but nothing alerts (Settings, or this device alone)
+      const eol = vu.excluded ? `<div class="mergebox"><p style="margin:0">🗄️ <b>Not alerted:</b> ${esc(vu.excluded.charAt(0).toUpperCase() + vu.excluded.slice(1))}. These vulnerabilities are listed below for reference, but don't turn the device amber or red or send notifications, known-exploited ones included.${vu.excluded_here ? "" : " Change the list in Settings (End-of-life operating systems)."}</p></div>` : "";
+      const eolSw = `<label class="schedopt edit-only" style="margin:4px 0 10px"><input type="checkbox" data-vulnskip${vu.excluded_here ? " checked" : ""}> <span>Treat this device as end of life: list its vulnerabilities, but don't alert on them</span></label>`;
+      const body = eol + eolSw + offNote + (!vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
         : !vu.found.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : ""}.</p>`
         : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], vu.found.map(f =>
             `<tr><td>${cveLink(f.cve)}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>

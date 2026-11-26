@@ -233,6 +233,7 @@ DEFAULTS = {
     "vuln_checks": True,
     "vuln_min_score": 9,
     "vuln_linux_source": "local",
+    "vuln_skip_os": [],
     "agent_secret_scan": "off",
     "agent_sfc": "off", "agent_sfc_day": "sunday", "agent_sfc_hour": 3, "agent_sfc_dism": False,
     "name_line": "auto",
@@ -2619,6 +2620,10 @@ class Monitor:
             self.store.prune(now - int(self.opts["history_days"]) * DAY)
             self.logs.prune(now - int(self.opts["history_days"]) * DAY)
             notes.append("older history has been removed")
+        if "vuln_skip_os" in changed and not ({"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys()):
+            for h in list(self.hosts.values()):  # only whether each one alerts changes: judge them again
+                if h.agent_id and h.agent_report:
+                    asyncio.create_task(self.reevaluate(h))
         if {"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys():
             self._vf.clear()
             task = getattr(self, "_vulns_task", None)
@@ -4285,9 +4290,39 @@ class Monitor:
         found = self.vuln_findings(h)
         if found is None:
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": self._vuln_why_not(h), "ids": []}
+        skip = self.vuln_skipped(h)
+        if skip:  # end of life, kept on purpose: listed in its tab, never alerted (known-exploited ones too)
+            n = len({x["cve"] for x in found})
+            return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "ids": [], "excluded": True,
+                    "detail": (f"{n} known vulnerabilit{'y' if n == 1 else 'ies'}, not alerted: " if n else "Not alerted: ") + skip}
         level, detail = vulnlib.summarise(found, float(self.opts.get("vuln_min_score", 9)))
         return {"key": "vulns", "label": "Vulnerabilities", "detail": detail, "ids": sorted({x["cve"] for x in found}),
                 "level": {"ok": agentlib.OK, "warn": agentlib.WARN, "crit": agentlib.CRIT}[level]}
+
+    def vuln_skipped(self, h: Host) -> str | None:
+        """Why this device's vulnerabilities don't alert, or None: its OS is on vuln_skip_os, or it's been excluded on
+        its own (both for end-of-life systems kept on purpose)."""
+        if ((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip")):
+            return "this device is excluded as end of life"
+        os_name = str((h.agent_report or {}).get("os") or "")
+        for pat in self.opts.get("vuln_skip_os") or []:
+            pat = str(pat).strip()
+            if pat and re.search(r"(?<![A-Za-z0-9])" + re.escape(pat) + r"(?![A-Za-z0-9])", os_name, re.I):
+                return f"{pat} is excluded as end of life"
+        return None
+
+    async def set_vuln_skip(self, h: Host, skip: bool, who: str | None) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        if skip:
+            hs["vuln_skip"] = True
+        else:
+            hs.pop("vuln_skip", None)
+        self._save_agent_settings()
+        log.info("%s: vulnerabilities %s%s", h.name, "not alerted (excluded as end of life)" if skip else "alerted again",
+                 f", by {who}" if who else "")
+        if h.agent_report:
+            await self.reevaluate(h)
+        self.publish_soon(h)
 
     def vulns_by_app(self, h: Host) -> dict:
         """{index into the software list: [{"cve", "score", "exploited", "fixed"}]} for Linux packages."""
@@ -4314,6 +4349,7 @@ class Monitor:
         return {"found": sorted(found or [], key=lambda f: (not f["exploited"], -(f["score"] or 0), f["cve"]))[:500],
                 "checked": found is not None, "why_not": None if found is not None else self._vuln_why_not(h),
                 "min_score": int(self.opts.get("vuln_min_score", 9)), "linux_source": str(self.opts.get("vuln_linux_source") or "local"),
+                "excluded": self.vuln_skipped(h), "excluded_here": bool((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip")),
                 "info": {**self.vulnfeeds.info, **({"offline": True, "bundle": self.offline_bundle()} if self.offline() else {})}}
 
     def offline(self) -> bool:
@@ -7582,6 +7618,16 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         _ilo_redo(h)
         return web.json_response({"ignore": h.ilo_ignore})
 
+    async def host_vuln_skip(req):
+        """Exclude this device's vulnerabilities from alerting (an end-of-life system kept on purpose), or undo it."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        user = await access.who(req)
+        await monitor.set_vuln_skip(h, bool(body.get("skip")), user.get("display"))
+        return web.json_response({"ok": True, "excluded": monitor.vuln_skipped(h)})
+
     async def host_vmware_ignore(req):
         """Never alert on a VMware problem on this device (e.g. a datastore of ISOs that's always nearly full),
         or stop ignoring it. {what, ignore}"""
@@ -7857,6 +7903,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/ilo/ack", editor_only(host_ilo_ack))
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
     app.router.add_post("/api/hosts/{key}/vmware/ignore", editor_only(host_vmware_ignore))
+    app.router.add_post("/api/hosts/{key}/agent/vuln-skip", editor_only(host_vuln_skip))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)

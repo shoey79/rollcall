@@ -215,9 +215,10 @@ def _mon(tmp_path, apps=None, opts=None):
     import main
     M = main.Monitor
     m = types.SimpleNamespace(opts={"vuln_checks": True, "vuln_min_score": 9, "vuln_linux_source": "local", **(opts or {})},
-                              vulnfeeds=vulns.Feeds(tmp_path, logging.getLogger("t")), _vf={})
+                              vulnfeeds=vulns.Feeds(tmp_path, logging.getLogger("t")), _vf={},
+                              agent_settings={"hosts": {}})
     m.software = lambda aid: {"hash": "h1", "updated": 1, "apps": apps or []}
-    for name in ("vuln_findings", "vuln_check", "_vuln_why_not", "_vuln_key", "vulns_by_app", "vulns_view", "_vuln_wanted"):
+    for name in ("vuln_findings", "vuln_check", "_vuln_why_not", "_vuln_key", "vulns_by_app", "vulns_view", "_vuln_wanted", "vuln_skipped"):
         setattr(m, name, types.MethodType(getattr(M, name), m))
     m._vuln_server = M._vuln_server
     return m, main

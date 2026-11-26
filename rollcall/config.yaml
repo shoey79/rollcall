@@ -90,6 +90,7 @@ options:
   vuln_checks: true
   vuln_min_score: 9
   vuln_linux_source: local
+  vuln_skip_os: []
   agent_secret_scan: "off"
   agent_sfc: "off"
   agent_sfc_day: sunday
@@ -197,6 +198,8 @@ schema:
   vuln_checks: bool
   vuln_min_score: int(1,10)
   vuln_linux_source: list(local|online|off)
+  vuln_skip_os:
+    - str
   agent_secret_scan: list(off|servers|workstations|all)
   agent_sfc: list(off|servers|workstations|all)
   agent_sfc_day: list(monday|tuesday|wednesday|thursday|friday|saturday|sunday)

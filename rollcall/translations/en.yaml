@@ -191,6 +191,9 @@ configuration:
   vuln_linux_source:
     name: Linux vulnerability data
     description: "\"local\": download each distro's data from OSV.dev daily and match it here, so nothing about your devices is sent anywhere (larger downloads). \"online\": send OSV.dev one combined list of package names and versions and let it match (small downloads; no device names or addresses). \"off\": don't check Linux."
+  vuln_skip_os:
+    name: End-of-life operating systems (no vulnerability alerts)
+    description: "Devices running these operating systems are kept on purpose though out of support (e.g. Windows 10 without ESU): their vulnerabilities are still listed in the device's Vulnerabilities tab, but never alert, known-exploited ones included. One per line, matched as whole words against the OS the agent reports, so \"Windows 10\" doesn't match Windows 11, and \"Ubuntu 20.04\" matches \"Ubuntu 20.04.6 LTS\". A single device can be excluded from its Vulnerabilities tab too."
   agent_secret_scan:
     name: Scan for passwords left in files
     description: Which devices' agents look for passwords saved in plain text (scripts, notes, setup files). Only where each one is reaches Rollcall, never the password. Each device can be turned on or off in its details.
