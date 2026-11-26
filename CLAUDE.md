@@ -35,8 +35,15 @@ Remove each line once it's released.
   line). Keep the two-line shape with a dash: Up "—"; CPU "—" over "4 CPUs"; Memory "—" over "16 GB at start" (or
   "2 GB to 8 GB" when dynamic). Grey out the row a little when it's not running, with a tooltip "Off: no CPU or memory
   in use".
+- Tabs, sort A to Z (owner asked 26 Nov): a button (admins/editors) that sorts the tab bar alphabetically, once, when
+  pressed; Overview, All and Needs attention stay first. Otherwise tabs stay in the order they were created (no
+  automatic sorting); after sorting, new tabs go on the end as now.
 
 ## Requested features (not started)
+
+- Search across tabs (owner asked 26 Nov): searching while in a tab only looks in that tab, so matches elsewhere are
+  missed. Keep the tab's own results first, then "N more in other tabs" below with those matches (each with the tab
+  it's in, or "not in a tab"), so nothing is missed. Clearing the search goes back to the tab as it was.
 
 - Vulnerabilities: leave out end-of-life OSes (owner asked 26 Nov). Some devices run an OS known to be out of support
   (e.g. Windows 10 without ESU) and are kept on purpose; their vulnerabilities shouldn't alert. A list of OSes (and
