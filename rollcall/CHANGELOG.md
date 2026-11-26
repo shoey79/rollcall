@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.101.0 - 2026-11-26
+
+- **Notes on each device.** Every device's Overview now has a **Notes** box for the things that only live in someone's head: where it is, who to call, which button to hold down when it sulks. Admins and editors write them; anyone who can open Rollcall can read them, along with who last changed them and when. Plain text, up to 4,000 characters, saved with the device (so they're in exports and backups) and left alone when you edit it. Search finds devices by their notes too, so "cupboard" finally turns up everything in the cupboard. A note being typed isn't thrown away when Details refreshes underneath it.
+
+- **Settings stay as you save them.** Changing a setting back to how it was when Rollcall last started (removing a line you'd added, or ticking a box back) said *Saved and in use* but put the old value back, until a restart. Home Assistant only writes the add-on's options file when it starts, and Rollcall was comparing against that file, so it saw no change. The same stale file could also quietly undo a setting changed earlier in the same session, and exports could carry old settings. Rollcall now reads the settings from Home Assistant itself and keeps the file up to date, and changes made in the add-on's Configuration tab take effect without a restart, as they were meant to.
+
 ## 1.100.0 - 2026-11-26
 
 - **End-of-life operating systems don't alert on vulnerabilities.** Devices kept on an OS that's out of support on purpose (Windows 10 without extended updates, say) can be left out: list the OSes under **End-of-life operating systems** in Settings (`vuln_skip_os`), or tick **Treat this device as end of life** in one device's Vulnerabilities tab. Their vulnerabilities are still listed in that tab, but never turn the device amber or red or send a notification, known-exploited ones included. Every other device alerts as before.
