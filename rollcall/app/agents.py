@@ -1531,7 +1531,7 @@ def policy_computers(jobs: list, others: list) -> list:
     return out
 
 
-def backup_jobs_view(jobs: list, forgot: dict | None = None) -> list:
+def backup_jobs_view(jobs: list, forgot: dict | None = None, acked: dict | None = None) -> list:
     """Veeam jobs as the checks should judge them.
 
     A backup copy job that copies several source jobs logs each source's copy as its own job,
@@ -1545,6 +1545,9 @@ def backup_jobs_view(jobs: list, forgot: dict | None = None) -> list:
         if backup_forgotten(j, forgot):
             continue
         j = dict(j)
+        a = (acked or {}).get(backup_job_key(j))
+        if a and str(j.get("result") or "").lower() == "warning" and str(a.get("finished") or "") == str(j.get("finished") or ""):
+            j["acked"] = {"by": a.get("by") or "", "at": a.get("at")}  # this run's warning: seen (backup_job_state)
         if str(j.get("type") or "").startswith("Retry of "):
             j["type"] = j["type"][len("Retry of "):]
         out.append(j)
@@ -1599,6 +1602,8 @@ def backup_job_state(j: dict, now: float) -> tuple[str, str]:
         if last and now - last > limit:
             return WARN, f"no successful run for {int((now - last) // 3600)} h"
     if res == "warning":
+        if j.get("acked"):  # acknowledged: green until a later run warns or fails again (owner's request, 26 Nov)
+            return OK, "warning acknowledged"
         return WARN, "finished with warnings"
     return OK, ""
 
@@ -1958,7 +1963,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     if bk is not None:
         now_ = now or time.time()
         bad, warn, n = [], [], 0
-        for j in backup_jobs_view(bk.get("jobs") or [], settings.get("backup_forgot")):
+        for j in backup_jobs_view(bk.get("jobs") or [], settings.get("backup_forgot"), settings.get("backup_ack")):
             if ign.has("backup", j.get("name")):
                 continue
             n += 1

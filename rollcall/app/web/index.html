@@ -284,6 +284,15 @@ table.small tr.dim td{opacity:.55}
 .vuln{display:inline-block;margin-top:2px;font-size:11.5px;font-weight:600;color:var(--amber);background:color-mix(in srgb,var(--amber) 14%,transparent);padding:0 7px;border-radius:9px;white-space:nowrap}
 .vuln.expl{color:var(--red);background:color-mix(in srgb,var(--red) 14%,transparent)}
 .secpromise{display:block;margin:0 0 10px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--green) 45%,var(--line));border-radius:8px;background:color-mix(in srgb,var(--green) 8%,transparent);font-size:13px;line-height:1.45}
+  /* (i): details behind a small round button instead of a block of text */
+  details.infotip { display: inline-block; vertical-align: middle; margin-left: 6px; }
+  details.infotip > summary { list-style: none; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--muted);
+    color: var(--muted); font: italic 600 12px/16px Georgia, serif; text-align: center; user-select: none; }
+  details.infotip > summary::-webkit-details-marker { display: none; }
+  details.infotip > summary:hover, details.infotip[open] > summary { color: var(--text); border-color: currentColor; }
+  details.infotip[open] { display: block; margin: 4px 0 8px; }
+  details.infotip[open] > summary { display: inline-block; }
+  details.infotip > .infobody { margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--muted) 10%, transparent); font-size: 12px; line-height: 1.5; }
 .secpromise b{display:block;margin-bottom:2px}
 .secpath{word-break:break-all;font-size:12.5px}
 .secset{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 16px;margin:10px 0 4px;font-size:13px}
@@ -1125,7 +1134,7 @@ function rowHtml(h, now) {
     const sub = subLine(h), showHost = h.host !== h.ip && (h.subtitle || data.name_line) !== "address";
     return `<tr class="${h.unreachable && !h.maint_until ? "unreach" : h.status}">
       <td class="first"><div><span class="status" title="${esc(dotTip(h))}"><span class="dot ${dotClass(h)}"></span>${statusLabel(h)}</span>${maintNote(h)}${schedNote(h)}${upstreamNote(h)}${degradedNote(h)}</div></td>
-      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this device">🔕</span>` : h.critical ? ` <span class="quiet" title="Critical: its alerts sound even when the phone is on silent">🚨</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${svcChips(h)}</div></div></td>
+      <td data-label="Name"><div class="namewrap">${iconHtml(h)}<div><div class="name"><button type="button" class="namelink" data-device="${esc(h.key)}" title="Open details">${esc(h.name)}</button>${h.no_alerts ? ` <span class="quiet" title="Never alerts: notifications are off for this device">🔕</span>` : h.critical ? ` <span class="quiet" title="Critical: its alerts sound even when the phone is on silent">🚨</span>` : ""}</div>${sub[0] ? `<div class="model" title="${esc(sub[1])}">${esc(sub[0])}</div>` : ""}${h.schedule_text ? `<div class="sched" title="Monitoring schedule">🕘 ${esc(h.schedule_text)}</div>` : ""}${showHost ? `<div class="host">${esc(h.host)}</div>` : ""}${h.agent && h.agent.ip_change ? `<div class="host old" title="Its agent now reports ${esc(h.agent.ip_change.ips.join(", "))}: open it to switch or keep this address">⚠ agent reports ${esc(h.agent.ip_change.suggested)}</div>` : ""}${svcChips(h)}</div></div></td>
       <td data-label="IP address" class="mono">${esc(h.ip || "—")}${h.ip_range ? `<small class="iprange" title="Named IP range (Settings, Display)">${esc(h.ip_range)}</small>` : ""}</td>
       <td data-label="Uptime (24h)"><div><span class="num ${upClass(up)}">${up == null ? "—" : up.toFixed(up === 100 ? 0 : 2) + "%"}</span>
         <div class="strip" title="Last 24 hours, 30 min per bar">${strip}</div></div></td>
@@ -2647,7 +2656,7 @@ function renderDetails(d) {
     return (st.domain_changes || []).filter(x => x.change === "added" && now - x.time < 86400 && x.time > at).length; };
   const ackBar = (kind, noun) => {
     const n = kind === "domain" ? domainNew() : newAlerts(kind), a = (st.ack || {})[kind];
-    if (n) return `<div class="ackbar"><span><b>${n}</b> ${noun} in the last 24 h ${n === 1 ? "hasn't" : "haven't"} been acknowledged.</span>
+    if (n) return `<div class="ackbar"><span><b>${n}</b> ${noun}${kind === "security" ? "" : " in the last 24 h"} ${n === 1 ? "hasn't" : "haven't"} been acknowledged.${kind === "security" ? " They stay until someone does." : ""}</span>
       <button type="button" class="mini primary edit-only" data-ack="${kind}">Acknowledge</button></div>`;
     if (a && a.at && Date.now() / 1000 - a.at < 86400) return `<div class="ackbar ok"><span>Acknowledged${a.by ? " by " + esc(a.by) : ""} at ${when(new Date(a.at * 1000).toISOString())}. Anything new turns it amber again.</span>
       <button type="button" class="mini edit-only" data-unack="${kind}">Undo</button></div>`;
@@ -2980,10 +2989,30 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const bad = x.active && x.in_use_pct >= 85;
     return `<tr class="${rowCls(bad, "dhcp", x.scope)}"><td>${esc(x.scope)}</td><td>${esc(x.name)}</td><td>${x.in_use_pct}%</td><td>${x.free}</td><td>${x.active ? "Active" : "Inactive"}</td><td>${bad ? ignBtn("dhcp", x.scope, "scope " + x.scope) : ""}</td></tr>`;
   })));
-  if (c.hyperv) html += sect("Hyper-V virtual machines", tbl(["VM", "State", "Status", ""], c.hyperv.map(x => {
-    const bad = /critical/i.test(x.state);
-    return `<tr class="${rowCls(bad, "vm", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.state)}</td><td>${esc(x.status)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
-  })));
+  if (c.hyperv) {
+    // Each VM: state, uptime, CPU, memory and checkpoints (Windows agent 1.0.58 on; older agents send state only)
+    const gb = mb => mb == null ? "" : mb >= 1024 ? (mb / 1024).toFixed(mb % 1024 ? 1 : 0) + " GB" : mb + " MB";
+    const nowS = Date.now() / 1000, more = c.hyperv.some(x => "checkpoints" in x);
+    const ckpt = x => {
+      if (!x.checkpoints) return `<span class="muted">None</span>`;
+      const age = x.oldest_checkpoint ? (nowS - Date.parse(x.oldest_checkpoint) / 1000) / 86400 : 0;
+      const tip = (x.checkpoint_names || []).join("\n");
+      return `<span title="${esc(tip)}"${age > 7 ? ` class="old"` : ""}><b>${x.checkpoints}</b>${x.oldest_checkpoint ? ` <small class="${age > 7 ? "old" : "muted"}">oldest ${ago(Date.parse(x.oldest_checkpoint) / 1000, nowS)}</small>` : ""}</span>`
+        + (x.checkpoint_type ? `<br><small class="muted">${esc(x.checkpoint_type)}</small>` : "");
+    };
+    html += sect("Hyper-V virtual machines", tbl(more ? ["VM", "State", "Up", "CPU", "Memory", "Checkpoints", ""] : ["VM", "State", "Status", ""], c.hyperv.map(x => {
+      const bad = /critical/i.test(x.state), on = /running/i.test(x.state);
+      if (!more) return `<tr class="${rowCls(bad, "vm", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.state)}</td><td>${esc(x.status)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
+      const mem = on && x.mem_mb ? `${gb(x.mem_mb)}${x.mem_demand_mb ? ` <small class="muted">using ${gb(x.mem_demand_mb)}</small>` : ""}`
+        + (x.dynamic ? `<br><small class="muted">dynamic, ${gb(x.mem_startup_mb)} to ${gb(x.mem_max_mb)}</small>` : "")
+        : `<small class="muted">${x.mem_startup_mb ? gb(x.mem_startup_mb) + (x.dynamic ? " to " + gb(x.mem_max_mb) : "") : ""}</small>`;
+      return `<tr class="${rowCls(bad, "vm", x.name)}"><td><b>${esc(x.name)}</b>${x.generation ? `<br><small class="muted">generation ${x.generation}${x.replication && !/notapplicable/i.test(x.replication) ? ", replication " + esc(x.replication) : ""}</small>` : ""}</td>
+        <td>${esc(x.state)}${x.status && !/operating normally/i.test(x.status) ? `<br><small class="old">${esc(x.status)}</small>` : ""}</td>
+        <td>${on && x.uptime_s ? esc(fmtUp(x.uptime_s)) : ""}</td>
+        <td>${on && x.cpu_pct != null ? x.cpu_pct + "%" : ""}${x.cpus ? `<br><small class="muted">${x.cpus} CPU${x.cpus === 1 ? "" : "s"}</small>` : ""}</td>
+        <td>${mem}</td><td>${ckpt(x)}</td><td>${bad ? ignBtn("vm", x.name) : ""}</td></tr>`;
+    })) + (more ? `<p class="hint">Checkpoints (snapshots) older than a week are highlighted: each one keeps a growing file of changes beside the VM's disk, and slows it down. Hover over the count for their names.</p>` : ""));
+  }
   if (c.printers) html += sect("Shared printers", tbl(["Printer", "Status", "Jobs", ""], c.printers.map(x => {
     const bad = x.status !== "Normal";
     return `<tr class="${rowCls(bad, "printer", x.name)}"><td>${esc(x.name)}</td><td>${esc(x.status)}</td><td>${x.jobs}</td><td>${bad ? ignBtn("printer", x.name) : ""}</td></tr>`;
@@ -3047,8 +3076,9 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     inner += review("Computer accounts with no logon for 90 days", dm.stale_computers, "for review; doesn't alert");
     html += sect("Domain security", inner + `<p class="hint">Amber for 24 hours after someone is added to a privileged group, when the KRBTGT password is over 180 days old (reset it twice, some hours apart), or when an enabled account doesn't require a password. The other lists are for review. Last logon is AD's replicated value, which can be up to 14 days behind. ${chk ? ignBtn("domain", "domain", "Domain security") + " this check." : ""}</p>`);
   }
-  flush("security");
+  flush("domain");  // LAPS: the local administrator password the domain manages, so with Group Policy and Time
   if (c.laps) html += lapsSection(c.laps, (d.checks || []).find(x => x.key === "laps"));
+  flush("security");
   if (c.bitlocker && (c.bitlocker.volumes || []).length) {
     // BitLocker: each fixed drive's encryption and protection state. Keys are never read.
     const chk = (d.checks || []).find(x => x.key === "bitlocker");
@@ -3129,11 +3159,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       <label><span>Full scan every</span><select class="sechours">${[6, 12, 24, 48, 168].map(h => `<option value="${h}"${+cf.hours === h ? " selected" : ""}>${h === 168 ? "week" : h + " hours"}</option>`).join("")}</select></label>
       <label style="grid-column:1/-1"><span>Extra folders to check, one per line (e.g. ${sx.linux ? "/etc/myapp" : "D:\\Shares\\IT"})</span><textarea class="secpaths" spellcheck="false">${esc((cf.paths || []).join("\n"))}</textarea></label>
       </div><button type="button" class="mini" data-secsave>Save</button></details>`;
-    inner += `<p class="hint">Looks in ${sx.linux ? "<code>/home</code>, <code>/root</code>, <code>/opt</code>, <code>/srv</code> and <code>/var/www</code> (shell histories, <code>.env</code>, <code>.netrc</code>, <code>.pgpass</code> and SSH keys included)"
+    inner += `<details class="infotip"><summary title="Where it looks, and how" aria-label="Where the scan looks, and how">i</summary><div class="infobody">Looks in ${sx.linux ? "<code>/home</code>, <code>/root</code>, <code>/opt</code>, <code>/srv</code> and <code>/var/www</code> (shell histories, <code>.env</code>, <code>.netrc</code>, <code>.pgpass</code> and SSH keys included)"
       : "users' folders (Desktop, Documents, Downloads, OneDrive and so on, but not AppData), PowerShell command histories, Windows setup answer files, <code>C:\\inetpub</code>, <code>C:\\Scripts</code>, <code>C:\\Temp</code>, SYSVOL on domain controllers, and the automatic sign-in password in the registry"}, plus any extra folders.
       It reads text files up to 2 MB (scripts, configuration and notes) and Word and Excel files up to 10 MB, skips program and system folders, and never downloads cloud-only OneDrive files.
       It spends up to 45 seconds per agent run at low priority, carrying on where it left off. To fix a finding, move the password into a password manager or the program's protected store, then remove it from the file; it clears after the next scan.
-      Amber at most: it never sends a notification.</p>`;
+      Amber at most: it never sends a notification.</div></details>`;
     html += sect("Passwords left in files", inner);
   }
   flush("security");
@@ -3163,10 +3193,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       <p class="hint">Each run, the agent checks its folder and files still belong only to SYSTEM and Administrators (root on Linux), and puts back any change, e.g. after someone opened the folder to read the log. Windows doesn't record who changes permissions, so the "by" is whoever took ownership of the folder to change them.</p>`);
   }
   if (d.security_visible) {
+    flush("sectop");  // failed logons and security events: at the top of the Security tab (put there below)
     const fl = (hist.failed_logons || []).slice().reverse();
     html += ackBar("security", "security alert(s) (events or failed-logon bursts)");
     detLogons = fl;
-    html += sect("Failed logons (last 24 h)", tbl(["Reported", "Count", "Top accounts"], fl.map((x, i) =>
+    html += sect("Failed logons (last 24 h, and any not acknowledged)", tbl(["Reported", "Count", "Top accounts"], fl.map((x, i) =>
       `<tr class="${x.filtered >= x.count ? "dim" : alertCls(x, "security")}"><td>${x.received ? when(new Date(x.received * 1000).toISOString()) : "—"}</td><td>${x.count}${x.filtered ? `<br><small class="muted">${x.filtered} filtered</small>` : ""}</td><td>${(x.top || []).map((t, j) => `<div class="lgrow${t.filtered ? " dim" : ""}" data-lgrow="${i}:${j}"><span>${esc(t.account)} from ${esc(t.source)}${t.machine ? ` (${esc(t.machine)})` : ""} (${t.count})`
         + (t.reason || t.type || t.via ? `<br><small class="muted">${esc([t.reason, t.type && t.type + " logon", t.via].filter(Boolean).join(" · "))}</small>` : "")
         + (t.filtered ? `<br><small class="muted">Filtered${t.filtered !== "filter" ? ": " + esc(t.filtered) : ""}</small>` : "")
@@ -3174,10 +3205,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       `<p class="empty-note">None.</p>`);
     const sec = (hist.security || []).slice().reverse();
     detSec = {events: sec, host: String(r.hostname || "").toUpperCase(), linux};
-    html += sect("Security events (last 24 h)", tbl(["Time", "Event", "Account", "Group", "By", ""], sec.map((x, i) =>
+    html += sect("Security events (last 24 h, and any not acknowledged)", tbl(["Time", "Event", "Account", "Group", "By", ""], sec.map((x, i) =>
       `<tr class="${x.filtered ? "dim" : alertCls(x, "security")}" data-secrow="${i}"><td>${when(x.time)}</td><td>${esc(x.what)}${linux ? "" : ` <small class="muted">${x.id}</small>`}${x.filtered ? `<br><small class="muted">Filtered${x.filtered !== "filter" ? ": " + esc(x.filtered) : ""}</small>` : ""}</td><td>${esc(prettyAcct(x.account))}${x.source ? `<br><small class="muted">from ${esc(x.source)}</small>` : ""}</td><td>${esc(x.group || "")}</td><td>${esc(x.by || "")}</td>
        <td>${x.filtered ? "" : `<button type="button" class="mini edit-only" data-secflt="${i}" title="Don't alert on expected events like this one">Filter…</button>`}</td></tr>`)) ||
       `<p class="empty-note">No notable security events in the last 24 hours.</p>`);
+    flush("security");
     html += secFiltersSection(st);
     html += adminsSection(r, st, linux);
   } else {
@@ -3207,7 +3239,9 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         <td>${res(x)}${x.issue && (x.issue.objects.length || x.issue.log.length) ? ` <button type="button" class="mini" data-bkwhy="${i}" aria-expanded="false" title="What went wrong in this run">Why?</button>` : ""}${x.retry ? `<br><small class="muted">will be retried</small>` : ""}${x.detail && x.result !== "Success" ? `<br><small>${esc(x.detail)}</small>` : ""}${x.superseded ? `<br><small class="muted">${esc(x.detail)}</small>` : ""}${x.policy != null ? `<br><small class="muted">${x.policy ? `Backs up ${x.policy} computer${x.policy === 1 ? "" : "s"}, each listed and checked on its own; this run is the policy's settings being sent to them` : "This run is the policy's settings being sent to its computers, not their backups, so it isn't judged by its age. Their backups show here once Veeam's PowerShell lists them, or their own Rollcall agents report them"}</small>` : x.copies ? `<br><small class="muted">Copies ${x.copies} source job${x.copies === 1 ? "" : "s"}, each listed and checked on its own</small>` : ""}</td>
         <td>${ago2(x.finished)}${x.next_run ? `<br><small class="muted">next ${when(x.next_run)}</small>` : ""}</td>
         <td>${x.source === "Microsoft 365" ? "" : ago2(x.last_success)}${x._why && /no successful|missed/.test(x._why) ? `<br><b class="old">${esc(x._why)}</b>` : ""}</td>
-        <td>${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`
+        <td>${/^warning$/i.test(x.result || "") && data && data.can_edit ? (x.acked
+          ? `<span class="ignored" title="Acknowledged${x.acked.by ? " by " + esc(x.acked.by) : ""}; back if the next run warns or fails">Acknowledged</span> <button type="button" class="mini" data-bkack="${esc(x.id || x.name)}" data-undo="1">Undo</button> `
+          : `<button type="button" class="mini primary" data-bkack="${esc(x.id || x.name)}" title="Seen it: green until the next run, which brings it back if that warns or fails too">Acknowledge</button> `) : ""}${ignBtn("backup", x.name, "job " + x.name)}${x.source !== "Microsoft 365" && data && data.can_edit ? ` <button type="button" class="mini" data-bkforget="${esc(x.id || x.name)}" data-bkname="${esc(x.name)}" title="Retired on purpose? Remove it from the list; it comes back if it runs again">Forget</button>` : ""}</td></tr>`
         + (x.issue && (x.issue.objects.length || x.issue.log.length) ? `<tr class="bkwhyrow" data-bkwhyrow="${i}" hidden><td colspan="5">${why(x)}</td></tr>` : "");
     })) : `<p class="empty-note">No backup job has finished in the last 30 days.</p>`);
     const fg = Object.entries(st.backup_forgot || {});
@@ -3218,6 +3252,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     // Installed software: what changed lately, then the full list with a filter box.
     const sw = d.software, vu = d.vulns;
     if (vu) {
+      flush("vulns");  // a tab of its own
       // Known vulnerabilities: what an update (or a newer Windows build) fixes, worst first
       const inf = vu.info || {}, errs = Object.entries(inf.errors || {});
       const srcs = [linux ? (vu.linux_source === "online" ? "OSV.dev (asked online)" : "OSV.dev data downloaded daily") : `Microsoft's security updates (${inf.msrc_months || 0} months)`,
@@ -3231,6 +3266,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
         + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
     }
+    flush("software");
     if (!sw || !sw.apps) html += sect("Installed software", `<p class="empty-note">${r.agent_version ? `Not reported yet. It needs ${linux ? "Linux agent 1.0.14" : "Windows agent 1.0.33"} or later, and arrives with the next report after the agent updates.` : ""}</p>`);
     else {
       const ch = (sw.changes || []).filter(x => x.at >= Date.now() / 1000 - 30 * 86400).slice().reverse();
@@ -3282,9 +3318,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   html += ignHtml;  // below the run: what's ignored is reference, the run is what's looked at
   flush(null);
   // Tabs, with a badge for checks needing attention that belong to each.
-  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", domain: "Domain", software: "Software", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
+  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", domain: "Domain", software: "Software", vulns: "Vulnerabilities", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
+  if (T.sectop) { T.security = T.sectop + (T.security || ""); delete T.sectop; }
+  { const hh = data && data.hosts.find(x => x.key === detKey); if (hh) T.overview = ipBox(hh) + (T.overview || ""); }  // what needs acknowledging first
   const order = Object.keys(names).filter(k => T[k] && !(sh && (k === "software" || k === "events")));  // nothing there from a router
   if (!order.includes(detTab)) detTab = "overview";
   const body = document.getElementById("detBody"), top = body.scrollTop;
@@ -3736,6 +3774,29 @@ document.getElementById("detTabs").addEventListener("click", e => {
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
 // service checks, SNMP and syslog, on one page. The SNMP and Logs tabs hold the full detail. ----
+// The agent reports addresses that don't include the one the device is monitored on (DHCP gave it another):
+// switch to the new one, or keep the current one (it may be a second network card, a VPN or a docking station).
+function ipBox(h) {
+  const ch = h.agent && h.agent.ip_change;
+  if (!ch) return "";
+  const others = ch.ips.filter(a => a !== ch.suggested);
+  return `<div class="mergebox"><p style="margin:0 0 8px"><b>Address changed?</b> ${esc(h.name)} is monitored on <b>${esc(ch.current)}</b>, but its agent now reports
+      <b>${esc(ch.suggested)}</b>${others.length ? ` (and ${others.map(esc).join(", ")})` : ""}. DHCP may have given it a new one. If ${esc(ch.current)} is still its main address
+      (it can also have another network card, a VPN or a dock), keep it.</p>
+    <div class="actions">${[ch.suggested, ...others].map((a, i) => `<button type="button" class="mini${i ? "" : " primary"} edit-only" data-ipchange="accept" data-addr="${esc(a)}">Use ${esc(a)}</button>`).join(" ")}
+      <button type="button" class="mini edit-only" data-ipchange="keep" data-addr="${esc(ch.suggested)}">Keep ${esc(ch.current)}</button></div></div>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-ipchange]");
+  if (!b) return;
+  const key = detKey, act = b.dataset.ipchange;
+  b.closest(".actions").querySelectorAll("button").forEach(x => x.disabled = true);
+  const r = await fetch(`api/hosts/${encodeURIComponent(key)}/ip-change`, {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({action: act, address: b.dataset.addr})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); }
+  b.closest(".mergebox").remove();
+  await load();
+}, true);
 async function openOverview(key) {
   const h = data && data.hosts.find(x => x.key === key);
   if (!h) return;
@@ -4289,10 +4350,10 @@ function renderOverview(h, sn, lg, ha) {
   for (const r of ((lg && lg.rows) || []).filter(r => r.alert).slice(0, 5)) att.push({lvl: r.alert === "red" ? "red" : "amber", what: "Log", detail: (r.app ? r.app + ": " : "") + r.msg, jump: "logs", ts: r.ts});
   const order = {red: 0, amber: 1};
   att.sort((a, b) => order[a.lvl] - order[b.lvl]);
-  let html = h.same_as && !h.agent ? `<div class="mergebox"><p style="margin:0 0 8px">This looks like the same device as <b>${esc(h.same_as.name)}</b>, which has the agent.
+  let html = ipBox(h) + (h.same_as && !h.agent ? `<div class="mergebox"><p style="margin:0 0 8px">This looks like the same device as <b>${esc(h.same_as.name)}</b>, which has the agent.
       <b>Merge</b> moves the agent, its checks, settings and graphs onto this entry and removes ${esc(h.same_as.name)}. This entry keeps its name, address, history and Home Assistant sensors.</p>
     <div class="actions"><button type="button" class="mini primary edit-only" data-merge="${esc(h.same_as.key)}" data-mergename="${esc(h.same_as.name)}">Merge into this entry</button>
-      <button type="button" class="mini" data-mergeopen="${esc(h.same_as.key)}">Open ${esc(h.same_as.name)}</button></div></div>` : "";
+      <button type="button" class="mini" data-mergeopen="${esc(h.same_as.key)}">Open ${esc(h.same_as.name)}</button></div></div>` : "");
   html += `<div class="tiles" style="margin-bottom:14px">${tiles.join("")}</div>`;
   html += sect(att.length ? `Needs attention (${att.length})` : "Needs attention", att.length
     ? `<div class="checklist">${att.map(a => `<div${a.jump ? ` data-ovjump="${a.jump}" role="button" tabindex="0" style="cursor:pointer"` : ""}><span class="dot ${a.lvl}" style="margin-top:4px"></span><span><b>${esc(a.what)}</b><small>${esc(a.detail.slice(0, 200))}${a.ts ? " · " + ago(a.ts, now) : ""}${a.jump ? ` · <a>${a.jump === "snmp" ? "SNMP" : a.jump === "ha" ? "Home Assistant" : "Logs"} ›</a>` : ""}</small>${a.ack === "restart" && data && data.can_edit === true ? `<button type="button" class="mini" data-snmpack="1" style="margin-top:4px" title="Planned or expected: stop flagging this restart">Acknowledge</button>` : ""}</span></div>`).join("")}</div>`
@@ -4538,6 +4599,15 @@ document.getElementById("detBody").addEventListener("click", async e => {
     if (row) { row.hidden = !row.hidden; w.setAttribute("aria-expanded", String(!row.hidden)); w.textContent = row.hidden ? "Why?" : "Hide"; }
     return;
   }
+  const k = e.target.closest("[data-bkack]");
+  if (k && detMode !== "snmp") {
+    k.disabled = true;
+    const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/agent/backup-ack", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id: k.dataset.bkack, undo: k.dataset.undo === "1"})});
+    if (!r.ok) { k.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
+    await openDetails(detKey, ["backups"]); setTimeout(load, 1500);
+    return;
+  }
   const f = e.target.closest("[data-bkforget], [data-bkback]"); if (!f || detMode === "snmp") return;
   const forget = !!f.dataset.bkforget;
   if (forget && !confirm(`Forget "${f.dataset.bkname}"?\n\nIt disappears from the list and stops alerting. If a job with this ID runs again later, it comes back on its own.`)) return;
@@ -4768,7 +4838,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["security", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["software", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

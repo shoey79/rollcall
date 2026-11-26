@@ -1756,8 +1756,22 @@ function Get-RoleChecks($Roles, [DateTime]$Since, $State) {
     $null = Measure-Step 'hyper-v' {
     if ($Roles -contains 'Hyper-V' -and (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
         try {
+            # Each VM's state, uptime, CPU and memory, and its checkpoints (snapshots): one call for all of them
+            $snaps = @{}
+            try { foreach ($c in @(Get-VM | Get-VMSnapshot -ErrorAction SilentlyContinue)) { $k = [string]$c.VMName; if (-not $snaps[$k]) { $snaps[$k] = @() }; $snaps[$k] += $c } } catch { }
             $checks.hyperv = @(Get-VM | ForEach-Object {
-                    [ordered]@{ name = [string]$_.Name; state = [string]$_.State; status = [string]$_.Status }
+                    $v = $_; $mine = @($snaps[[string]$v.Name] | Where-Object { $_ } | Sort-Object CreationTime)
+                    $up = $null; try { if ($v.Uptime) { $up = [int64]$v.Uptime.TotalSeconds } } catch { }
+                    $mb = { param($b) if ($null -eq $b) { $null } else { [int64]([int64]$b / 1MB) } }
+                    [ordered]@{ name = [string]$v.Name; state = [string]$v.State; status = [string]$v.Status
+                        uptime_s = $up; cpu_pct = $(try { [int]$v.CPUUsage } catch { $null }); cpus = $(try { [int]$v.ProcessorCount } catch { $null })
+                        mem_mb = (& $mb $v.MemoryAssigned); mem_demand_mb = (& $mb $v.MemoryDemand); mem_startup_mb = (& $mb $v.MemoryStartup)
+                        mem_max_mb = $(if ($v.DynamicMemoryEnabled) { & $mb $v.MemoryMaximum } else { $null }); dynamic = [bool]$v.DynamicMemoryEnabled
+                        generation = $(try { [int]$v.Generation } catch { $null }); replication = [string]$v.ReplicationHealth
+                        checkpoints = $mine.Count
+                        oldest_checkpoint = $(if ($mine.Count) { ConvertTo-UtcString $mine[0].CreationTime } else { $null })
+                        checkpoint_names = @($mine | Select-Object -Last 5 | ForEach-Object { Limit-Text ([string]$_.Name) 80 })
+                        checkpoint_type = $(if ($mine.Count) { [string]$mine[-1].SnapshotType } else { $null }) }
                 })
         } catch { Add-CollectorError 'hyperv' $_ }
     }

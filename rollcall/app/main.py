@@ -1660,6 +1660,7 @@ class HomeAssistant:
 # --------------------------------------------------------------------------
 SECURITY_CHECKS = ("security", "defender", "secrets", "integrity", "domain", "vulns")  # emailed under "Security"
 TIME_ACK_KINDS = ("events", "security", "secrets", "integrity", "domain")
+SECURITY_KINDS = ("security", "failed_logons")  # kept until acknowledged, not just 24 hours
 NO_ACK = ("defender",)  # cleared on the device itself (a threat removed), then the next report shows it
 TIME_ACK_TEXT = {"events": "alert-worthy events up to then", "security": "security alerts up to then",
                  "secrets": "passwords found up to then", "integrity": "changes to the agent's files up to then",
@@ -2129,6 +2130,12 @@ class Monitor:
         self._apply_syslog(h, entry)
         if h.no_alerts:
             await self.dismiss(f"ping_monitor_{h.key}")
+        await self._rebuild_services(h)
+        log.info("Updated %s (%s) with checks %s", h.name, h.host, h.checks or "none")
+        self.publish_soon(h)
+
+    async def _rebuild_services(self, h: Host) -> None:
+        """Remake a device's checks from its settings, keeping the history and state of the ones still there."""
         old = {s.desc: s for s in h.services}
         new = self._build_services(h.name, h.checks)
         for s in new:
@@ -2146,8 +2153,6 @@ class Monitor:
             h.status = GREEN
         h.next_due = 0
         self._save_hosts()
-        log.info("Updated %s (%s) with checks %s", h.name, h.host, h.checks or "none")
-        self.publish_soon(h)
 
     @staticmethod
     def _apply_syslog(h: Host, entry: dict) -> None:
@@ -3737,6 +3742,7 @@ class Monitor:
             self.agents.save_report(agent["id"], {"report": report, "received": now})
             return
         await self._apply(h, agent, report, now)
+        await self.ip_change_notice(h)
         self.agents.save_report(agent["id"], {"report": report, "received": now, "history": h.agent_history,
                                               "failures": {c.key: c.failures for c in h.agent_checks if c.failures}})
 
@@ -4133,7 +4139,11 @@ class Monitor:
 
     def _history_add(self, h: Host, kind: str, items: list, received: float) -> None:
         cutoff = received - DAY
-        hist = [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= cutoff]
+        # Security alerts stay until someone acknowledges them, however long ago they arrived (owner's request,
+        # 26 Nov): the rest of the history is the last 24 hours
+        acked = self._ack_time(h, "security") if kind in SECURITY_KINDS else None
+        hist = [i for i in h.agent_history.get(kind, []) if i.get("_rx", 0) >= cutoff
+                or (acked is not None and i.get("alert") and i.get("_rx", 0) > acked)]
         hist.extend({**i, "_rx": received} for i in items)
         h.agent_history[kind] = hist[-200:]
 
@@ -4653,7 +4663,7 @@ class Monitor:
         ign = agentlib.Ignore(list(self.opts.get("agent_ignore") or []) + list(hs.get("ignore") or [])
                               + list(self.agent_settings.get("global_ignore") or []))
         now, changed = time.time(), False
-        for j in agentlib.backup_jobs_view(jobs, hs.get("backup_forgot")):
+        for j in agentlib.backup_jobs_view(jobs, hs.get("backup_forgot"), hs.get("backup_ack")):
             if ign.has("backup", j.get("name")):
                 continue
             level, why = agentlib.backup_job_state(j, now)
@@ -4783,7 +4793,11 @@ class Monitor:
         return float(((self.agent_settings["hosts"].get(h.key) or {}).get("ack") or {}).get(kind, {}).get("at") or 0)
 
     def _recent(self, h: Host, kind: str, now: float) -> list:
-        """Alert-worthy items from the last 24 h that haven't been acknowledged."""
+        """Alert-worthy items that haven't been acknowledged: from the last 24 h, or (security) at any time."""
+        if kind == "security":  # its events and its failed-logon bursts, both kept until acknowledged
+            acked = self._ack_time(h, "security")
+            items = [i for k in SECURITY_KINDS for i in h.agent_history.get(k, [])]
+            return sorted((i for i in items if i.get("alert", True) and i.get("_rx", 0) > acked), key=lambda i: i.get("_rx", 0))
         acked = self._ack_time(h, kind)
         return [i for i in h.agent_history.get(kind, [])
                 if i.get("_rx", 0) >= now - DAY and i.get("alert", True) and i.get("_rx", 0) > acked]
@@ -4812,6 +4826,7 @@ class Monitor:
         return {"ignore": list(self.agent_settings.get("global_ignore") or []) + list(hs.get("ignore") or []),
                 "disks": dict(hs.get("disks") or {}), "domain_changes": list(hs.get("domain_changes") or []),
                 "nic_watch": dict(hs.get("nic_watch") or {}), "backup_forgot": dict(hs.get("backup_forgot") or {}),
+                "backup_ack": dict(hs.get("backup_ack") or {}),
                 "resources": dict(hs.get("resources") or {}),
                 "secret_findings": list(self.secret_findings(h.agent_id).get("findings") or []),
                 "secret_ack": self._ack_time(h, "secrets"),
@@ -4896,6 +4911,109 @@ class Monitor:
         self._save_agent_settings()
         log.info("%s: resource limits %s", h.name, res or "defaults")
         await self.reevaluate(h)
+
+    def ip_change(self, h: Host) -> dict | None:
+        """The device is monitored on an IPv4 address its agent no longer has (DHCP gave it another): what to offer.
+        None when it's monitored by name (that follows DHCP by itself), the agent still has the address, the agent
+        hasn't reported in the last hour, or someone chose to keep the current address for these addresses.
+        {"current", "suggested", "ips"}: suggested is the address the agent reached Rollcall from when it is one of
+        its own, otherwise its first (an agent can hold several: the choice is the person's)."""
+        rec = (self.agents.agents.get(h.agent_id) if self.agents and h.agent_id else None) or {}
+        try:
+            if ipaddress.ip_address(h.host).version != 4:
+                return None
+        except ValueError:
+            return None
+        ips = []
+        for i in rec.get("ips") or []:
+            try:
+                a = ipaddress.ip_address(str(i).split("/")[0])
+            except ValueError:
+                continue
+            if a.version == 4 and not a.is_loopback and not a.is_link_local and str(a) not in ips:
+                ips.append(str(a))
+        if not ips or h.host in ips or time.time() - (rec.get("last_report") or 0) > 3600:
+            return None
+        to = rec.get("source_ip") if rec.get("source_ip") in ips else ips[0]
+        keep = (self.agent_settings["hosts"].get(h.key) or {}).get("ip_keep") or {}
+        if keep.get("host") == h.host and to in (keep.get("addresses") or []):
+            return None
+        return {"current": h.host, "suggested": to, "ips": ips}
+
+    async def ip_change_notice(self, h: Host) -> None:
+        """One notification per new address (not every report): it goes when it's accepted or kept."""
+        ch, hs = self.ip_change(h), self.agent_settings["hosts"].setdefault(h.key, {})
+        nid = f"ping_monitor_ip_{h.key}"
+        if not ch:
+            if hs.pop("ip_notified", None):
+                self._save_agent_settings()
+                await self.dismiss(nid)
+            return
+        if hs.get("ip_notified") == ch["suggested"]:
+            return
+        hs["ip_notified"] = ch["suggested"]
+        self._save_agent_settings()
+        log.info("%s: monitored on %s, but its agent now reports %s", h.name, ch["current"], ", ".join(ch["ips"]))
+        if not h.no_alerts:
+            await self.persist(nid, f"{h.name}: address changed?",
+                               f"{h.name} is monitored on {ch['current']}, but its agent now reports "
+                               f"{', '.join(ch['ips'])} (DHCP, perhaps). Open it in Rollcall to switch to "
+                               f"{ch['suggested']} or keep {ch['current']}.")
+
+    async def resolve_ip_change(self, h: Host, action: str, address: str, who: str | None) -> bool:
+        """Accept: monitor the device on the agent's address (checks naming the old address move with it).
+        Keep: leave it, and don't ask again for this address while the device stays on the current one."""
+        ch = self.ip_change(h)
+        if not ch or address not in ch["ips"]:
+            return False
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        old = h.host
+        if action == "keep":
+            keep = hs.get("ip_keep") if (hs.get("ip_keep") or {}).get("host") == old else {"host": old, "addresses": []}
+            keep["addresses"] = (keep["addresses"] + [a for a in ch["ips"] if a not in keep["addresses"]])[-16:]
+            hs["ip_keep"] = keep
+            self._save_agent_settings()
+            log.info("%s: keeping %s (agent reports %s)%s", h.name, old, ", ".join(ch["ips"]), f", by {who}" if who else "")
+        else:
+            pat = re.compile(r"(?<![\d.])" + re.escape(old) + r"(?![\d])")
+            if isinstance(h.checks, list):
+                h.checks = [pat.sub(address, c) if isinstance(c, str) else c for c in h.checks]
+            elif isinstance(h.checks, str):
+                h.checks = pat.sub(address, h.checks)
+            for f in ("jf_url", "px_url"):
+                if getattr(h, f, None):
+                    setattr(h, f, pat.sub(address, getattr(h, f)))
+            h.host, h.ip, h.failures = address, None, 0
+            hs.pop("ip_keep", None)
+            self._save_agent_settings()
+            await self._rebuild_services(h)
+            log.info("%s: now monitored on %s (was %s)%s", h.name, address, old, f", by {who}" if who else "")
+        await self.ip_change_notice(h)
+        self.publish_soon(h)
+        return True
+
+    async def ack_backup_job(self, h: Host, key: str, who: str | None, undo: bool = False) -> bool:
+        """Acknowledge a backup job's warning: green until its next run, which brings it back if it warns or fails
+        again. Tied to the run (when it finished), so a later warning is new."""
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        acks = hs.setdefault("backup_ack", {})
+        if undo:
+            if not acks.pop(key, None):
+                return False
+        else:
+            jobs = (((h.agent_report or {}).get("checks") or {}).get("backups") or {}).get("jobs") or []
+            j = next((x for x in jobs if agentlib.backup_job_key(x) == key), None)
+            if not j or str(j.get("result") or "").lower() != "warning":
+                return False
+            acks[key] = {"finished": j.get("finished") or "", "by": who or "", "at": int(time.time())}
+            while len(acks) > 300:
+                acks.pop(min(acks, key=lambda k: acks[k].get("at") or 0))
+        if not acks:
+            hs.pop("backup_ack", None)
+        self._save_agent_settings()
+        log.info("%s: backup job %s warning %s%s", h.name, key, "un-acknowledged" if undo else "acknowledged", f" by {who}" if who else "")
+        await self.reevaluate(h)
+        return True
 
     async def forget_backup_job(self, h: Host, key: str, forget: bool) -> bool:
         """Hide a retired Veeam job until it runs again (a later result brings it back)."""
@@ -5075,8 +5193,9 @@ class Monitor:
                 if recent:
                     last = recent[-1]
                     acct = self._pretty_account(last.get("account"))
-                    level, detail = agentlib.WARN, (f"{len(recent)} notable security event(s) in 24h; latest: "
-                                                    f"{last.get('what')}" + (f" ({acct})" if acct else ""))
+                    what = last.get("what") or (f"{last.get('count')} failed logons" if last.get("count") else "a security event")
+                    level, detail = agentlib.WARN, (f"{len(recent)} security alert{'s' if len(recent) != 1 else ''} not acknowledged yet; "
+                                                    f"latest: {what}" + (f" ({acct})" if acct else ""))
             if level == agentlib.CRIT:
                 if restoring and failures is not None:
                     # Back as it was before the restart: a problem already confirmed stays red, so the
@@ -5261,6 +5380,7 @@ class Monitor:
             mem = round(100 * (1 - (r.get("mem_free_mb") or 0) / r["mem_total_mb"]), 1)
         rec = (self.agents.agents.get(h.agent_id) if self.agents else None) or {}
         return {"id": h.agent_id, "last_seen": h.agent_seen, "version": r.get("agent_version"),
+                "ip_change": self.ip_change(h),
                 "sent_to": rec.get("sent_to"), "source_ip": rec.get("source_ip"), "forwarded_for": rec.get("forwarded_for"),
                 "roles": r.get("roles") or [], "os": r.get("os"), "uptime_s": r.get("uptime_s"),
                 # Before the first report, the OS comes from the enrolment request.
@@ -5322,7 +5442,7 @@ class Monitor:
         if bk:  # each job's state as the check sees it, for the Backups tab
             now, forgot = time.time(), self._host_settings(h).get("backup_forgot") or {}
             r["checks"] = {**r["checks"], "backups": {**bk, "jobs": [
-                {**j, "_level": lv, "_why": why} for j in agentlib.backup_jobs_view(bk.get("jobs") or [], forgot)
+                {**j, "_level": lv, "_why": why} for j in agentlib.backup_jobs_view(bk.get("jobs") or [], forgot, self._host_settings(h).get("backup_ack"))
                 for lv, why in [agentlib.backup_job_state(j, now)]]}}
         sq = (r.get("checks") or {}).get("sql")
         if sq and sq.get("instances"):  # each database's state as the check sees it, for the Roles tab
@@ -6215,6 +6335,32 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             return web.json_response({"error": "kind must be check, " + ", ".join(TIME_ACK_KINDS)}, status=400)
         await monitor.acknowledge(h, kind, user.get("display"), bool(body.get("undo")))
         return web.json_response({"ok": True})
+
+    async def agent_backup_ack(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        key = str(body.get("id") or "")
+        if not key or len(key) > 200:
+            return web.json_response({"error": "invalid job"}, status=400)
+        user = await access.who(req)
+        if not await monitor.ack_backup_job(h, key, user.get("display"), body.get("undo") is True):
+            return web.json_response({"error": "that job has no warning to acknowledge in the last report"}, status=404)
+        return web.json_response({"ok": True})
+
+    async def host_ip_change(req):
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        action, addr = body.get("action"), str(body.get("address") or "")[:45]
+        if action not in ("accept", "keep"):
+            return web.json_response({"error": "action is accept or keep"}, status=400)
+        user = await access.who(req)
+        if not await monitor.resolve_ip_change(h, action, addr, user.get("display")):
+            return web.json_response({"error": "that address change isn't waiting any more"}, status=404)
+        return web.json_response({"ok": True, "host": h.host})
 
     async def agent_backup_forget(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -7365,6 +7511,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/secret-scan", editor_only(agent_secret_scan))
     app.router.add_get("/api/software", software_search)
     app.router.add_post("/api/hosts/{key}/agent/backup-forget", editor_only(agent_backup_forget))
+    app.router.add_post("/api/hosts/{key}/agent/backup-ack", editor_only(agent_backup_ack))
+    app.router.add_post("/api/hosts/{key}/ip-change", editor_only(host_ip_change))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))

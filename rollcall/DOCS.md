@@ -743,6 +743,8 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 4. Within 5 minutes each server shows under **Waiting for approval**. Check the name and address, then **Approve** (or **Approve all**).
 5. Approved servers that aren't on the dashboard yet are added automatically, by IP, unless `agent_auto_add` is off. Existing entries are matched by name or IP.
 
+   **Address changed?** If a device is monitored on an IP address its agent no longer reports (DHCP gave it a new one), the list shows *agent reports …* under its address, and its details ask whether to **Use** the new address (checks naming the old one move with it) or **Keep** the current one, which may still be right: a second network card, a VPN or a dock. One notification per new address. Devices monitored by name aren't asked: their name follows DHCP.
+
    If the same device has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same device as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
 
 **What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. After its first report it adds a second task, **Ping Monitor Agent (start-up)**, that runs a minute after Windows starts, so a restart shows straight away. From agent 1.0.47 that start-up run waits up to 3 minutes for Rollcall to be reachable (DHCP, the domain network or a VPN can take longer than a minute), rather than giving up until the next 5-minute run. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
@@ -819,7 +821,7 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 
 **Acknowledging alerts.** Most alerts on the Overview have an **Acknowledge** button, so you don't need to open each device. The same button is on each amber or red check in a device's details. What it does depends on the alert:
 
-- **Something that happened** (alert-worthy events, security alerts, passwords found in files, changes to the agent's files, and additions to privileged groups such as Domain Admins): everything up to now is acknowledged, so it's green again straight away instead of after 24 hours. Anything new turns it amber again.
+- **Something that happened** (alert-worthy events, security alerts, passwords found in files, changes to the agent's files, and additions to privileged groups such as Domain Admins): everything up to now is acknowledged, so it's green again straight away instead of after 24 hours. Anything new turns it amber again. Security events and failed-logon bursts don't time out at all: they stay until someone acknowledges them.
 - **Something that's still the case** (a pending reboot, a stopped app pool, a backup that hasn't run, a disk filling up, an SNMP warning): it counts as OK while it stays as it is or better. If it gets worse (amber to red) it alerts again, and if it clears and later comes back it alerts again too.
 - **Not responding**, or a service check that fails (a port or web page): nothing to acknowledge. Pause the device instead.
 - **Defender:** a threat is cleared on the device itself; the next agent report then clears the alert. There's no Acknowledge for it.
@@ -853,6 +855,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
   - A failed job is red, with one notification per failed run giving Veeam's reason. A failure Veeam will retry, or a warning, is amber.
   - **Why?** on a job that warned or failed shows what went wrong in its latest run: each VM or item with its result, Veeam's reason and its own warning lines (e.g. *Cannot use CBT…* for a disk), and the run's warning and error lines. Well-known reasons get a 💡 explaining them. On the backup server it's read from Veeam's own record of the run (Veeam's PowerShell module, installed with the console). Backup & Replication 13's module needs PowerShell 7.6, so the agent (Windows agent 1.0.55+) runs the lookup in PowerShell 7 when it's installed; without it, the agent's log says so. Otherwise, and for Veeam Agent jobs, it comes from the warnings and errors in the Veeam event log during the run, which say that a VM warned but not why. Each run is looked up once.
   - **Backup copy jobs** that copy several source jobs log each copy as `<copy job>\<source job>`, and the copy job itself only logs when one of its own sessions ends. So a failed result for the copy job itself (e.g. a failed retry) counts as superseded once copies have finished since it and none of them failed. Its row then shows *Last run failed; N copy sessions have succeeded since*.
+  - **A warning you've looked at?** **Acknowledge** on a job that finished with warnings turns it green until the job runs again. If that run warns or fails too, it's back; **Undo** takes the acknowledgement back.
   - **Retired a job on purpose?** **Forget** on its row removes it from the list and its alerts straight away, which is tidier than **Ignore** when you're reorganising jobs. If a job with the same Veeam ID runs again, it comes back on its own. Forgotten jobs are listed under the table with **Bring back**. Jobs that haven't run for 60 days are forgotten automatically.
   - A copy job like that is also judged by its copies for being overdue: its **Last success** is the latest successful copy, and each copy has its own overdue check, so the copy job's own occasional entries don't make it look overdue.
   - Rollcall learns how often each job runs. A job with no successful run for more than about 1½ times its usual gap (at least 26 hours, or 8 days until it has a few runs of history) is amber, with one "backup overdue" notification. That catches a job that has been disabled or silently stopped.
@@ -877,7 +880,7 @@ Other hardware RAID controllers aren't covered; use the vendor's own alerting.
 
 **Failed logons** are grouped by account and source. Each group shows Windows' reason (e.g. "user name doesn't exist", "wrong password", "account locked out"), the logon type, the method (NTLM, Kerberos) and the client's device name. A user name sent with the domain already in it reads e.g. `contoso\svc_backup (with domain CONTOSO)`, which usually means a saved credential is typed wrongly.
 
-**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Failed logons, security events, LAPS, BitLocker, certificates and the Administrators group are on the **Security** tab. Security events and the Administrators group are shown to admins only.
+**Details** shows system info, CPU and memory, roles, disk bars, role services, other stopped services, IIS app pools, AD replication partners, DHCP scopes, Hyper-V VMs, printers, RDS sessions, Defender status, the last 24 hours of System and Application errors, and how long each agent run takes (**Agent run**: total time, CPU, peak memory and a breakdown by step). Hyper-V VMs show their uptime, CPU, memory and checkpoints (agent 1.0.58 on; checkpoints older than a week are highlighted). Failed logons and security events are at the top of the **Security** tab, with BitLocker, certificates and the Administrators group; LAPS is on the **Domain** tab, and known vulnerabilities on the **Vulnerabilities** tab. Security events and the Administrators group are shown to admins only.
 
 In Details, **Group Policy** and **Time** are on their own **Domain** tab (and, from 1.94.2, **Domain security** on the PDC emulator). **Microsoft Defender** (Security tab) shows when the last quick and full scans finished (agent 1.0.52 or later). While a device is down, off schedule or its agent has stopped reporting, **Signed in** says nobody (it's off) or not known (no recent report), rather than showing who was signed in at its last report; the same goes for the **Signed-in user** line under the name.
 
@@ -893,7 +896,7 @@ On devices where a LAPS policy applies (agent 1.0.18 or later), Rollcall checks 
 - **Domain controllers:** Windows LAPS manages the DSRM password there, if *Enable password backup for DSRM accounts* is on.
 - **Devices without LAPS** don't get the check. To leave it off one server, use **Ignore** (`laps:laps`).
 
-The Security tab shows the product, where the policy comes from, where it backs up to, how often it rotates, the managed account, when the password was last set and when it expires, the last backup and the last LAPS run.
+The Domain tab shows the product, where the policy comes from, where it backs up to, how often it rotates, the managed account, when the password was last set and when it expires, the last backup and the last LAPS run.
 
 ### BitLocker
 
@@ -1274,7 +1277,7 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 - `online`: the add-on sends OSV.dev's API (`api.osv.dev`) one combined list of the package names and versions across all your Linux devices, once a day and when a list changes, and fetches the details of what applies. No device names, addresses or which device has which package are sent. Downloads are small.
 - `off`: Linux devices aren't checked.
 
-The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Software tab says so, and the data already downloaded is used until it can.
+The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Vulnerabilities tab says so, and the data already downloaded is used until it can.
 
 ---
 
