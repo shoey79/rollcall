@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.102.0 - 2026-11-26
+
+- **End-of-life operating systems are ticks now, not typing.** Settings lists the releases your agents actually report, each with how many devices run it and when its security updates end, so the ones past it stand out. Tick the ones you're keeping on purpose; anything no agent reports yet can still be typed under **Others**. Your existing lines carry over as ticks where they match.
+
+- **LTSC is no longer caught by "Windows 10".** Excluding Windows 10 also silenced Windows 10 Enterprise LTSC and IoT machines, which are supported until 2027-2032 and very much should still alert. LTSC, LTSB and IoT editions are now releases of their own (worked out from the build number, as Windows often leaves the year out), only excluded when ticked or named. If you'd typed "Windows 10" to cover them on purpose, tick them too.
+
+- **The Manage menu has some order to it.** Grouped under **Devices**, **Activity** and **Data**, with **Settings** at the bottom where you'd expect it, and **Reset all uptime** still last, at arm's length.
+
 ## 1.101.0 - 2026-11-26
 
 - **Notes on each device.** Every device's Overview now has a **Notes** box for the things that only live in someone's head: where it is, who to call, which button to hold down when it sulks. Admins and editors write them; anyone who can open Rollcall can read them, along with who last changed them and when. Plain text, up to 4,000 characters, saved with the device (so they're in exports and backups) and left alone when you edit it. Search finds devices by their notes too, so "cupboard" finally turns up everything in the cupboard. A note being typed isn't thrown away when Details refreshes underneath it.
