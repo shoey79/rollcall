@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import re
 
-SOURCES = {"starlink": "Starlink", "jellyfin": "Jellyfin", "plex": "Plex", "ilo": "iLO", "ups": "UPS", "firetv": "Fire TV"}
+SOURCES = {"starlink": "Starlink", "jellyfin": "Jellyfin", "plex": "Plex", "ilo": "iLO", "ups": "UPS", "firetv": "Fire TV",
+           "vmware": "VMware"}
 # What each source is, for hints from AI
 READING_WHAT = {"starlink": "Starlink satellite dish", "jellyfin": "Jellyfin media server", "plex": "Plex media server",
                 "ilo": "HPE server's iLO management controller", "ups": "UPS (read over SNMP)",
-                "firetv": "Fire TV stick or Android TV (read over network ADB)"}
+                "firetv": "Fire TV stick or Android TV (read over network ADB)",
+                "vmware": "VMware ESXi host, vCenter Server or Aria appliance"}
 RE = re.compile(r"^reading:([a-z]+)\.([a-z0-9_]{1,40})\s*(?:(>=|<=|!=|>|<|=)\s*(\S.{0,60}))?$", re.I)
 
 
@@ -104,6 +106,32 @@ def catalog(source: str, d: dict | None, extra: dict | None = None) -> list[dict
         add("app_in_front", "App in front", "", d.get("app_in_front") or None)
         add("fire_os", "Fire OS", "", d.get("fire_os") or None)
         add("security_patch_days", "Security patch age", "days", _days_since(d.get("security_patch")))
+    elif source == "vmware":
+        hs = d.get("hosts") or []
+        if hs:
+            add("vms_on", "VMs on", "", d.get("vms_on"))
+            add("vms_off", "VMs off", "", d.get("vms_off"))
+            add("hosts_maintenance", "Hosts in maintenance", "", sum(1 for x in hs if x.get("maintenance")))
+            add("hosts_disconnected", "Hosts not connected", "", sum(1 for x in hs if x.get("connection") not in ("connected", "")))
+            add("alarms", "Alarms", "", sum(1 for a in d.get("alarms") or [] if not a.get("acknowledged") and a.get("status") in ("red", "yellow")))
+            if len(hs) == 1:
+                add("cpu", "CPU", "%", hs[0].get("cpu_pct"))
+                add("memory", "Memory", "%", hs[0].get("mem_pct"))
+            for ds in d.get("datastores") or []:
+                if ds.get("free_pct") is not None:
+                    add("ds_" + _slug(ds["name"]), f"Free {ds['name']}", "%", ds["free_pct"], "free space on the datastore")
+            for x in hs:
+                for sn in x.get("sensors") or []:
+                    if sn.get("type") in ("temperature", "fan", "power") and sn.get("value") is not None:
+                        add("sn_" + _slug((x["name"] if len(hs) > 1 else "") + " " + sn["name"]),
+                            (f"{x['name']} " if len(hs) > 1 else "") + sn["name"][:40], sn.get("unit") or "", sn["value"])
+        c = d.get("cert") or {}
+        if c.get("expires"):
+            import time as _t
+            add("cert_days", "Certificate expires in", "days", int((c["expires"] - _t.time()) / 86400))
+        al = d.get("alerts")
+        if al:
+            add("critical_alerts", "Critical alerts", "", al.get("critical"))
     elif source == "ups":
         u = d.get("ups") or {}
         if u:
@@ -123,7 +151,7 @@ def available(h) -> list[dict]:
     for src, data, extra in (("starlink", getattr(h, "sl_data", None), {"map": getattr(h, "sl_map", None)}),
                              ("jellyfin", getattr(h, "jf_data", None), None), ("plex", getattr(h, "px_data", None), None),
                              ("ilo", getattr(h, "ilo_data", None), None), ("ups", getattr(h, "snmp_data", None), None),
-                             ("firetv", getattr(h, "ft_data", None), None)):
+                             ("firetv", getattr(h, "ft_data", None), None), ("vmware", getattr(h, "vm_data", None), None)):
         if {"ups": "snmp"}.get(src, src) not in kinds:
             continue
         for r in catalog(src, data, extra):

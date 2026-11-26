@@ -836,6 +836,14 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
           </div>
           <p class="hint">For HPE iLO 3 and iLO 4. Create an iLO user with only the <b>Login</b> privilege and enter it here; Rollcall only reads. The health is read every 5 minutes over HTTPS. Use the iLO's own address as this device's address. The password isn't shown on the dashboard.</p>
         </div>
+        <div id="vmwareBox" hidden class="snmpbox">
+          <div class="fields">
+            <label class="field">Address<input id="fVmUrl" maxlength="300" autocomplete="off" spellcheck="false" placeholder="https://this device's address"></label>
+            <label class="field">User name<input id="fVmUser" maxlength="128" autocomplete="off" spellcheck="false" placeholder="e.g. rollcall@vsphere.local"></label>
+            <label class="field">Password<input id="fVmPass" type="password" maxlength="256" autocomplete="new-password" spellcheck="false"></label>
+          </div>
+          <p class="hint">Give Rollcall an account with VMware's <b>Read-only</b> role (ESXi: Host, Actions, Permissions; vCenter: Administration, Global Permissions, Read-only, with <i>Propagate to children</i>). Rollcall only reads, every 5 minutes, over HTTPS: hosts, hardware sensors, maintenance mode, datastores, VMs, alarms and clusters, plus vCenter's appliance health, services, file-based backup and updates. The password is only ever sent to this address and isn't shown again; moving the address to another machine means entering it again. Leave the address blank for https on this device.</p>
+        </div>
         <div id="jellyfinBox" hidden class="snmpbox">
           <div class="fields">
             <label class="field">Jellyfin address<input id="fJfUrl" maxlength="300" autocomplete="off" spellcheck="false" placeholder="http://this device's address:8096"></label>
@@ -2652,7 +2660,7 @@ document.getElementById("dlg").addEventListener("close", async () => {
   await load();
   if (!data.hosts.find(x => x.key === detKey)) return detDlg.close();
   renderDetActions();
-  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
+  const refresh = () => detDlg.open && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "vmware" ? openVmware(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey));
   refresh(); setTimeout(refresh, 4000);  // again once the new checks have run
 });
 // ---- Server details (Windows agent) ----
@@ -2690,7 +2698,7 @@ async function openDetails(key, jump) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load details.</p>`;
   }
 }
-document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
+document.getElementById("detRefresh").addEventListener("click", () => detKey && (detMode === "overview" ? openOverview(detKey) : detMode === "ha" ? openHa(detKey) : detMode === "ilo" ? openIlo(detKey) : detMode === "jellyfin" ? openJellyfin(detKey) : detMode === "vmware" ? openVmware(detKey) : detMode === "plex" ? openPlex(detKey) : detMode === "starlink" ? openStarlink(detKey) : detMode === "firetv" ? openFireTV(detKey) : detMode === "snmp" ? openSnmp(detKey) : detMode === "syslog" ? openLogs(detKey) : openDetails(detKey)));
 
 // "Up for" from the last report would freeze, and a device that's been off since yesterday kept saying "Up
 // for 2 h". Down (or unreachable): since when. Up but its agent silent: since its last report. Up and
@@ -3881,6 +3889,7 @@ function deviceSources(h) {
   if (h && h.syslog) out.push(["logs", "Logs"]);
   if (h && h.ilo) out.push(["ilo", "iLO"]);
   if (h && h.services.some(x => x.kind === "jellyfin")) out.push(["jellyfin", "Jellyfin"]);
+  if (h && h.services.some(x => x.kind === "vmware")) out.push(["vmware", "VMware"]);
   if (h && h.services.some(x => x.kind === "plex")) out.push(["plex", "Plex"]);
   if (h && h.services.some(x => x.kind === "starlink")) out.push(["starlink", "Starlink"]);
   if (h && h.services.some(x => x.kind === "firetv")) out.push(["firetv", "Fire TV"]);
@@ -3911,7 +3920,7 @@ document.getElementById("detTabs").addEventListener("click", e => {
   if (!t || !detKey) return;
   const k = t.dataset.dsrc;
   if (k === "agent") openDetails(detKey); else if (k === "overview") openOverview(detKey); else if (k === "snmp") openSnmp(detKey);
-  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "plex") openPlex(detKey); else if (k === "starlink") openStarlink(detKey); else if (k === "firetv") openFireTV(detKey); else openLogs(detKey);
+  else if (k === "ha") openHa(detKey); else if (k === "ilo") openIlo(detKey); else if (k === "jellyfin") openJellyfin(detKey); else if (k === "vmware") openVmware(detKey); else if (k === "plex") openPlex(detKey); else if (k === "starlink") openStarlink(detKey); else if (k === "firetv") openFireTV(detKey); else openLogs(detKey);
 });
 
 // ---- Device overview: what Rollcall knows about a device without an agent, from ping, its
@@ -4038,6 +4047,101 @@ document.getElementById("detBody").addEventListener("click", async e => {
 }, true);
 // The iLO tab: an HPE server's health read from its iLO (drives, fans, temperatures, power supplies).
 // ---- Jellyfin: what's playing, plugins needing attention and the library, read by its check ----
+// ---- VMware: ESXi, vCenter or Aria, read by its check with a read-only account ----
+function openVmware(key) {
+  const h = data && data.hosts.find(x => x.key === key);
+  if (!h) return;
+  document.getElementById("detTitle").textContent = h.name;
+  detMode = "vmware"; detKey = key; renderDetActions();
+  showSourceTabs(key, "vmware");
+  if (!detDlg.open) detDlg.showModal();
+  renderVmware(h);
+}
+function renderVmware(h) {
+  const d = h.vmware, chk = h.services.find(x => x.kind === "vmware"), body = document.getElementById("detBody"), top = body.scrollTop;
+  const nowS = Date.now() / 1000, pct = v => v == null ? "" : v + "%";
+  const sub = d && !d._error ? [d.full_name || "", d.product === "vcenter" && d.appliance_version ? "appliance " + d.appliance_version + (d.appliance_build ? " build " + d.appliance_build : "") : "",
+    d.read ? "read " + ago(d.read, nowS) : ""].filter(Boolean).join(" · ") : "VMware";
+  document.getElementById("detSub").textContent = sub;
+  if (!d || d._error) {
+    body.innerHTML = sect("VMware", `<p class="empty-note">${esc(d && d._error ? "Couldn't read it: " + d._error : chk && chk.detail ? chk.detail : "Not read yet: it's read every 5 minutes.")}</p>`);
+    return;
+  }
+  const items = h.vmware_items || [], bad = items.filter(i => !i.ignored), ign = items.filter(i => i.ignored);
+  const lvl = l => l === "crit" ? "red" : "amber";
+  const ignB = (what, undo) => `<button type="button" class="mini edit-only" data-vmign="${esc(what)}"${undo ? " data-undo=1" : ""}>${undo ? "Stop ignoring" : "Ignore"}</button>`;
+  let html = sect("Problems", bad.length ? tbl(["", "What", "Detail", ""], bad.map(i => `<tr class="${lvl(i.level)}"><td><span class="dot ${lvl(i.level)}"></span></td><td>${esc(i.what)}</td><td>${esc(i.detail)}</td><td>${/^(ESXi|vCenter|Aria|VMware)/.test(i.what) ? "" : ignB(i.what)}</td></tr>`))
+    + `<p class="hint">Red alerts; amber doesn't. <b>Ignore</b> stops one problem counting on this device, e.g. a datastore of ISOs that's always nearly full.</p>`
+    : `<p class="empty-note">✓ Nothing wrong.</p>`)
+    + (ign.length ? `<p class="hint">Ignored here: ${ign.map(i => `${esc(i.what)} (${esc(i.detail)}) ${ignB(i.what, true)}`).join(" · ")}</p>` : "");
+  const c = d.cert;
+  if (["esxi", "vcenter"].includes(d.product)) {
+    const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+    const hz = d.health || {}, upd = d.update || {};
+    html += sect(d.product === "vcenter" ? "vCenter" : "ESXi", `<div class="kv">${[kv("Product", esc(d.full_name || "")),
+      kv("VMs", `${d.vms_on || 0} on, ${d.vms_off || 0} off${d.vms_suspended ? `, ${d.vms_suspended} suspended` : ""}`),
+      d.product === "vcenter" ? kv("Hosts", String((d.hosts || []).length)) : "",
+      d.uptime_s ? kv("Appliance up", esc(fmtUp(d.uptime_s))) : "",
+      hz.system ? kv("Appliance health", esc(hz.system)) : "",
+      upd.state ? kv("Updates", upd.state === "UPDATES_PENDING" ? `<span class="old">available${upd.version ? " (" + esc(upd.version) + ")" : ""}</span>` : upd.state === "UP_TO_DATE" ? "up to date" : esc(upd.state.toLowerCase().replace(/_/g, " "))) : "",
+      d.backup_scheduled === false ? kv("File-based backup", `<span class="old">not scheduled</span>`) : "",
+      c ? kv("Certificate", `${esc(c.subject)}, expires ${esc(new Date(c.expires * 1000).toLocaleDateString())}${c.self_signed ? " (self-signed)" : ""}`) : ""].join("")}</div>`
+      + (d.rest === "unavailable" ? `<p class="hint">This vCenter has no REST API (/api, from 7.0 U2), so the appliance's own health, services, backup and updates aren't read.</p>` : d.rest === "refused" ? `<p class="hint">The account can't use vCenter's REST API, so the appliance's health, services, backup and updates aren't read.</p>` : ""));
+    const hs = d.hosts || [];
+    if (hs.length) html += sect(`Hosts (${hs.length})`, tbl(["Host", "State", "Up", "CPU", "Memory", "Sensors", "Version"], hs.map(x => {
+      const red = (x.sensors || []).filter(s => s.state === "red").length, yel = (x.sensors || []).filter(s => s.state === "yellow").length;
+      const st = x.connection !== "connected" ? `<span class="dot red"></span>${esc(x.connection)}` : x.maintenance ? `<span class="old">maintenance mode</span>` : esc(x.power === "poweredOn" ? "on" : x.power);
+      const up = x.boot ? fmtUp(nowS - Date.parse(x.boot) / 1000) : "";
+      return `<tr><td><b>${esc(x.name)}</b>${x.hardware ? `<br><small class="muted">${esc(x.hardware)}</small>` : ""}</td><td>${st}</td><td>${esc(up)}</td><td>${pct(x.cpu_pct)}</td>
+        <td>${pct(x.mem_pct)}${x.mem_gb ? `<br><small class="muted">of ${x.mem_gb} GB</small>` : ""}</td>
+        <td>${red ? `<span class="dot red"></span>${red} red ` : ""}${yel ? `<span class="dot amber"></span>${yel} amber ` : ""}${!red && !yel ? `${(x.sensors || []).length ? "✓ " + x.sensors.length : "none read"}` : ""}</td>
+        <td>${esc(x.version)}${x.build ? `<br><small class="muted">build ${esc(x.build)}</small>` : ""}</td></tr>`;
+    })));
+    const sens = hs.flatMap(x => (x.sensors || []).filter(s => ["temperature", "fan", "power", "voltage"].includes((s.type || "").toLowerCase()) || s.state === "red" || s.state === "yellow").map(s => ({...s, host: x.name})));
+    if (sens.length) html += `<details class="sect"><summary>Hardware sensors (${sens.length})</summary>` + tbl([hs.length > 1 ? "Host" : "", "Sensor", "Type", "Reading", "State"].filter(Boolean),
+      sens.slice(0, 300).map(s => `<tr class="${s.state === "red" ? "red" : s.state === "yellow" ? "amber" : ""}">${hs.length > 1 ? `<td>${esc(s.host)}</td>` : ""}<td>${esc(s.name)}</td><td>${esc(s.type)}</td><td>${s.value == null ? "" : esc(s.value + " " + s.unit)}</td><td>${esc(s.state)}</td></tr>`)) + `</details>`;
+    const dss = d.datastores || [];
+    if (dss.length) html += sect(`Datastores (${dss.length})`, tbl(["Datastore", "Type", "Free", "Capacity"], dss.map(x =>
+      `<tr><td>${esc(x.name)}${x.accessible ? "" : ` <span class="old">not accessible</span>`}</td><td>${esc(x.type)}</td><td>${x.free_pct == null ? "" : `<span class="${x.free_pct < 10 ? "old" : ""}">${x.free_pct}%</span> <small class="muted">${fmtBytes(x.free)}</small>`}</td><td>${fmtBytes(x.capacity)}</td></tr>`)));
+    const cl = d.clusters || [];
+    const yn = v => v == null ? "" : v ? "on" : `<span class="old">off</span>`;
+    if (cl.length) html += sect("Clusters", tbl(["Cluster", "Status", "HA", "DRS"], cl.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.status)}</td><td>${yn(x.ha)}</td><td>${yn(x.drs)}</td></tr>`)));
+    const al = d.alarms || [];
+    if (al.length) html += sect(`Alarms (${al.length})`, tbl(["Alarm", "On", "Status", "Since"], al.map(a =>
+      `<tr class="${a.acknowledged ? "muted" : a.status === "red" ? "red" : "amber"}"><td>${esc(a.name)}</td><td>${esc(a.entity)}</td><td>${esc(a.status)}${a.acknowledged ? " (acknowledged in vCenter)" : ""}</td><td>${a.time ? esc(new Date(a.time).toLocaleString()) : ""}</td></tr>`))
+      + `<p class="hint">Alarms acknowledged in vSphere don't count here.</p>`);
+    const jobs = d.backup_jobs || [];
+    if (jobs.length) html += sect("Appliance backups", tbl(["Finished", "Result", "Type", "Size"], jobs.map(j =>
+      `<tr class="${j.status === "FAILED" ? "red" : ""}"><td>${esc(j.end ? new Date(j.end).toLocaleString() : j.start ? "started " + new Date(j.start).toLocaleString() : j.id)}</td><td>${esc(j.status.toLowerCase())}</td><td>${esc(String(j.type || "").toLowerCase())}</td><td>${j.size == null ? "" : fmtBytes(j.size)}</td></tr>`)));
+    const sv = d.services;
+    if (sv) html += sect("Appliance services", sv.problems.length ? tbl(["Service", "Problem"], sv.problems.map(x => `<tr class="amber"><td>${esc(x.name)}</td><td>${esc(x.problem)}</td></tr>`)) : `<p class="empty-note">✓ All ${sv.count} services as they should be.</p>`);
+    if (Object.keys(hz).length > 1) html += sect("Appliance health", `<div class="kv">${Object.entries(hz).map(([k, v]) => `<div><span>${esc(k.replace(/-/g, " "))}</span>${v === "green" ? "✓ green" : `<span class="old">${esc(v)}</span>`}</div>`).join("")}</div>`);
+    const vms = d.vms || [];
+    if (vms.length) html += `<details class="sect"><summary>Virtual machines (${vms.length})</summary>` + tbl(["VM", "Power"], vms.map(v => `<tr><td>${esc(v.name)}</td><td>${esc(v.power === "poweredOn" ? "on" : v.power === "poweredOff" ? "off" : v.power)}</td></tr>`)) + `</details>`;
+  } else {
+    const kv = (k, v) => v ? `<div><span>${k}</span>${v}</div>` : "";
+    const al = d.alerts;
+    html += sect(({aria_ops: "Aria Operations", aria_auto: "Aria Automation", aria_logs: "Aria Operations for Logs"})[d.product] || "Aria", `<div class="kv">${[
+      kv("Version", esc(d.version || "") + (d.release ? ` (${esc(d.release)})` : "") + (d.build ? ` build ${esc(d.build)}` : "")),
+      d.node_status ? kv("Node", esc(d.node_status.toLowerCase())) : "", d.health_page ? kv("Health page", esc(d.health_page)) : "",
+      d.login ? kv("Account", "✓ logs in") : "",
+      al ? kv("Active alerts", `${al.critical} critical, ${al.immediate} immediate, ${al.warning} warning`) : "",
+      c ? kv("Certificate", `${esc(c.subject)}, expires ${esc(new Date(c.expires * 1000).toLocaleDateString())}${c.self_signed ? " (self-signed)" : ""}`) : ""].join("")}</div>`
+      + (al && al.top && al.top.length ? tbl(["Critical or immediate alert", "Level"], al.top.map(a => `<tr><td>${esc(a.name)}</td><td>${esc(a.level)}</td></tr>`)) : ""));
+  }
+  body.innerHTML = html;
+  body.scrollTop = top;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-vmign]");
+  if (!b) return;
+  b.disabled = true;
+  const r = await fetch("api/hosts/" + encodeURIComponent(detKey) + "/vmware/ignore", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({what: b.dataset.vmign, ignore: !b.dataset.undo})});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); b.disabled = false; return; }
+  await load();
+  if (detMode === "vmware") openVmware(detKey);
+}, true);
 function openJellyfin(key) {
   const h = data && data.hosts.find(x => x.key === key);
   if (!h) return;
@@ -6080,6 +6184,7 @@ function updatePicked() {
   document.getElementById("syslogBox").hidden = !form.querySelector('.preset input[value="syslog"]:checked');
   document.getElementById("iloBox").hidden = !form.querySelector('.preset input[value="hpilo"]:checked');
   document.getElementById("jellyfinBox").hidden = !form.querySelector('.preset input[value="jellyfin-api"]:checked');
+  document.getElementById("vmwareBox").hidden = !form.querySelector('.preset input[value="vsphere-api"]:checked, .preset input[value="aria-ops"]:checked, .preset input[value="aria-auto"]:checked, .preset input[value="aria-logs"]:checked');
   document.getElementById("plexBox").hidden = !form.querySelector('.preset input[value="plex-api"]:checked');
   document.getElementById("starlinkBox").hidden = !form.querySelector('.preset input[value="starlink"]:checked');
   document.getElementById("firetvBox").hidden = !form.querySelector('.preset input[value="firetv"]:checked');
@@ -6406,6 +6511,9 @@ async function openDialog(h) {
   document.getElementById("fIloUser").value = h ? (h.ilo_user || "") : "";
   const iloPw = document.getElementById("fIloPass"); iloPw.value = ""; iloPw.placeholder = h && h.ilo_pass_set ? "Unchanged (type to replace)" : "";
   document.getElementById("fJfUrl").value = h ? (h.jellyfin_url || "") : "";
+  document.getElementById("fVmUrl").value = h ? (h.vmware_url || "") : "";
+  document.getElementById("fVmUser").value = h ? (h.vmware_user || "") : "";
+  const vmPass = document.getElementById("fVmPass"); vmPass.value = ""; vmPass.placeholder = h && h.vmware_pass_set ? "Unchanged (type to replace)" : "";
   const jfKey = document.getElementById("fJfKey"); jfKey.value = ""; jfKey.placeholder = h && h.jellyfin_key_set ? "Unchanged (type to replace)" : "";
   document.getElementById("fPxUrl").value = h ? (h.plex_url || "") : "";
   const pxKey = document.getElementById("fPxKey"); pxKey.value = ""; pxKey.placeholder = h && h.plex_token_set ? "Unchanged (type to replace)" : "";
@@ -6473,6 +6581,14 @@ form.addEventListener("submit", async e => {
     if (ip) body.ilo_pass = ip;
     if (!body.ilo_user) { err.textContent = "Enter the iLO user name, or untick HPE iLO health."; return document.getElementById("fIloUser").focus(); }
     if (!ip && !(editing && editing.ilo_pass_set)) { err.textContent = "Enter the iLO password."; return document.getElementById("fIloPass").focus(); }
+  }
+  if (!document.getElementById("vmwareBox").hidden) {
+    body.vmware_url = document.getElementById("fVmUrl").value.trim();
+    body.vmware_user = document.getElementById("fVmUser").value.trim();
+    const pw = document.getElementById("fVmPass").value;
+    if (pw) body.vmware_pass = pw;
+    if (!body.vmware_user) { err.textContent = "Enter the read-only VMware account's user name."; return document.getElementById("fVmUser").focus(); }
+    if (!pw && !(editing && editing.vmware_pass_set)) { err.textContent = "Enter the VMware account's password."; return document.getElementById("fVmPass").focus(); }
   }
   if (!document.getElementById("jellyfinBox").hidden) {
     body.jellyfin_url = document.getElementById("fJfUrl").value.trim();

@@ -62,6 +62,7 @@ import hadevice
 import ilo as ilolib
 import iprange
 import jellyfin as jflib
+import vmware as vmlib
 import plex as pxlib
 import starlink as sllib
 import firetv as ftlib
@@ -321,6 +322,10 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("pbs", "Proxmox Backup Server", _VIRT, [("PBS", "https:8007/")]),
     ("esxi", "VMware ESXi", _VIRT, [("ESXi", "https:443/")]),
     ("vcenter", "VMware vCenter", _VIRT, [("vCenter", "https:443/ui/")]),
+    ("vsphere-api", "VMware ESXi / vCenter health (read-only account)", _VIRT, [("vSphere", "vmware:vsphere")]),
+    ("aria-ops", "VMware Aria Operations health", _VIRT, [("Aria Operations", "vmware:aria_ops")]),
+    ("aria-auto", "VMware Aria Automation health", _VIRT, [("Aria Automation", "vmware:aria_auto")]),
+    ("aria-logs", "VMware Aria Operations for Logs", _VIRT, [("Aria Logs", "vmware:aria_logs")]),
     ("synology", "Synology DSM", _VIRT, [("DSM", "https:5001/")]),
     ("qnap", "QNAP QTS", _VIRT, [("QTS", "http:8080/")]),
     ("truenas", "TrueNAS", _VIRT, [("TrueNAS", "https:443/")]),
@@ -406,6 +411,11 @@ PRESET_NOTES = {
     "unifi-os": "UniFi OS console, e.g. Cloud Key or UDM", "unifi-os-server": "UniFi OS Server, self-hosted",
     "idrac": "Dell iDRAC or another server management controller", "squid": "Squid or another web proxy",
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
+    "vsphere-api": "ESXi host or vCenter, read only: hardware sensors, hosts, maintenance mode, datastores, VMs, alarms, "
+                   "clusters, and vCenter's appliance health, services, backup and updates (needs a read-only account)",
+    "aria-ops": "Aria Operations: node online, version and active critical alerts (needs a read-only account)",
+    "aria-auto": "Aria Automation: its health page, version and that the account can log in",
+    "aria-logs": "Aria Operations for Logs: version and that the account can log in",
     "jellyfin-api": "Version, pending restart, updates, failed scheduled tasks and active streams (needs a Jellyfin API key)",
     "plex-api": "Version, updates and what's playing, by whom (needs a Plex token)",
     "firetv": "Fire TV stick or Android TV, over network ADB: Fire OS version, CPU, memory, storage, Wi-Fi, apps (read only)",
@@ -430,6 +440,8 @@ ALIASES = {
     "xmpp": "openfire", "jabber": "openfire", "winbox": "mikrotik", "rdgw": "rdgateway",
     "ilo": "idrac", "bmc": "idrac", "ipmi": "idrac",
     "jellyfin-health": "jellyfin-api", "jellyfinapi": "jellyfin-api", "plexapi": "plex-api", "plex-token": "plex-api",
+    "esxi-api": "vsphere-api", "vcenter-api": "vsphere-api", "vmware-api": "vsphere-api", "vrops": "aria-ops",
+    "aria-operations": "aria-ops", "vra": "aria-auto", "aria-automation": "aria-auto", "vrli": "aria-logs", "log-insight": "aria-logs",
     "ilo3": "hpilo", "ilo4": "hpilo", "hp-ilo": "hpilo", "hpe-ilo": "hpilo", "ilo-health": "hpilo",
     "mariadb": "mysql", "postgresql": "postgres", "pgsql": "postgres", "mongo": "mongodb",
     "elastic": "elasticsearch", "influx": "influxdb", "certsrv": "adcs", "sccm": "configmgr",
@@ -457,6 +469,8 @@ def preset_summary(name: str) -> str:
             return "health, with an iLO login"
         if spec == "jellyfin:device":
             return "health and tasks, with an API key"
+        if kind == "vmware":
+            return f"{vmlib.PRODUCTS.get(rest, 'VMware')}, read only"
         if spec == "plex:device":
             return "what's playing, with a Plex token"
         if spec == "starlink:device":
@@ -602,6 +616,9 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "iLO", "kind": "ilo", "port": 443, "url": None, "desc": "ilo"}]
     if low == "jellyfin:device":
         return [{"label": label or "Jellyfin", "kind": "jellyfin", "port": None, "url": None, "desc": "jellyfin api"}]
+    if m := re.match(r"^vmware:(vsphere|aria_ops|aria_auto|aria_logs)$", low):
+        return [{"label": label or vmlib.PRODUCTS[m.group(1)], "kind": "vmware", "port": 443, "url": None,
+                 "desc": "vmware " + m.group(1), "entity": m.group(1)}]
     if low == "plex:device":
         return [{"label": label or "Plex", "kind": "plex", "port": None, "url": None, "desc": "plex api"}]
     if low == "starlink:device":
@@ -925,6 +942,19 @@ def validate_entry(raw: dict) -> dict:
             if len(pw) > 63 or not pw.isprintable():
                 raise ValueError("The iLO password must be up to 63 ordinary characters")
             entry["ilo_pass"] = pw
+    if "vmware_url" in raw:
+        url = str(raw.get("vmware_url") or "").strip()
+        entry["vmware_url"] = vmlib.clean_url(url) if url else ""
+        user = str(raw.get("vmware_user") or "").strip()
+        if len(user) > 128 or not user.isprintable():
+            raise ValueError("The VMware user name must be up to 128 ordinary characters")
+        entry["vmware_user"] = user
+        pw = raw.get("vmware_pass")
+        if pw not in (None, ""):
+            pw = str(pw)
+            if len(pw) > 256 or not pw.isprintable():
+                raise ValueError("The VMware password must be up to 256 ordinary characters")
+            entry["vmware_pass"] = pw
     if "jellyfin_url" in raw:
         url = str(raw.get("jellyfin_url") or "").strip()
         entry["jellyfin_url"] = jflib.clean_url(url) if url else ""
@@ -1766,6 +1796,14 @@ class Host:
     jf_url: str = ""                   # Jellyfin's address ("" = http://<host>:8096)
     jf_key: str = ""                   # Jellyfin API key: only ever sent to jf_url, never shown again
     jf_data: dict | None = None        # its latest reading
+    vm_url: str = ""                   # ESXi / vCenter / Aria address ("" = https://<host>)
+    vm_user: str = ""                  # its read-only account
+    vm_pass: str = ""                  # only ever sent to vm_url (or https://<host>), never shown again
+    vm_data: dict | None = None        # its latest reading
+    vm_items: list[dict] = field(default_factory=list)  # problems in it
+    vm_polled: float | None = None
+    vm_result: tuple | None = None
+    vm_ignore: list[str] = field(default_factory=list)  # problems that never alert here, e.g. "Datastore ISO"
     px_url: str = ""                   # Plex's address ("" = http://<host>:32400)
     px_key: str = ""                   # Plex token: only ever sent to px_url, never shown again
     px_data: dict | None = None        # its latest reading
@@ -1986,6 +2024,9 @@ class Monitor:
                 **({"ilo_user": h.ilo_user, "ilo_pass": h.ilo_pass} if h.ilo_user or h.ilo_pass else {}),
                 **({"ilo_acks": h.ilo_acks} if h.ilo_acks else {}),
                 **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
+                **({"vmware_url": h.vm_url} if h.vm_url else {}),
+                **({"vmware_user": h.vm_user, "vmware_pass": h.vm_pass} if h.vm_user or h.vm_pass else {}),
+                **({"vmware_ignore": h.vm_ignore} if h.vm_ignore else {}),
                 **({"jellyfin_url": h.jf_url} if h.jf_url else {}),
                 **({"jellyfin_key": h.jf_key} if h.jf_key else {}),
                 **({"plex_url": h.px_url} if h.px_url else {}),
@@ -2028,6 +2069,9 @@ class Monitor:
         h.ilo_acks = ({str(k)[:100]: v for k, v in entry["ilo_acks"].items() if v in ("warn", "crit")}
                       if isinstance(entry.get("ilo_acks"), dict) else {})
         h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
+        h.vm_url = str(entry.get("vmware_url") or "")[:300]
+        h.vm_user, h.vm_pass = str(entry.get("vmware_user") or "")[:128], str(entry.get("vmware_pass") or "")[:256]
+        h.vm_ignore = [str(x)[:200] for x in entry.get("vmware_ignore") or [] if str(x).strip()][:200]
         h.jf_url = str(entry.get("jellyfin_url") or "")[:300]
         h.jf_key = str(entry.get("jellyfin_key") or "")[:128]
         h.px_url = str(entry.get("plex_url") or "")[:300]
@@ -2064,6 +2108,7 @@ class Monitor:
 
     async def update_host(self, h: Host, entry: dict) -> None:
         old_jf_base = h.jf_url or jflib.default_url(h.host)
+        old_vm_base = h.vm_url or vmlib.default_url(h.host)
         old_px_base = h.px_url or pxlib.default_url(h.host)
         if entry["host"] != h.host:
             h.host, h.ip, h.failures = entry["host"], None, 0
@@ -2080,6 +2125,17 @@ class Monitor:
             if (entry["ilo_user"], pw) != (h.ilo_user, h.ilo_pass):
                 h.ilo_user, h.ilo_pass = entry["ilo_user"], pw
                 h.ilo_polled = h.ilo_result = None  # read it again with the new login
+        if h.vm_pass or "vmware_url" in entry:
+            new_url = entry.get("vmware_url", h.vm_url)
+            new_base = new_url or vmlib.default_url(entry["host"])
+            if "vmware_user" in entry:
+                h.vm_user = entry["vmware_user"]
+            if entry.get("vmware_pass"):
+                h.vm_pass = entry["vmware_pass"]
+            elif h.vm_pass and not vmlib.same_server(old_vm_base, new_base):
+                h.vm_pass = ""  # a password only goes to the server it was given for: enter it again for a new one
+                log.info("%s: VMware address changed, so its password was cleared", h.name)
+            h.vm_url, h.vm_data, h.vm_polled, h.vm_result = new_url, None, None, None
         if h.jf_key or "jellyfin_url" in entry:
             old_base = old_jf_base
             new_url = entry.get("jellyfin_url", h.jf_url)
@@ -2768,6 +2824,8 @@ class Monitor:
                 return await self.ilo_check(h, now)
             if s.kind == "jellyfin":
                 return await self.jellyfin_check(h)
+            if s.kind == "vmware":
+                return await self.vmware_check(h, s, now)
             if s.kind == "plex":
                 return await self.plex_check(h)
             if s.kind == "starlink":
@@ -3064,6 +3122,55 @@ class Monitor:
         # Something new has failed: read it again at the next check, and only then does it go red
         h.ilo_recheck = not h.ilo_result[0] and len(h.ilo_result) == 3 and not was_red
         return h.ilo_result
+
+    VMW_EVERY = 300          # read VMware at most every 5 minutes, however often the device is checked
+    VMW_LOGIN_RETRY = 1800   # a refused login is tried again after 30 minutes, not locking the account out
+
+    async def vmware_check(self, h: Host, s, now: float) -> tuple:
+        """ESXi, vCenter or Aria (vmware.py), read with a read-only account. Problems someone chose to ignore
+        (vm_ignore) don't count."""
+        if not h.vm_user or not h.vm_pass:
+            h.vm_items = []
+            return False, None, "enter a read-only VMware account under Edit", "warn"
+        res = h.vm_result
+        login_err = bool(res) and len(res) == 4 and (h.vm_data or {}).get("_login")
+        wait = self.VMW_LOGIN_RETRY if login_err else self.VMW_EVERY
+        if res is not None and h.vm_polled and now - h.vm_polled < wait:
+            if h.vm_data and not h.vm_data.get("_error"):
+                res = h.vm_result = self.vmware_result(h)  # ignores may have changed
+            return res
+        h.vm_polled = now
+        base = h.vm_url or vmlib.default_url(h.host)
+        try:
+            try:
+                d = await vmlib.poll(base, s.entity or "vsphere", h.vm_user, h.vm_pass, health_tls_context(), timeout=60)
+            except vmlib.VmwareError:
+                raise
+            except Exception as err:  # noqa: BLE001 - anything unexpected is a failed reading, not a stale "OK"
+                log.warning("%s: reading VMware failed: %s", h.name, err)
+                raise vmlib.VmwareError(f"unexpected error ({type(err).__name__})") from err
+        except vmlib.VmwareError as err:
+            h.vm_items = [{"level": "warn" if err.login else "crit", "what": vmlib.PRODUCTS.get(s.entity or "vsphere", "VMware"),
+                           "detail": str(err)}]
+            h.vm_data = {"_error": str(err), "_login": err.login, "read": now}
+            if err.login:
+                log.warning("%s: VMware turned the account down; trying again in %d minutes", h.name, self.VMW_LOGIN_RETRY // 60)
+            h.vm_result = (False, None, str(err), "warn") if err.login else (False, None, f"can't read it: {err}")
+            return h.vm_result
+        d["read"] = now
+        h.vm_data = d
+        h.vm_result = self.vmware_result(h)
+        return h.vm_result
+
+    def vmware_result(self, h: Host) -> tuple:
+        d = h.vm_data or {}
+        items = vmlib.problems(d, cert_warn=int(self.opts.get("cert_warn_days", 30) or 30),
+                               cert_crit=int(self.opts.get("cert_crit_days", 14) or 14))
+        ign = set(h.vm_ignore)
+        for i in items:
+            i["ignored"] = i["what"] in ign
+        h.vm_items = items
+        return vmlib.evaluate(d, [i for i in items if not i["ignored"]])
 
     async def jellyfin_check(self, h: Host) -> tuple:
         """Jellyfin's health (jellyfin.py), read with its API key at each check."""
@@ -4462,6 +4569,8 @@ class Monitor:
     # What each kind of check looks at, so the AI knows what an error is about (e.g. a bare "1.5% (above 1)")
     CHECK_WHAT = {
         "starlink": "a Starlink satellite dish's status (outages, obstructions, alerts), read from the dish or the starlink.com account",
+        "vmware": "a VMware ESXi host, vCenter Server or Aria appliance, read with a read-only account (hosts, hardware sensors, "
+                  "datastores, alarms, appliance health and backups)",
         "jellyfin": "a Jellyfin media server's health, tasks and streams", "plex": "a Plex media server's status and streams",
         "firetv": "a Fire TV stick or Android TV, read over network ADB (storage, CPU, Wi-Fi, apps, disabled apps)",
         "ilo": "an HPE server's iLO health (fans, temperatures, power supplies, storage)",
@@ -5085,7 +5194,7 @@ class Monitor:
                 h.checks = [pat.sub(address, c) if isinstance(c, str) else c for c in h.checks]
             elif isinstance(h.checks, str):
                 h.checks = pat.sub(address, h.checks)
-            for f in ("jf_url", "px_url"):
+            for f in ("jf_url", "px_url", "vm_url"):
                 if getattr(h, f, None):
                     setattr(h, f, pat.sub(address, getattr(h, f)))
             h.host, h.ip, h.failures = address, None, 0
@@ -5771,6 +5880,8 @@ class Monitor:
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name, "ha_more": h.ha_more,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
+                "vmware_url": h.vm_url, "vmware_user": h.vm_user, "vmware_pass_set": bool(h.vm_pass),
+                "vmware": h.vm_data, "vmware_items": h.vm_items, "vmware_ignore": h.vm_ignore,
                 "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
                 "firetv": h.ft_data,
                 "starlink_source": h.sl_source, "starlink_addr": h.sl_addr, "starlink_cookie_set": bool(h.sl_cookie),
@@ -7101,7 +7212,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         another machine, the form asks for it again rather than quietly dropping it."""
         for url_k, key_k, saved, old, default, what in (
                 ("jellyfin_url", "jellyfin_key", h.jf_key, h.jf_url, jflib.default_url, "Jellyfin API key"),
-                ("plex_url", "plex_token", h.px_key, h.px_url, pxlib.default_url, "Plex token")):
+                ("plex_url", "plex_token", h.px_key, h.px_url, pxlib.default_url, "Plex token"),
+                ("vmware_url", "vmware_pass", h.vm_pass, h.vm_url, vmlib.default_url, "VMware password")):
             if url_k not in entry or entry.get(key_k) or not saved:
                 continue
             new_base, old_base = entry[url_k] or default(entry["host"]), old or default(h.host)
@@ -7401,6 +7513,27 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         _ilo_redo(h)
         return web.json_response({"ignore": h.ilo_ignore})
 
+    async def host_vmware_ignore(req):
+        """Never alert on a VMware problem on this device (e.g. a datastore of ISOs that's always nearly full),
+        or stop ignoring it. {what, ignore}"""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        what = str(body.get("what") or "").strip()[:200]
+        if not what or what in vmlib.PRODUCTS.values():
+            return web.json_response({"error": "That can't be ignored"}, status=400)
+        keep = [x for x in h.vm_ignore if x.lower() != what.lower()]
+        h.vm_ignore = (keep + [what])[-200:] if body.get("ignore") else keep
+        monitor._save_hosts()
+        user = await access.who(req)
+        log.info("%s: VMware %s %s by %s", h.name, what, "ignored" if body.get("ignore") else "no longer ignored", user["display"] or "someone")
+        if h.vm_data and not h.vm_data.get("_error"):
+            h.vm_result = monitor.vmware_result(h)
+            h.next_due = 0
+        monitor.publish_soon(h)
+        return web.json_response({"ignore": h.vm_ignore})
+
     async def host_snmp_ack(req):
         """Acknowledge a restart (e.g. a planned one): it stops showing amber. A later restart still shows."""
         h = monitor.hosts.get(req.match_info["key"])
@@ -7654,6 +7787,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_get("/api/hosts/{key}/starlink/map", host_starlink_map)
     app.router.add_post("/api/hosts/{key}/ilo/ack", editor_only(host_ilo_ack))
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
+    app.router.add_post("/api/hosts/{key}/vmware/ignore", editor_only(host_vmware_ignore))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
     app.router.add_get("/", index)
