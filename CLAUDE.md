@@ -119,6 +119,31 @@ together). Remove each once it's released.
   copy it in the Dockerfile, or into app/ at build). Also a "What's new" link under the version in the menu to open
   it again. Keep it light; never for non-admins or view-only users.
 
+- Security and code review of 1.97.1 (owner supplied 26 Nov; 14 findings). F1 router agent: embed Rollcall's
+  certificate fingerprint at download, never take tls_cert/port or "HTTPS off" from an unsigned reply. F2 Linux
+  agent: .old/.new and install copies created 0700, in check_own_permissions, removed at uninstall. F3 Approve all:
+  page sends the ids it showed; server approves only those still pending and not replacements. F4 ingress: only the
+  Supervisor (172.30.32.2) may call the UI port when SUPERVISOR_TOKEN is set (test on real HA first). F5 legacy HMAC
+  update path: refuse over plain HTTP, show agents still on it, cut-off date. F6 enrolment: per-source rate limit,
+  cap per source, evict from the busiest source, one combined notification. F7 config_sig/tls_sig: add a serial,
+  agents refuse older. F8 router agent: umask 077, mktemp -d, cleaned in the trap. F9 Windows install: read the ACL
+  back, stop if non-admins can write; scheduled run refuses too. F10 compare_digest on bytes. F11 import streamed to
+  disk. F12 smaller cap for body-token reports. F13 regexes end in \Z. F14: lstat-safe chmod, keys via stdin/env not
+  argv, per-request certificate callback on Windows, disk writes off the event loop, /api/check cooldown.
+
+- Backups: Acknowledge on a job with warnings (owner asked 26 Nov). Hides that warning until the next run; it comes
+  back if the next run warns or fails again (ack tied to the session/finished time).
+
+- Device tabs (owner asked 26 Nov): LAPS moves to the Domain tab; vulnerabilities get their own tab; Hyper-V under
+  Roles shows each VM's uptime, memory, CPU and checkpoints (snapshots, with age).
+
+- Security events (owner asked 26 Nov): every security event must be acknowledged by hand before it clears; failed
+  logons at the top of the Security tab. Password-scan "where it looks" text becomes an (i) button with the details.
+
+- IP address changes on agent devices (owner asked 26 Nov): when an agent reports a different address from the one
+  the device is monitored on (DHCP), say so with Accept / Keep current (it may not be the primary address), rather
+  than the list and details quietly disagreeing.
+
 ## Built, waiting for release
 
 Built and tested on a branch, in CHANGELOG.md under "Unreleased". Show the owner the test results before
