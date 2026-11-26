@@ -32,10 +32,7 @@ Remove each line once it's released.
 
 ## Requested features (not started)
 
-- Notes on each device (owner asked 26 Nov): a free-text box on each device where admins (and editors) can keep
-  their own notes (where it lives, who to call, quirks). Shown on the device's Overview, saved with the device (in
-  exports and backups), kept when the device is edited; view-only users can read them but not change them. Plain
-  text, a sensible size cap, with who last changed it and when. Consider making notes searchable.
+(none)
 
 ## Built, waiting for release
 
@@ -44,6 +41,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Settings save fix (owner reported 26 Nov): saves compared against /data/options.json, which the Supervisor only
-  writes at start, so changing a setting back to its start-up value didn't take, and a save could undo an earlier one.
-  Now read from the Supervisor, file kept in step, Configuration tab changes picked up live.
+(none)
