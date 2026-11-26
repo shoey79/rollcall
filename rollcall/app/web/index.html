@@ -91,6 +91,13 @@ button.danger:hover{background:color-mix(in srgb,var(--red) 10%,transparent)}
 .menu button:hover,.menu button:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .menu button.danger{color:var(--red)}
 .menu hr{border:none;border-top:1px solid var(--line);margin:4px 2px}
+.btnlink{display:inline-flex;align-items:center;padding:7px 12px;font-size:13.5px;color:var(--accent);text-decoration:none;border-radius:8px}.btnlink:hover{text-decoration:underline}
+.menuver{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 12px 2px;font-size:12px;color:var(--muted)}
+.menu .menuver button{padding:2px 6px;font-size:12px;color:var(--accent)}
+.wnlist h3{font-size:14px;margin:14px 0 4px}.wnlist h3:first-child{margin-top:0}.wnlist h3 small{font-weight:400;color:var(--muted)}
+.wnlist ul{margin:0 0 6px;padding-left:20px}.wnlist li{margin:3px 0}
+.cl h2{font-size:15px;margin:18px 0 6px;padding-top:10px;border-top:1px solid var(--line)}.cl h2:first-child{border-top:none;margin-top:0;padding-top:0}
+.cl ul{margin:0 0 8px;padding-left:20px}.cl li{margin:6px 0}.cl li li{margin:3px 0}.cl code{font-size:12.5px}
 #pauseTab,#resumeTab{font-size:13px;padding:7px 12px}
 body.home-on #pauseTab,body.home-on #resumeTab{display:none!important}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
@@ -592,6 +599,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
         <button type="button" id="msgBtn" role="menuitem" hidden title="Send a short message to the screens of agent devices (admins only)"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Messages</button>
         <hr>
         <button type="button" id="resetAll" role="menuitem" class="danger" title="Clear uptime history for every host"><svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.8 2.4v3.4h3.4"/></svg>Reset all uptime…</button>
+        <hr class="admin-ver" hidden><div class="menuver admin-ver" hidden><span id="verTxt"></span><button type="button" id="wnBtn" role="menuitem" title="What changed in recent versions, and the full changelog">What's new</button></div>
       </div>
     </div>
   </div>
@@ -636,6 +644,14 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
     <div class="dlg-head"><h2>Database</h2><div class="sub">Rollcall's history, readings and syslog messages, and everything else in its data folder on Home Assistant's disk.</div></div>
     <div class="dlg-body" id="dbBody"><p class="empty-note">Loading…</p></div>
     <div class="dlg-foot"><div class="actions"><button type="button" id="dbCheck">Check now</button><button type="button" id="dbCompact" hidden>Compact now…</button></div><div><button type="button" id="dbRefresh">Refresh</button><button class="primary">Close</button></div></div>
+  </form>
+</dialog>
+
+<dialog id="wnDlg" class="wide">
+  <form method="dialog">
+    <div class="dlg-head"><h2 id="wnTitle">What's new</h2><div class="sub" id="wnSub"></div></div>
+    <div class="dlg-body" id="wnBody"></div>
+    <div class="dlg-foot"><div class="actions"><button type="button" id="wnFull">Full changelog</button><a class="btnlink" href="https://github.com/shoey79/rollcall/blob/main/rollcall/CHANGELOG.md" target="_blank" rel="noopener">On GitHub</a></div><div><button class="primary">Close</button></div></div>
   </form>
 </dialog>
 
@@ -2422,6 +2438,9 @@ function applyStatus(fresh) {
     mb.hidden = !pend; mb.textContent = pend; mb.title = badge.title;
     document.body.classList.toggle("view-only", viewOnly);
     document.getElementById("msgBtn").hidden = !data.can_admin;
+    document.querySelectorAll(".admin-ver").forEach(x => x.hidden = !data.can_admin);
+    document.getElementById("verTxt").textContent = data.version ? "Version " + data.version : "Rollcall";
+    if (data.can_admin && (data.whats_new || []).length && !wnShown) { wnShown = true; wnOpen(data.whats_new); }
     document.getElementById("dbCompact").hidden = !data.can_admin;
     document.getElementById("backupBtn").hidden = !data.can_admin;  // exports hold private keys: admins only
     let later = 0; try { later = +localStorage.getItem("pm_tls_later") || 0; } catch (e) { }
@@ -5598,6 +5617,62 @@ document.getElementById("msgBody").addEventListener("click", async e => {
     b.disabled = false;
     if (d) msgLoad();
   }
+});
+// What's new: once per admin after an update (Rollcall remembers who has seen it), and from the menu any time
+let wnShown = false, wnMarks = false;
+function wnOpen(entries) {
+  const dlg = document.getElementById("wnDlg");
+  wnMarks = true;
+  document.getElementById("wnTitle").textContent = "What's new";
+  document.getElementById("wnSub").textContent = entries.length > 1
+    ? `Rollcall was updated to ${entries[0].version}. Here's what changed in the ${entries.length} versions since you last looked.`
+    : `Rollcall was updated to ${entries[0].version}. Here's what changed.`;
+  document.getElementById("wnBody").innerHTML = `<div class="wnlist">${entries.map(e =>
+    `<h3>${esc(e.version)}${e.date ? ` <small>${esc(e.date)}</small>` : ""}</h3><ul>${e.lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>`).join("")}</div>`;
+  document.getElementById("wnFull").hidden = false;
+  if (!dlg.open) dlg.showModal();
+}
+// The changelog as written (CHANGELOG.md): headings, bullets, bold, code and links, nothing else
+function clHtml(md) {
+  const inline = t => esc(t).replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, a, u) => `<a href="${u}" target="_blank" rel="noopener">${a}</a>`)
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/(^|[\s(])\*([^*\s][^*]*?)\*/g, "$1<i>$2</i>");
+  let out = "", depth = 0, li = "";
+  const flushLi = () => { if (li) { out += `<li>${inline(li)}`; li = ""; } };
+  for (const line of md.split("\n")) {
+    const b = line.match(/^(\s*)- (.*)$/);
+    if (/^## /.test(line)) { flushLi(); while (depth) { out += "</li></ul>"; depth--; } out += `<h2>${inline(line.slice(3))}</h2>`; continue; }
+    if (/^# /.test(line)) continue;
+    if (b) {
+      flushLi();
+      const d = b[1].length >= 2 ? 2 : 1;
+      if (d > depth) { out += "<ul>"; depth = d; } else { out += "</li>"; while (depth > d) { out += "</ul></li>"; depth--; } }
+      li = b[2];
+    } else if (line.trim() && li) li += " " + line.trim();
+    else if (line.trim() && !depth) out += `<p>${inline(line)}</p>`;
+  }
+  flushLi(); while (depth) { out += "</li></ul>"; depth--; }
+  return out;
+}
+async function wnChangelog() {
+  const body = document.getElementById("wnBody"), dlg = document.getElementById("wnDlg");
+  document.getElementById("wnTitle").textContent = "Changelog";
+  document.getElementById("wnFull").hidden = true;
+  body.innerHTML = `<p class="empty-note">Loading…</p>`;
+  if (!dlg.open) dlg.showModal();
+  const r = await fetch("api/changelog").catch(() => null), j = r && r.ok ? await r.json() : null;
+  document.getElementById("wnSub").textContent = j && j.version ? `You're on ${j.version}.` : "";
+  body.innerHTML = j && j.text ? `<div class="cl">${clHtml(j.text)}</div>` : `<p class="empty-note">The changelog isn't available here.</p>`;
+}
+document.getElementById("wnFull").addEventListener("click", wnChangelog);
+document.getElementById("wnBtn").addEventListener("click", () => {
+  document.getElementById("mainMenu").hidden = true;
+  if (data && (data.whats_new || []).length) wnOpen(data.whats_new); else wnChangelog();
+});
+document.getElementById("wnDlg").addEventListener("close", () => {
+  if (!wnMarks) return;
+  wnMarks = false;
+  if (data) data.whats_new = [];
+  fetch("api/whats-new/seen", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"}).catch(() => {});
 });
 document.getElementById("logBtn").addEventListener("click", () => {
   document.getElementById("mainMenu").hidden = true;

@@ -6,6 +6,7 @@ ENV PM_VERSION=${BUILD_VERSION}
 RUN apk add --no-cache python3 py3-aiohttp py3-cryptography py3-regex iputils tzdata msitools
 
 COPY app /app
+COPY CHANGELOG.md /app/CHANGELOG.md
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 

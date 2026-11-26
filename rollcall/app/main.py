@@ -71,6 +71,7 @@ import readings as readlib
 import vulns as vulnlib
 import msi as msilib
 import settingslib
+import whatsnew as wnlib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
@@ -102,6 +103,10 @@ SVC_ICONS = {
 MAINT_OK = 2  # value stored in checks.ok for checks made during maintenance
 MAINT_PATH = Path(os.environ.get("PM_MAINT", str(DB_PATH.parent / "maintenance.json")))
 HOSTS_PATH = Path(os.environ.get("PM_HOSTS", str(DB_PATH.parent / "hosts.json")))
+WHATS_NEW_PATH = Path(os.environ.get("PM_WHATS_NEW", str(DB_PATH.parent / "whats_new.json")))
+# The changelog: copied into the image beside the app; in a checkout, the one in the add-on folder
+CHANGELOG_PATH = next((p for p in (Path(__file__).with_name("CHANGELOG.md"), Path(__file__).parent.parent / "CHANGELOG.md") if p.exists()),
+                      Path(__file__).with_name("CHANGELOG.md"))
 IMPORT_MARK = HOSTS_PATH.with_name("imported_options.json")
 AGENTS_PATH = Path(os.environ.get("PM_AGENTS", str(DB_PATH.parent / "agents.json")))
 AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "agent_reports")))
@@ -5986,6 +5991,11 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         snap["can_edit"] = user["can_edit"]
         snap["edit_blocked"] = not user["can_edit"] and access.blocked()  # the user list can't be read: say why
         snap["can_admin"] = await access.is_admin(req)  # Messages, HTTPS for agents
+        snap["version"] = os.environ.get("PM_VERSION") or None
+        wn = getattr(monitor, "whats_new", None)
+        if wn and snap["can_admin"] and user["id"]:
+            # What changed since this admin last looked: admins only, once each (closing it marks it seen)
+            snap["whats_new"] = wn.unseen(user["id"])
         snap["messages_on"] = bool(monitor.opts.get("messages"))
         # Agents report over plain HTTP and Rollcall's own HTTPS isn't on: admins are offered it
         snap["tls_prompt"] = bool(not AGENT_TLS.on and not monitor.opts.get("agent_ssl") and monitor.agents and monitor.agents.agents)
@@ -6361,6 +6371,20 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not await monitor.resolve_ip_change(h, action, addr, user.get("display")):
             return web.json_response({"error": "that address change isn't waiting any more"}, status=404)
         return web.json_response({"ok": True, "host": h.host})
+
+    async def whats_new_seen(req):
+        wn = getattr(monitor, "whats_new", None)
+        user = await access.who(req)
+        if wn:
+            await asyncio.to_thread(wn.mark_seen, user["id"])
+        return web.json_response({"ok": True})
+
+    async def changelog(req):
+        wn = getattr(monitor, "whats_new", None)
+        user = await access.who(req)
+        text = wn.changelog_text() if wn else ""
+        return web.json_response({"text": text, "version": os.environ.get("PM_VERSION") or None,
+                                  "last_seen": wn.last_seen(user["id"]) if wn else None})
 
     async def agent_backup_forget(req):
         h = monitor.hosts.get(req.match_info["key"])
@@ -7513,6 +7537,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/backup-forget", editor_only(agent_backup_forget))
     app.router.add_post("/api/hosts/{key}/agent/backup-ack", editor_only(agent_backup_ack))
     app.router.add_post("/api/hosts/{key}/ip-change", editor_only(host_ip_change))
+    app.router.add_post("/api/whats-new/seen", admin_only(whats_new_seen))
+    app.router.add_get("/api/changelog", admin_only(changelog))
     app.router.add_post("/api/hosts/{key}/agent/ack", editor_only(agent_ack))
     app.router.add_get("/api/agents", editor_only(agents_list))
     app.router.add_post("/api/agents/approve-all", editor_only(agents_approve_all))
@@ -8312,6 +8338,7 @@ async def main() -> None:
         monitor._winget_task = asyncio.create_task(monitor.winget_loop())
         monitor._vulns_task = asyncio.create_task(monitor.vulns_loop())
         access = Access(opts, ha)
+        monitor.whats_new = wnlib.WhatsNew(WHATS_NEW_PATH, CHANGELOG_PATH, os.environ.get("PM_VERSION"), not new_install)
         if access.enabled:
             log.info("Changes allowed for HA admins%s", f" and {', '.join(sorted(access.editors))}"
                      if access.editors else "")

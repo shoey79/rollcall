@@ -28,12 +28,13 @@ AS = {"user": {"X-Remote-User-Id": "u-guest", "X-Remote-User-Name": "guest"},
 
 # Admins only. Anything else that changes something is for editors and admins.
 ADMIN_ONLY = {("GET", "/api/export"), ("POST", "/api/hints/test"), ("POST", "/api/import"), ("POST", "/api/import/chunk"),
-              ("POST", "/api/database/compact"), ("POST", "/api/agents/tls"), ("POST", "/api/agents/legacy-updates")}
+              ("POST", "/api/database/compact"), ("POST", "/api/agents/tls"), ("POST", "/api/agents/legacy-updates"),
+              ("POST", "/api/whats-new/seen")}
 ADMIN_ONLY_PREFIX = ("/api/messages",)
 # GET routes that show what only someone who can make changes should see
 EDITOR_GETS = {"/api/database", "/api/log", "/api/agents", "/api/agents/msi", "/api/agents/script", "/api/discovery",
                "/api/ha/devices", "/api/ha/entities", "/api/settings"}
-ADMIN_GETS = {"/api/messages"}
+ADMIN_GETS = {"/api/messages", "/api/changelog"}  # What's new and its changelog: admins only
 # Routes anyone viewing the panel may use, though they're not GETs (they change nothing)
 OPEN = {("POST", "/api/check/{key}")}   # Check now: only asks for a fresh check
 
