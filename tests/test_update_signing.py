@@ -163,6 +163,6 @@ def test_editing_fails_closed_without_home_assistants_user_list(monkeypatch):
         return asyncio.run(acc._can_edit("u-1", name, name)), acc
     ok, acc = can({}, "someone")
     assert ok is False and acc.blocked()                    # before 1.92.1: True (everyone could)
-    assert can({"editors": ["lee"]}, "lee")[0] is True       # names in editors still can
-    assert can({"editors": ["lee"]}, "someone")[0] is False
+    assert can({"editors": ["helper"]}, "helper")[0] is True       # names in editors still can
+    assert can({"editors": ["helper"]}, "someone")[0] is False
     assert can({"admin_only_changes": False}, "someone")[0] is True   # the owner's own choice to let everyone

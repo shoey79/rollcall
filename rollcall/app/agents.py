@@ -547,7 +547,7 @@ LOGON_FILTER_FIELDS = ("account", "source", "reason")  # a failed-logon filter (
 
 
 def _pretty_account(value) -> str:
-    """A directory DN ("CN=Sam Lee,OU=...") shown as its name; anything else as it is."""
+    """A directory DN ("CN=Sam Smith,OU=...") shown as its name; anything else as it is."""
     v = str(value or "").strip()
     m = re.match(r"^CN=((?:[^,\\]|\\.)+)", v, re.I)
     return m.group(1).replace("\\", "") if m else v
