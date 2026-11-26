@@ -78,6 +78,16 @@ import offline as offlib
 from agents import AgentStore, clean_enrol_info, evaluate
 
 OPTIONS_PATH = Path(os.environ.get("PM_OPTIONS", "/data/options.json"))
+
+
+def write_options_file(options: dict) -> None:
+    """Keep /data/options.json in step with the Supervisor. The Supervisor only writes it when the add-on starts:
+    options saved through its API (the dashboard's Settings, the Configuration tab) don't reach it until a restart,
+    so reading it after a save gave the old values (a setting changed back to how it was at start-up "saved" but
+    didn't change, and exports carried old settings)."""
+    tmp = OPTIONS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(options, indent=2))
+    tmp.replace(OPTIONS_PATH)
 DB_PATH = Path(os.environ.get("PM_DB", "/data/ping_monitor.db"))
 WEB_DIR = Path(__file__).parent / "web"
 PORT = int(os.environ.get("PM_PORT", "8099"))
@@ -1490,7 +1500,7 @@ class HomeAssistant:
         if not self.enabled:
             return
         try:
-            raw = json.loads(OPTIONS_PATH.read_text())
+            raw = await self.read_options() or json.loads(OPTIONS_PATH.read_text())
             raw["hosts"] = []
             async with self.session.post(
                 f"{SUPERVISOR_API}/addons/self/options",
@@ -1501,6 +1511,7 @@ class HomeAssistant:
                     log.warning("Couldn't clear hosts from the Configuration tab (%s). They're imported; "
                                 "you can delete them from the Configuration tab yourself.", resp.status)
                 else:
+                    write_options_file(raw)
                     log.info("Cleared hosts from the Configuration tab; manage them on the dashboard now")
         except Exception as err:  # noqa: BLE001
             log.warning("Couldn't clear hosts from the Configuration tab: %s", err)
@@ -1510,7 +1521,7 @@ class HomeAssistant:
         if not self.enabled:
             return "not changed (no Supervisor access)"
         try:
-            current = json.loads(OPTIONS_PATH.read_text())
+            current = await self.read_options() or json.loads(OPTIONS_PATH.read_text())
         except (OSError, ValueError):
             current = {}
         # (not "Dashboard only through Home Assistant": an export from an install with it off mustn't turn it off here)
@@ -1523,6 +1534,7 @@ class HomeAssistant:
                     body = (await resp.text())[:200]
                     log.warning("Couldn't apply the exported settings (%s): %s", resp.status, body)
                     return f"not applied ({resp.status}); set them in the Configuration tab"
+            write_options_file(merged)
             log.info("Applied the exported Configuration-tab settings")
             return "applied"
         except Exception as err:  # noqa: BLE001
@@ -1654,6 +1666,20 @@ class HomeAssistant:
             m = {x.get("entity_id"): x for x in st if isinstance(x, dict)}
             self._states = (time.time(), m)
             return m
+
+    async def read_options(self) -> dict | None:
+        """The add-on's options as the Supervisor holds them now (they're only written to options.json at start)."""
+        if not self.enabled:
+            return None
+        try:
+            async with self.session.get(f"{SUPERVISOR_API}/addons/self/info",
+                                        headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}) as resp:
+                if resp.status >= 400:
+                    return None
+                opts = (await resp.json()).get("data", {}).get("options")
+                return opts if isinstance(opts, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
 
     async def addon_network(self) -> dict:
         """This add-on's port mappings, e.g. {"5140/udp": 514}."""
@@ -8598,6 +8624,7 @@ class LiveSettings:
         self.monitor, self.access, self.agent_listener = monitor, access, agent_listener
         self.lock = asyncio.Lock()
         self._mtime = self._options_mtime()
+        self._stored: dict | None = None  # the Supervisor's copy as last seen (Configuration tab changes show there)
 
     @staticmethod
     def _options_mtime() -> float:
@@ -8661,11 +8688,15 @@ class LiveSettings:
             clean, errors = settingslib.clean(changes)
             if errors:
                 raise ValueError(errors)
-            current = {**DEFAULTS, **self._read_raw()}
-            changed = {k: v for k, v in clean.items() if current.get(k) != v}
-            if not changed:
+            # What's saved is the Supervisor's copy (options.json is only written at start, so it can be behind);
+            # what's in use is self.monitor.opts. A change counts if it differs from either.
+            stored = await self.monitor.ha.read_options() if self.monitor.ha.enabled else None
+            current = {**DEFAULTS, **(stored if stored is not None else self._read_raw())}
+            changed = {k: v for k, v in clean.items() if self.monitor.opts.get(k) != v}
+            unsaved = {k: v for k, v in clean.items() if current.get(k) != v}
+            if not changed and not unsaved:
                 return {"changed": [], "notes": []}
-            merged = {**current, **changed}
+            merged = {**current, **clean}
             if changed.get("agent_ssl") and AGENT_TLS.on:
                 raise ValueError({"agent_ssl": "Rollcall's own HTTPS for agents is on (Manage → Agents). Use one or the other: "
                                                "turn it off there first to use your own certificate on the agent port."})
@@ -8678,28 +8709,39 @@ class LiveSettings:
                 err = await self.monitor.ha.write_options(saved)
                 if err:
                     raise RuntimeError(err)
-            else:  # development, outside Home Assistant
-                tmp = OPTIONS_PATH.with_suffix(".tmp")
-                tmp.write_text(json.dumps(saved, indent=2))
-                tmp.replace(OPTIONS_PATH)
-            self._mtime = self._options_mtime()
-            notes = await self.apply(changed)
-            log.info("Settings changed from the dashboard%s: %s", f" by {who}" if who else "", ", ".join(sorted(changed)))
-            return {"changed": sorted(changed), "notes": notes}
+            write_options_file(saved)  # the Supervisor doesn't write it until a restart
+            self._mtime, self._stored = self._options_mtime(), saved
+            notes = await self.apply(changed) if changed else []
+            log.info("Settings changed from the dashboard%s: %s", f" by {who}" if who else "",
+                     ", ".join(sorted(changed.keys() | unsaved.keys())))
+            return {"changed": sorted(changed.keys() | unsaved.keys()), "notes": notes}
 
     async def watch(self) -> None:
         """Apply settings saved in the Configuration tab (or by the Supervisor) without a restart."""
         while True:
             await asyncio.sleep(self.WATCH_SECONDS)
             try:
-                mtime = self._options_mtime()
-                if not mtime or mtime == self._mtime:
-                    continue
-                async with self.lock:
+                if self.monitor.ha.enabled:
+                    # The Configuration tab saves through the Supervisor, which doesn't write options.json until a
+                    # restart: look at its copy instead
+                    stored = await self.monitor.ha.read_options()
+                    if not stored or stored == self._stored:
+                        continue
+                    first, self._stored = self._stored is None, stored
+                    if first:
+                        continue  # what the add-on started with
+                    raw = stored
+                    write_options_file(stored)
+                    self._mtime = self._options_mtime()
+                else:
+                    mtime = self._options_mtime()
+                    if not mtime or mtime == self._mtime:
+                        continue
                     self._mtime = mtime
                     raw = self._read_raw()
                     if not raw:
                         continue
+                async with self.lock:
                     clean, errors = settingslib.clean({k: v for k, v in raw.items() if k in settingslib.LABELS})
                     for key, problem in errors.items():
                         log.warning("Configuration tab, %s: %s; keeping the current value", key, problem)
