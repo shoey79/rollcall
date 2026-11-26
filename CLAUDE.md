@@ -41,7 +41,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- 26 Nov requests (on pending): end-of-life OSes excluded from vulnerability alerts (vuln_skip_os, or a device on
-  its own; listed, never alerted, no badge); search shows matches in other tabs (grouped by tab, "In <tab>" link);
-  A-Z button sorts the user's tabs once; Hyper-V rows for VMs that are off (dashes, greyed, tooltip); AI settings
-  model beside its key.
+(none)
