@@ -41,18 +41,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Defender definitions show the date updated and age from now (Windows agent 1.0.57 sends the date), not "today".
-
-- Security review fixes F1-F14 (router agent 1.0.5 trusts Rollcall's CA; Linux 1.0.23; Windows 1.0.58; Approve all by
-  ids; signed-reply serials; legacy update cut-off; enrolment limits; ingress_only option), and Windows Read-State
-  keeping the Veeam policy cache and backup history.
-- 26 Nov items: backup warning Acknowledge, security alerts kept until acknowledged (failed logons/events at the top
-  of Security, password-scan (i)), LAPS on Domain, Vulnerabilities tab, Hyper-V VM uptime/CPU/memory/checkpoints,
-  IP address change prompt (Use / Keep).
-
-- The requested features (owner asked 26 Nov to include them): What's new pop-up; system file check (Windows 1.0.59);
-  offline mode and offline data bundles; agents renamed to Rollcall (Windows 1.0.60, Linux 1.0.25; a -DataPath install
-  keeps updating); Proxmox VE/PBS through the Linux agent (1.0.24); pfSense/OPNsense/FreeBSD agent (1.0.0); OPNsense
-  through its API (no agent); Cisco and Juniper over SNMP; VMware ESXi/vCenter/Aria (tested against vcsim's recorded
-  answers; a standalone read-only test script for a user exists in the session, not the repo). Still worth real-kit
-  output from users for Cisco/Juniper, VMware, OPNsense API and Aria.
+(none)
