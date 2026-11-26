@@ -44,4 +44,6 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Settings save fix (owner reported 26 Nov): saves compared against /data/options.json, which the Supervisor only
+  writes at start, so changing a setting back to its start-up value didn't take, and a save could undo an earlier one.
+  Now read from the Supervisor, file kept in step, Configuration tab changes picked up live.
