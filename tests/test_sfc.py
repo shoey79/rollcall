@@ -164,3 +164,24 @@ def test_which_devices_run_it_and_run_now(tmp_path, monkeypatch):
     assert m.sfc_config(srv)["run_now"] > 0
     asyncio.run(m.set_sfc(m.hosts["pc"], "default", False, False, "admin"))
     assert m.agent_settings["hosts"]["pc"]["sfc"] == {"dism": False}
+
+
+def test_details_carry_the_sfc_settings(tmp_path, monkeypatch):
+    """The System files section (and its Run now) only shows when the device's details carry its sfc settings:
+    they were missing from the details the dashboard asks for, so the section never appeared."""
+    import time as _t
+    from types import SimpleNamespace
+    from test_ip_change_and_acks import monitor
+    m, _ = monitor(tmp_path, monkeypatch, [{"id": "pc", "name": "PC01", "host": "10.0.1.20", "checks": []},
+                                           {"id": "nas", "name": "NAS01", "host": "10.0.1.30", "checks": []}])
+    m.agents = SimpleNamespace(agents={"a1": {"host_key": "pc", "os_family": "windows"}, "a2": {"host_key": "nas", "os_family": "linux"}},
+                               pending={})
+    for key, aid in (("pc", "a1"), ("nas", "a2")):
+        h = m.hosts[key]
+        h.agent_id, h.agent_report, h.agent_seen = aid, {"hostname": key, "checks": {}}, _t.time()
+    m.opts["vuln_checks"] = False
+    m.software = lambda aid: None
+    m.secret_findings = lambda aid: {}
+    d = m.details(m.hosts["pc"], True)
+    assert d["settings"]["sfc"]["on"] is False and d["settings"]["sfc"]["mode"] == "default"
+    assert "sfc" not in m.details(m.hosts["nas"], True)["settings"]

@@ -2738,7 +2738,7 @@ function renderDetails(d) {
   detSettings = st;
   document.getElementById("detTitle").textContent = d.name;
   document.getElementById("detSub").textContent = d.received
-    ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^(Python|BusyBox)/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
+    ? `Last report ${ago(d.received, Date.now() / 1000)} · agent ${r.agent_version || "?"} · ${/^(Python|BusyBox|sh\b)/.test(r.ps_version || "") ? "" : "PowerShell "}${r.ps_version || "?"}`
     : "No report from the agent yet. It reports every 5 minutes once approved.";
   if (!d.received) { document.getElementById("detBody").innerHTML = ""; showSourceTabs(detKey, "agent"); return; }
 
@@ -4117,7 +4117,7 @@ function renderVmware(h) {
     const hs = d.hosts || [];
     if (hs.length) html += sect(`Hosts (${hs.length})`, tbl(["Host", "State", "Up", "CPU", "Memory", "Sensors", "Version"], hs.map(x => {
       const red = (x.sensors || []).filter(s => s.state === "red").length, yel = (x.sensors || []).filter(s => s.state === "yellow").length;
-      const st = x.connection !== "connected" ? `<span class="dot red"></span>${esc(x.connection)}` : x.maintenance ? `<span class="old">maintenance mode</span>` : esc(x.power === "poweredOn" ? "on" : x.power);
+      const st = x.connection !== "connected" ? `<span class="dot red"></span> <b>${esc(({notresponding: "not responding", disconnected: "disconnected"})[x.connection] || x.connection)}</b>` : x.maintenance ? `<span class="old">maintenance mode</span>` : esc(x.power === "poweredOn" ? "on" : x.power);
       const up = x.boot ? fmtUp(nowS - Date.parse(x.boot) / 1000) : "";
       return `<tr><td><b>${esc(x.name)}</b>${x.hardware ? `<br><small class="muted">${esc(x.hardware)}</small>` : ""}</td><td>${st}</td><td>${esc(up)}</td><td>${pct(x.cpu_pct)}</td>
         <td>${pct(x.mem_pct)}${x.mem_gb ? `<br><small class="muted">of ${x.mem_gb} GB</small>` : ""}</td>

@@ -5781,6 +5781,8 @@ class Monitor:
                     "nic_watch": hs.get("nic_watch") or {}, "nic_rates": h.nic_rates, "backup_forgot": hs.get("backup_forgot") or {},
                     "defaults": {"warn": self.opts.get("agent_disk_warn", 15), "crit": self.opts.get("agent_disk_crit", 5)},
                     "resources": hs.get("resources") or {}, "res_limits": agentlib.resource_limits(self.opts, {"resources": hs.get("resources") or {}})}
+        if (self.agents.agents.get(h.agent_id) or {}).get("os_family") != "linux":
+            settings["sfc"] = self._host_settings(h)["sfc"]  # the System files section: its schedule, this device's choice, Run now
         if include_security and hs.get("domain_seen") is not None:
             dseen = hs["domain_seen"]
             dm = (r.get("checks") or {}).get("domain")
