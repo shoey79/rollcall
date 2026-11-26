@@ -31,6 +31,10 @@ Remove each line once it's released.
 - Settings, AI hints (owner asked 26 Nov): lay out each provider's model and API key side by side on the same row
   (Claude model | Anthropic key, OpenAI model | OpenAI key, Gemini model | Gemini key); today the models are one
   column and the keys the other, so they don't line up.
+- Hyper-V table (Roles tab), owner asked 26 Nov: a VM that's off or saved looks misaligned (no usage on the first
+  line). Keep the two-line shape with a dash: Up "—"; CPU "—" over "4 CPUs"; Memory "—" over "16 GB at start" (or
+  "2 GB to 8 GB" when dynamic). Grey out the row a little when it's not running, with a tooltip "Off: no CPU or memory
+  in use".
 
 ## Requested features (not started)
 
