@@ -119,6 +119,25 @@ def test_f12_unknown_body_token_reports_are_kept_small(tmp_path):
         assert st == 413
         st, _ = call(addon.agent_url + "/agent/report", {"agent_token": "a" * 64, "pad": "x" * 1000})
         assert st == 401          # small: read, then refused as unknown
+        # Sent in pieces with pauses between (as a report over HTTPS arrives, in several TLS records): read to the
+        # end, not turned down as "invalid JSON" after the first piece (1.99.0's CI on a real OpenWrt router)
+        import socket
+        import time
+        from urllib.parse import urlparse
+        u = urlparse(addon.agent_url)
+        body = json.dumps({"agent_token": "a" * 64, "pad": "x" * 20000}).encode()
+        with socket.create_connection((u.hostname, u.port), timeout=10) as sk:
+            sk.sendall(b"POST /agent/report HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                       b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+            for i in range(0, len(body), 4000):
+                part = body[i:i + 4000]
+                sk.sendall(b"%x\r\n" % len(part) + part + b"\r\n")
+                time.sleep(0.05)
+            sk.sendall(b"0\r\n\r\n")
+            reply = b""
+            while chunk := sk.recv(4096):
+                reply += chunk
+        assert reply.split(b" ")[1] == b"401", reply[:200]   # unknown token, not 400 invalid JSON
     finally:
         addon.stop()
 

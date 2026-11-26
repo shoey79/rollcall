@@ -8329,9 +8329,14 @@ def build_agent_app(monitor: Monitor) -> web.Application:
             # agents may send once they've been recognised by their header (review F12)
             if (req.content_length or 0) > BODY_TOKEN_MAX:
                 return web.json_response({"error": "report too big"}, status=413)
-            raw = await req.content.read(BODY_TOKEN_MAX + 1)  # also when it's sent in chunks, with no length
-            if len(raw) > BODY_TOKEN_MAX:
-                return web.json_response({"error": "report too big"}, status=413)
+            # Read to the end, however it arrives: one read() only gives what has come so far, and over HTTPS a
+            # report comes in several TLS records (it was cut short, and turned down as "invalid JSON")
+            raw = bytearray()
+            async for part in req.content.iter_chunked(65536):
+                raw += part
+                if len(raw) > BODY_TOKEN_MAX:
+                    return web.json_response({"error": "report too big"}, status=413)
+            raw = bytes(raw)
             try:
                 body = json.loads(raw)
             except (ValueError, UnicodeDecodeError):

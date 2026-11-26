@@ -83,6 +83,13 @@ $SelfText = $null
 try { if ($MyInvocation.MyCommand.ScriptContents) { $SelfText = $MyInvocation.MyCommand.ScriptContents } } catch { }
 if (-not $SelfText) { try { $SelfText = $MyInvocation.MyCommand.ScriptBlock.ToString() } catch { } }
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell started from PowerShell 7 inherits 7's module path, and then can't load its own security module
+# (Get-Acl, Set-Acl): load it from Windows PowerShell's own folder first
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    foreach ($m in 'Microsoft.PowerShell.Security', 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Utility') {
+        try { Import-Module (Join-Path $PSHOME "Modules\$m\$m.psd1") -ErrorAction Stop } catch { }
+    }
+}
 # Rollcall's names (1.0.60 on); before, Ping Monitor's. An agent running from the old place keeps the old names
 # until it has moved itself (Move-ToNewName).
 $OldDataPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'PingMonitor'
@@ -242,8 +249,19 @@ function Get-DataFolderWriters([string]$Path = $DataPath) {
     $mask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
     $out = @()
     if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) { return @() }  # Windows file permissions only (tests run elsewhere)
+    $acl = $null
+    try { $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop }
+    catch {
+        # Get-Acl's module can fail to load in Windows PowerShell started from PowerShell 7 (its module path comes
+        # along); .NET reads the same permissions without it
+        try { $acl = [System.IO.Directory]::GetAccessControl($Path) } catch { }
+    }
+    if (-not $acl) {
+        # Not being able to read the permissions isn't a sign anyone else can write: say so, and don't stop the agent
+        $script:FolderCheckNote = "couldn't read the permissions on $Path, so they weren't checked"
+        return @()
+    }
     try {
-        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
         foreach ($r in @($acl.Access)) {
             if ([string]$r.AccessControlType -ne 'Allow') { continue }
             $rights = 0; try { $rights = [int64]$r.FileSystemRights } catch { $rights = $mask }  # unreadable: assume it can write
@@ -252,7 +270,7 @@ function Get-DataFolderWriters([string]$Path = $DataPath) {
             try { $sid = $r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = [string]$r.IdentityReference }
             if ($ok -notcontains $sid) { $out += [string]$r.IdentityReference }
         }
-    } catch { $out += "(couldn't read its permissions: $($_.Exception.Message))" }
+    } catch { $script:FolderCheckNote = "couldn't read the permissions on $Path ($($_.Exception.Message)), so they weren't checked" }
     return @($out | Select-Object -Unique)
 }
 
@@ -3867,6 +3885,7 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         if ($open.Count) { throw "Not running: $DataPath could be changed by $($open -join ', '), and its permissions couldn't be put back" }
         Write-AgentLog "WARN the agent's folder had been opened up; its permissions were put back before running"
     }
+    if ($script:FolderCheckNote) { Write-AgentLog "WARN $script:FolderCheckNote"; $script:FolderCheckNote = $null }
     $state = Read-State
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     if ($script:LegacyLayout -and -not ($ReportOnly -or $ShowReport)) {

@@ -32,6 +32,13 @@ ALERT_INTERNAL_ERROR = bytes([0x15, 0x03, 0x01, 0x00, 0x02, 0x02, 0x50])
 MLKEM = b"\x11\xec"
 
 
+def _past_random(rec: bytes) -> bytes:
+    """A ClientHello record from its cipher suites on: the 32 random bytes and the session ID before them can hold
+    any two bytes, MLKEM's included (CI once failed on exactly that)."""
+    at = 5 + 4 + 2 + 32           # record header, handshake header, version, random
+    return rec[at + 1 + rec[at]:] if len(rec) > at else b""
+
+
 def _cert(tmp: Path) -> tuple[str, str]:
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -117,7 +124,7 @@ class OldStack:
                 if not head:
                     return
             rec = head[:5 + struct.unpack(">H", head[3:5])[0]]
-            if len(rec) > 1024 or MLKEM in rec[5:]:
+            if len(rec) > 1024 or MLKEM in _past_random(rec):
                 self.refused += 1
                 s.sendall(ALERT_INTERNAL_ERROR)
                 return
@@ -149,7 +156,7 @@ def _modern_hello_is_large() -> bool:
 
 def test_legacy_context_sends_a_small_hello_with_no_post_quantum_key():
     hello = _client_hello(main.legacy_tls_context())
-    assert len(hello) <= 600 and MLKEM not in hello[5:]
+    assert len(hello) <= 600 and MLKEM not in _past_random(hello)
     assert main.legacy_tls_context().maximum_version == ssl.TLSVersion.TLSv1_2
     assert main.legacy_tls_context().minimum_version <= ssl.TLSVersion.TLSv1   # iLO 3 and iDRAC 6 still need TLS 1.0
 
