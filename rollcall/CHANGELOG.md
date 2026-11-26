@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.100.0 - 2026-11-26
+
+- **End-of-life operating systems don't alert on vulnerabilities.** Devices kept on an OS that's out of support on purpose (Windows 10 without extended updates, say) can be left out: list the OSes under **End-of-life operating systems** in Settings (`vuln_skip_os`), or tick **Treat this device as end of life** in one device's Vulnerabilities tab. Their vulnerabilities are still listed in that tab, but never turn the device amber or red or send a notification, known-exploited ones included. Every other device alerts as before.
+
+- **Searching inside a tab shows matches in other tabs too.** The open tab's matches come first, then *N more in other tabs*, grouped by the tab they're in, so nothing is missed. **In** *tab name* goes to that tab, keeping the search.
+
+- **Sort your tabs A to Z.** **A–Z** next to **+ New tab** puts your own tabs in alphabetical order, once, when you press it; Overview, All and the other built-in tabs stay first. Otherwise tabs stay in the order they were made, and new ones go on the end.
+
+- **Hyper-V: VMs that are off line up with the rest.** Up, CPU and memory show a dash where there's nothing in use, with the CPUs and memory a VM starts with underneath, and the row is greyed a little.
+
+- **Settings: each AI provider's model sits beside its API key**, so the Claude, OpenAI and Gemini rows line up.
+
 ## 1.99.0 - 2026-11-26
 
 - **What's new after an update.** The first time an admin opens Rollcall after it's updated, a short pop-up lists what changed since the version they last saw (several versions at once if they skipped some), with the full changelog a click away. It's once per admin, wherever they sign in, not once per browser; never for other users; and not at all on a fresh install. **What's new** under the version in the menu opens it again.
