@@ -31,6 +31,10 @@ Remove each line once it's released.
 - Overview hint jumps away (owner reported 26 Nov): on a device's Overview, opening "What would be sent" under Ask Claude
   in a Needs attention item switches to the tab the check belongs to, so you have to click back to Overview. Clicks on
   anything inside the item's hint (details/summary, buttons, the preview) must not trigger the item's jump to its tab.
+- System files Run now looks ignored (owner reported 26 Nov): after Run now, Security > System files still says "Not run yet"
+  and the button is live again; the only sign is a sentence tacked onto the end of the grey hint. While run_now is pending,
+  say so in the status line ("Asked to run: starts at the agent's next report, within 5 minutes") and show the button as
+  "Asked" (disabled) until the run starts; then "Checking now" as today.
 
 ## Requested features (not started)
 
