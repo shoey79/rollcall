@@ -121,7 +121,9 @@ def test_end_to_end(tmp_path, monkeypatch):
         assert rd["storage_free"]["value"] == 2211 and rd["disabled_apps"]["value"] == 27 and rd["wifi_signal"]["value"] == -64
         addon.api(f"/api/hosts/{h['key']}", {"name": "Lounge TV", "host": "127.0.0.1",
                   "checks": [f"firetv:{stick.port}", "Storage=reading:firetv.storage_free<5000"]}, "PUT")
-        for _ in range(3):
+        # The chip is judged in the same check as its source, so it can see the reading from one check earlier,
+        # and red needs two checks in a row: allow a couple more than that
+        for _ in range(5):
             h, _ = check("Lounge TV", "green")
             chip = next(x for x in h["services"] if x["kind"] == "reading")
             if chip["status"] == "red":
