@@ -7,6 +7,8 @@ import re
 import secrets
 import time
 
+import netvendor  # Cisco and Juniper readers (they use this module's SnmpError)
+
 # --------------------------------------------------------------------------
 # BER encoding
 # --------------------------------------------------------------------------
@@ -996,6 +998,15 @@ async def poll(host: str, community: str, timeout: float = 2.0, port: int = 161,
             got = await timed("server health", read_dell(s))
             if got:
                 out["dell"] = got
+        # Cisco and Juniper: CPU, memory, environment, stack, alarms and routing neighbours from their own MIBs
+        nvv = netvendor.vendor(oid)
+        if nvv:
+            try:
+                got = await timed(nvv.capitalize(), (netvendor.read_cisco if nvv == "cisco" else netvendor.read_juniper)(s))
+            except SnmpError:
+                got = None
+            if got and len(got) > 1:
+                out["netvendor"] = got
         if reader:
             got = await timed("UPS", reader(s))
             if got:
@@ -1164,6 +1175,8 @@ def evaluate(d: dict, watch: set[int], prev: dict | None, limits: dict | None = 
                 add("warn", what, st)
         if dell.get("power") == "off":
             add("warn", "Server", "powered off")
+    if d.get("netvendor"):
+        netvendor.evaluate(d["netvendor"], add)
     vpn = d.get("vpn")
     if vpn:
         ign = {x.lower() for x in vpn_ignore or ()}

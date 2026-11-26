@@ -189,6 +189,45 @@ KNOWN: list[dict] = [
      "means": "Data Protector finished the session, but some objects (a disk agent per drive or database) failed or had errors.",
      "try": "Open the session's messages in the Data Protector GUI (or omnidb -session <ID> -report) to see which "
             "object failed and why; locked files and unreachable clients are the usual reasons."},
+    # Cisco syslog (IOS / IOS XE / NX-OS): the messages switches and routers send most
+    {"words": [r"%LINK-3-UPDOWN", r"%LINK-5-CHANGED", r"%ETHPORT-5-IF_DOWN"],
+     "means": "A port's link went down or up: a cable unplugged, a device at the other end restarted or went to sleep, "
+              "or the port was shut down. Repeated up/down (flapping) points at a bad cable, transceiver or speed/duplex mismatch.",
+     "try": "show interfaces <port> (input errors, CRC, resets) and show logging | include <port>; reseat or replace the "
+            "cable or SFP, and check both ends agree on speed and duplex."},
+    {"words": [r"%LINEPROTO-5-UPDOWN"],
+     "means": "The line protocol on an interface changed state: it follows the link, or keepalives stopping on a WAN or "
+              "tunnel interface.",
+     "try": "If %LINK messages came with it, it's the physical link; on its own, check the far end and keepalives "
+            "(show interfaces <port>)."},
+    {"words": [r"%SYS-5-CONFIG_I", r"%SYS-5-CONFIG(?:\b|_)"],
+     "means": "Someone changed the running configuration (the message names who and from where). It isn't saved until "
+              "someone writes it to the startup configuration.",
+     "try": "If the change was expected, save it (write memory or copy running-config startup-config); if not, check who "
+            "made it (show archive log config all, or AAA accounting)."},
+    {"words": [r"%SYS-5-RESTART", r"%SYS-5-RELOAD", r"%SYS-6-BOOTTIME"],
+     "means": "The device restarted (reloaded): by someone, after a crash, or after a power cut.",
+     "try": "show version (\"System returned to ROM by\" and the uptime) and show logging for what came before; a crash "
+            "leaves a crashinfo file in flash."},
+    {"words": [r"%SPANTREE-2-BLOCK_BPDUGUARD", r"%PM-4-ERR_DISABLE", r"err-disabled"],
+     "means": "The switch shut a port down to protect the network: BPDU Guard saw a switch where an edge device was "
+              "expected, or another error-disable cause (port security, a loop, link flaps).",
+     "try": "show interfaces status err-disabled shows why; remove the cause, then shutdown / no shutdown on the port "
+            "(or set errdisable recovery)."},
+    {"words": [r"%SW_MATM-4-MACFLAP_NOTIF", r"MAC address flapping"],
+     "means": "The same MAC address keeps appearing on two ports: usually a loop, or a device with two links bridged "
+              "together.",
+     "try": "Find the two ports in the message, check spanning tree there (show spanning-tree), and look for a second "
+            "cable or unmanaged switch making a loop."},
+    {"words": [r"%DUAL-5-NBRCHANGE", r"%OSPF-5-ADJCHG", r"%BGP-5-ADJCHANGE", r"%BGP-3-NOTIFICATION"],
+     "means": "A routing neighbour went down or came up (EIGRP, OSPF or BGP): the link to it, the device itself, or a "
+              "mismatch (timers, authentication, MTU).",
+     "try": "show ip ospf neighbor / show ip bgp summary / show ip eigrp neighbors, and the interface towards it; the "
+            "message's reason (hold time expired, interface down) says which."},
+    {"words": [r"%ENVMON|%PLATFORM_ENV|%FAN-|%PSU-|%ILPOWER-[0-9]-(?:POWER_DENY|IEEE_DISCONNECT)"],
+     "means": "The switch reported a fan, power supply, temperature or PoE power problem.",
+     "try": "show environment all (and show power inline for PoE); replace a failed fan or power supply, and check the "
+            "room's cooling."},
     {"words": [r"not run since", r"missed", r"didn't run"], "checks": ["backups"],
      "means": "The backup job hasn't run when it should have: the server was off, the job is disabled, or its schedule changed.",
      "try": "Check the job's schedule and that the backup service is running."},
