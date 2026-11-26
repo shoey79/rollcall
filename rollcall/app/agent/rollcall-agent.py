@@ -21,8 +21,8 @@ timer) it reports:
 It only ever sends reports; it never runs anything it's told to.
 
 Install (as root):
-    sudo python3 pingmonitor-agent.py --install
-    sudo python3 pingmonitor-agent.py --install --immich-api-key KEY
+    sudo python3 rollcall-agent.py --install
+    sudo python3 rollcall-agent.py --install --immich-api-key KEY
 Then approve the server in the Rollcall dashboard (Agents).
 
 Other options: --uninstall, --report (print the report, send nothing).
@@ -50,7 +50,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-AGENT_VERSION = "1.0.24"
+AGENT_VERSION = "1.0.25"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 # The public half of Rollcall's own signing key, built in when the script is downloaded: agent updates and the
@@ -63,13 +63,21 @@ TLS_PORT = 0
 IGNORE_CERT = False
 
 PREFIX = os.environ.get("PM_PREFIX", "")          # for testing only
-DATA_DIR = PREFIX + "/var/lib/pingmonitor"
-CONFIG_PATH = PREFIX + "/etc/pingmonitor/agent.conf"
-INSTALL_PATH = PREFIX + "/usr/local/lib/pingmonitor/pingmonitor-agent.py"
+# Rollcall's names (1.0.25 on); before, Ping Monitor's. An agent running from the old place keeps the old names
+# until it has moved itself (move_to_new_name); the new one removes the old one once it has reported.
+OLD = {"data": PREFIX + "/var/lib/pingmonitor", "conf": PREFIX + "/etc/pingmonitor/agent.conf",
+       "install": PREFIX + "/usr/local/lib/pingmonitor/pingmonitor-agent.py", "unit": "pingmonitor-agent"}
+NEW = {"data": PREFIX + "/var/lib/rollcall", "conf": PREFIX + "/etc/rollcall/agent.conf",
+       "install": PREFIX + "/usr/local/lib/rollcall/rollcall-agent.py", "unit": "rollcall-agent"}
+LEGACY = os.path.abspath(__file__) == os.path.abspath(OLD["install"])
+_L = OLD if LEGACY else NEW
+DATA_DIR = _L["data"]
+CONFIG_PATH = _L["conf"]
+INSTALL_PATH = _L["install"]
 UNIT_DIR = PREFIX + "/etc/systemd/system"
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 LOG_PATH = os.path.join(DATA_DIR, "agent.log")
-UNIT = "pingmonitor-agent"
+UNIT = _L["unit"]
 
 REAL_FS = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "nfs", "nfs4", "cifs", "smb3",
            "fuseblk", "ntfs", "ntfs3", "vfat", "exfat", "bcachefs"}
@@ -1940,6 +1948,12 @@ def agent_run(conf, report_only=False):
     if not state.get("token"):
         state["token"] = secrets.token_hex(32)
         save_json(STATE_PATH, state)
+    if LEGACY and not report_only:
+        moved = load_json(os.path.join(NEW["data"], "state.json"), {})
+        if moved.get("last_run") and moved.get("token") == state["token"]:
+            log("This agent has moved to %s (%s), which is reporting: this old copy does nothing (the new one removes it)"
+                % (NEW["unit"], NEW["install"]))
+            return
     report = build_report(state, conf)
     if report_only:
         print(json.dumps(report, indent=1))
@@ -2061,6 +2075,14 @@ def agent_run(conf, report_only=False):
             self_update(body["agent_update"], state["token"], server, ignore)
         except Exception as err:  # noqa: BLE001
             log("WARN Agent update: %s" % err)
+    try:  # the move to Rollcall's own names (1.0.25): never stops a report
+        if LEGACY:
+            move_to_new_name(state, conf)
+            save_json(STATE_PATH, state)
+        else:
+            remove_old_name(state)
+    except Exception as err:  # noqa: BLE001
+        log("WARN Moving to the new name: %s" % err)
     try:  # after the report, so nothing here can stop one
         was = state.get("perm_checked")
         if check_own_permissions(state) or not was:
@@ -2073,6 +2095,107 @@ def agent_run(conf, report_only=False):
             log("Password scan finished: %d file(s) checked, %d finding(s)" % (len(st.get("files") or {}), len(st.get("found") or [])))
     except Exception as err:  # noqa: BLE001
         log("WARN Password scan: %s" % err)
+
+
+# --------------------------------------------------------------------------
+# The move to Rollcall's own names (1.0.25): /usr/local/lib/pingmonitor/pingmonitor-agent.py, /var/lib/pingmonitor,
+# /etc/pingmonitor and the pingmonitor-agent units become /usr/local/lib/rollcall/rollcall-agent.py, /var/lib/rollcall,
+# /etc/rollcall and rollcall-agent. The old copy starts the new one and stays as the fallback; the new one removes
+# the old once it has reported. If the move fails, the old one carries on and tries again a day later.
+# --------------------------------------------------------------------------
+STATE_SKIP = re.compile(r"(\.old|\.new|\.tmp|\.lock)$|^agent\.log$")
+
+
+def _copy_state(src_dir, dst_dir):
+    """The token, state and caches (not the log), private like the originals; "last reported" is left for the new
+    one to set, so the old copy can tell when it has."""
+    os.makedirs(dst_dir, mode=0o700, exist_ok=True)
+    os.chmod(dst_dir, 0o700)
+    for n in os.listdir(src_dir):
+        sp = os.path.join(src_dir, n)
+        if STATE_SKIP.search(n) or os.path.islink(sp) or not os.path.isfile(sp):
+            continue
+        with open(sp, "rb") as f:
+            data = f.read()
+        if n == "state.json":
+            st = json.loads(data.decode("utf-8") or "{}")
+            for k in ("last_run", "rename_started_at", "rename_failed_at", "rename_error"):
+                st.pop(k, None)
+            data = json.dumps(st).encode()
+        write_private(os.path.join(dst_dir, n), data)
+
+
+def _systemctl(*args):
+    if PREFIX:  # tests: no systemd
+        return 0, ""
+    rc, _, err = run(["systemctl"] + list(args))
+    return rc, err.strip()
+
+
+def _write_units(unit, path, minutes=5):
+    os.makedirs(UNIT_DIR, exist_ok=True)
+    with open(os.path.join(UNIT_DIR, unit + ".service"), "w") as f:
+        f.write(SERVICE_UNIT.format(path=path.replace(PREFIX, "", 1) if PREFIX else path))
+    with open(os.path.join(UNIT_DIR, unit + ".timer"), "w") as f:
+        f.write(TIMER_UNIT.format(minutes=minutes))
+
+
+def move_to_new_name(state, conf):
+    now = time.time()
+    if now - (parse_iso(state.get("rename_failed_at")) or 0) < 86400 or now - (parse_iso(state.get("rename_started_at")) or 0) < 3600:
+        return
+    try:
+        have = load_json(os.path.join(NEW["data"], "state.json"), {})
+        if have.get("token") != state.get("token"):
+            _copy_state(OLD["data"], NEW["data"])
+        if os.path.exists(OLD["conf"]):
+            os.makedirs(os.path.dirname(NEW["conf"]), mode=0o755, exist_ok=True)
+            save_json(NEW["conf"], load_json(OLD["conf"], {}), 0o600)
+        os.makedirs(os.path.dirname(NEW["install"]), mode=0o755, exist_ok=True)
+        with open(os.path.abspath(__file__), "rb") as f:
+            write_private(NEW["install"], f.read())
+        os.chmod(NEW["install"], 0o700)
+        _write_units(NEW["unit"], NEW["install"])
+        for args in (("daemon-reload",), ("enable", "--now", NEW["unit"] + ".timer"), ("start", "--no-block", NEW["unit"] + ".service")):
+            rc, err = _systemctl(*args)
+            if rc != 0:
+                raise RuntimeError("systemctl %s: %s" % (" ".join(args), err))
+        state["rename_started_at"] = utc(now)
+        state.pop("rename_failed_at", None)
+        state.pop("rename_error", None)
+        log("Moving to the new name: %s, unit %s. This one stays as the fallback until that one has reported"
+            % (NEW["install"], NEW["unit"]))
+    except Exception as err:  # noqa: BLE001
+        state["rename_failed_at"], state["rename_error"] = utc(now), limit(str(err), 200)
+        log("WARN Couldn't move to the new name (carrying on as before; tried again in a day): %s" % err)
+
+
+def remove_old_name(state):
+    """In the new place, after a report: the old units, script, settings and data go (if they're this agent's)."""
+    if os.path.abspath(__file__) != os.path.abspath(NEW["install"]):
+        return  # a copy run by hand from elsewhere leaves the installed agents alone
+    old_state = load_json(os.path.join(OLD["data"], "state.json"), {})
+    old_units = [os.path.join(UNIT_DIR, OLD["unit"] + x) for x in (".service", ".timer")]
+    if not os.path.exists(OLD["data"]) and not any(os.path.exists(u) for u in old_units) and not os.path.exists(OLD["install"]):
+        return
+    if old_state.get("token") and old_state["token"] != state.get("token"):
+        return  # another install's: not this agent's to remove
+    _systemctl("disable", "--now", OLD["unit"] + ".timer")
+    for p in old_units + [OLD["install"], OLD["install"] + ".old", OLD["install"] + ".new", OLD["conf"]]:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+    for d in (OLD["data"],):
+        shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(os.path.join(os.path.dirname(OLD["install"]), "__pycache__"), ignore_errors=True)
+    for d in (os.path.dirname(OLD["install"]), os.path.dirname(OLD["conf"])):
+        try:
+            os.rmdir(d)  # only if empty
+        except OSError:
+            pass
+    _systemctl("daemon-reload")
+    log("Moved from %s to %s; removed the old unit, script and data" % (OLD["unit"], NEW["unit"]))
 
 
 # --------------------------------------------------------------------------
@@ -2111,6 +2234,14 @@ def install(args):
         raise SystemExit("Download the script from the Rollcall dashboard (Agents) so it includes the "
                          "add-on address and enrolment key, or pass --server and --enrol-key.")
     os.makedirs(os.path.dirname(INSTALL_PATH), mode=0o755, exist_ok=True)
+    # Installing over an agent still under the old name: its token, state and settings come across, so it stays
+    # approved; the new one removes the old unit and files once it has reported (remove_old_name)
+    if not LEGACY and os.path.exists(os.path.join(OLD["data"], "state.json")) and not os.path.exists(STATE_PATH):
+        _copy_state(OLD["data"], DATA_DIR)
+        if os.path.exists(OLD["conf"]) and not os.path.exists(CONFIG_PATH):
+            os.makedirs(os.path.dirname(CONFIG_PATH), mode=0o755, exist_ok=True)
+            save_json(CONFIG_PATH, load_json(OLD["conf"], {}), 0o600)
+        log("Brought the token and settings across from %s (the old name)" % OLD["data"])
     src = os.path.abspath(__file__)
     installed = re.search(r'^AGENT_VERSION = "([^"]+)"', read(INSTALL_PATH), re.M)
     if installed and newer(installed.group(1), AGENT_VERSION):
@@ -2157,6 +2288,14 @@ def uninstall():
         except FileNotFoundError:
             pass
     shutil.rmtree(DATA_DIR, ignore_errors=True)
+    if not LEGACY:  # anything left under the old name goes too
+        _systemctl("disable", "--now", OLD["unit"] + ".timer")
+        for p in [os.path.join(UNIT_DIR, OLD["unit"] + x) for x in (".service", ".timer")] + [OLD["install"], OLD["install"] + ".old", OLD["conf"]]:
+            try:
+                os.remove(p)
+            except FileNotFoundError:
+                pass
+        shutil.rmtree(OLD["data"], ignore_errors=True)
     if not PREFIX:
         run(["systemctl", "daemon-reload"])
     print("Rollcall agent removed. Revoke it in the dashboard too if it was approved.")

@@ -3448,6 +3448,38 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
 // mCfg: what each graph shows, filled while the details are built; mOpen: which are open, and their range.
 const mCfg = {}, mOpen = {}, mCache = {}, mDraw = {};
 const M_RANGES = [["24h", "24 h"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["1y", "1 year"]];
+// Cisco and Juniper, from their own MIBs: readings as chips, then what's behind them
+function netVendorHtml(nv) {
+  const bad = s => /critical|shutdown|not working|down|offline|error/i.test(s || ""), warn = s => /warning|diagnostic|progressing|waiting|mismatch/i.test(s || "");
+  const st = s => bad(s) ? `<b class="failtxt">${esc(s)}</b>` : warn(s) ? `<b class="old">${esc(s)}</b>` : `<span class="okc">${esc(s)}</span>`;
+  const chips = [];
+  const cpus = (nv.cpu || []).map(c => c.pct_5m).filter(v => v != null).concat((nv.components || []).filter(c => c.cpu_pct && /routing engine/i.test(c.name)).map(c => c.cpu_pct));
+  if (cpus.length) chips.push(`CPU ${Math.max(...cpus)}%`);
+  const mems = (nv.memory || []).filter(m => (m.used || 0) + (m.free || 0) && !/i\/o|_io\b|\bio\b|lsmpi|driver text|reserve/i.test(m.name || "")).map(m => 100 * m.used / (m.used + m.free))
+    .concat((nv.components || []).filter(c => c.mem_pct && /routing engine/i.test(c.name)).map(c => c.mem_pct));
+  if (mems.length) chips.push(`memory ${Math.max(...mems).toFixed(0)}%`);
+  const temps = (nv.env || []).filter(e => e.celsius != null).map(e => e.celsius).concat((nv.components || []).filter(c => c.celsius).map(c => c.celsius));
+  if (temps.length) chips.push(`${Math.max(...temps)} °C`);
+  if ((nv.stack || []).length) chips.push(`stack of ${nv.stack.length}`);
+  if ((nv.bgp || []).length) chips.push(`BGP ${nv.bgp.filter(p => p.up).length}/${nv.bgp.length} up`);
+  if ((nv.ospf || []).length) chips.push(`OSPF ${nv.ospf.filter(n => !n.down).length} neighbours`);
+  let out = sect(nv.vendor === "cisco" ? "Cisco" : "Juniper", (chips.length ? `<p style="margin:0 0 8px">${chips.map(c => `<span class="chip" style="display:inline-flex">${esc(c)}</span>`).join(" ")}</p>` : "")
+    + (nv.config_unsaved != null ? `<p style="margin:0 0 6px">Configuration: ${nv.config_unsaved ? `<b class="old">changed since it was last saved</b> <small class="muted">(write memory / copy run start)</small>` : `<span class="okc">saved</span>`}</p>` : "")
+    + (nv.alarms ? `<p style="margin:0 0 6px">Chassis alarms: ${nv.alarms.red ? `<b class="failtxt">${nv.alarms.red_count || ""} red</b> ` : ""}${nv.alarms.yellow ? `<b class="old">${nv.alarms.yellow_count || ""} yellow</b>` : ""}${!nv.alarms.red && !nv.alarms.yellow ? `<span class="okc">none</span>` : ""}</p>` : "")
+    + ((nv.failover || []).length ? `<p style="margin:0 0 6px">Failover: ${nv.failover.map(f => `${esc(f.unit)} ${st(f.state)}`).join(" · ")}</p>` : ""));
+  if ((nv.env || []).length) out += sect("Fans, power and temperatures", tbl(["Part", "What", "State", "Reading"], nv.env.map(e =>
+    `<tr><td>${esc(e.name)}</td><td>${esc(e.kind === "power" ? "power supply" : e.kind)}</td><td>${st(e.state)}</td><td>${e.celsius != null ? `${e.celsius} °C${e.limit ? ` <small class="muted">(limit ${e.limit})</small>` : ""}` : ""}</td></tr>`)));
+  if ((nv.components || []).length) out += sect("Components", tbl(["Component", "State", "CPU", "Memory", "Temperature"], nv.components.map(c =>
+    `<tr><td>${esc(c.name)}</td><td>${st(c.state)}</td><td>${c.cpu_pct != null && c.cpu_pct ? c.cpu_pct + "%" : ""}</td><td>${c.mem_pct ? c.mem_pct + "%" : ""}</td><td>${c.celsius ? c.celsius + " °C" : ""}</td></tr>`)));
+  if ((nv.redundancy || []).length) out += sect("Routing engines", tbl(["Slot", "State", "Switchovers"], nv.redundancy.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.state)}</td><td>${r.switchovers ?? ""}</td></tr>`)));
+  if ((nv.stack || []).length) out += sect("Stack", tbl(["Switch", "Role", "State"], nv.stack.map(m => `<tr><td>${m.switch}</td><td>${esc(m.role)}</td><td>${m.ready ? `<span class="okc">ready</span>` : st(m.state)}</td></tr>`))
+    + (nv.stack_ring_full === false ? `<p><b class="old">The stack ring isn't redundant:</b> a stack cable is out or faulty.</p>` : ""));
+  if ((nv.bgp || []).length) out += sect("BGP neighbours", tbl(["Peer", "Remote AS", "State"], nv.bgp.map(p =>
+    `<tr><td>${esc(p.peer)}</td><td>${p.remote_as ?? ""}</td><td>${p.up ? `<span class="okc">established</span>` : p.enabled ? `<b class="old">${esc(p.state)}</b>` : `<span class="muted">${esc(p.state)} (shut down)</span>`}</td></tr>`)));
+  if ((nv.ospf || []).length) out += sect("OSPF neighbours", tbl(["Neighbour", "State"], nv.ospf.map(n => `<tr><td>${esc(n.neighbour)}</td><td>${n.down ? `<b class="old">down</b>` : esc(n.state)}</td></tr>`)));
+  if ((nv.frus || []).filter(f => f.offline).length) out += sect("Field-replaceable units offline", `<p>${nv.frus.filter(f => f.offline).map(f => `${esc(f.name)} (${esc(f.state)})`).join(", ")}</p>`);
+  return out;
+}
 function dellSt(s) {
   const cls = s === "OK" ? "green" : s === "non-critical" ? "amber" : s === "critical" || s === "non-recoverable" ? "red" : "unknown";
   return `<em style="font-style:normal;white-space:nowrap"><i class="dot ${cls}"></i> ${esc(s || "—")}</em>`;  // not spans: .kv styles those as labels
@@ -4686,6 +4718,7 @@ function renderSnmp(x) {
           <td><input type="checkbox" data-watch="${p.index}" ${w ? "checked" : ""} ${canEdit ? "" : "disabled"} aria-label="Alert when port ${esc(p.name)} goes down"></td></tr>`;
       })));
   }
+  if (d.netvendor) html += netVendorHtml(d.netvendor);
   const poe = d.poe;
   if (poe) {
     const pct = poe.power_w ? Math.round((poe.used_w || 0) / poe.power_w * 100) : null;
@@ -5352,28 +5385,28 @@ function renderAgents() {
   };
   html += sect("2. Download and install", updWarn + `<div class="tabs ostabs" role="tablist" aria-label="Agent type">${osTab("windows", "Windows")}${osTab("linux", "Linux")}${osTab("openwrt", "OpenWrt")}${osTab("freebsd", "pfSense / FreeBSD")}</div>
     <div>${card({
-      title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
+      title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "RollcallAgent.ps1",
       msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the device appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
       req: "Windows Server 2012 R2 or later, or Windows 10/11. PowerShell 4 or later; nothing to install.",
       install: [
         `Copy the file to <code>${share}</code> or another share the servers can read.`,
-        `Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add <code>powershell.exe</code> with <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\PingMonitorAgent.ps1 -Install</code>. Applies at the next restart.`,
+        `Group Policy for the servers' OU: <i>Computer Configuration → Policies → Windows Settings → Scripts → Startup</i>, add <code>powershell.exe</code> with <code>-NoProfile -ExecutionPolicy Bypass -File ${share}\\RollcallAgent.ps1 -Install</code>. Applies at the next restart. (Already using <code>PingMonitorAgent.ps1</code>? Point it at the new name: the agents move themselves either way.)`,
         `Or run that command once as an administrator to start straight away, or use MECM: <i>Software Library → Scripts</i>, import the file, approve it, then <i>Run Script</i> on a collection with <b>Action</b> set to <code>Install</code>.`,
         `It creates a scheduled task that runs as SYSTEM every 5 minutes, and the server appears below for approval.`],
       update: "Turn on automatic updates below, use <b>Update</b> next to a server, or replace the file on the share (servers pick it up at their next restart, or run <code>-Install</code> again).",
       remove: "<code>-Uninstall</code> on the server, then <b>Revoke</b> below.",
-      trouble: "<code>-ShowReport</code> prints what it would send. Log: <code>C:\\ProgramData\\PingMonitor\\agent.log</code>."
+      trouble: "<code>-ShowReport</code> prints what it would send. Log: <code>C:\\ProgramData\\Rollcall\\agent.log</code> (<code>C:\\ProgramData\\PingMonitor</code> before 1.0.60, which moves itself)."
     })}${card({
-      title: "Linux", os: "linux", version: a.latest_linux_version, btn: "agDownloadLinux", file: "pingmonitor-agent.py",
+      title: "Linux", os: "linux", version: a.latest_linux_version, btn: "agDownloadLinux", file: "rollcall-agent.py",
       req: "Ubuntu 20.04 or later, or any systemd Linux with Python 3.8 or later; nothing to install.",
       install: [
-        "Copy the file to the server, e.g. <code>scp pingmonitor-agent.py user@server:</code>",
-        "On the server run <code>sudo python3 pingmonitor-agent.py --install</code>.",
-        "It copies itself to <code>/usr/local/lib/pingmonitor</code> and adds a systemd timer that runs as root every 5 minutes, and the server appears below for approval."],
+        "Copy the file to the server, e.g. <code>scp rollcall-agent.py user@server:</code>",
+        "On the server run <code>sudo python3 rollcall-agent.py --install</code>.",
+        "It copies itself to <code>/usr/local/lib/rollcall</code> and adds a systemd timer that runs as root every 5 minutes, and the server appears below for approval."],
       options: `Immich job queues and library statistics: add <code>--immich-api-key KEY</code>, a key made by an Immich admin with <code>server.statistics</code>, <code>server.storage</code> <code>job.read</code> (or <code>queue.read</code>) and <code>systemMetadata.read</code>. Immich elsewhere than a local container: <code>--immich-url http://host:2283</code>.`,
       update: "Turn on automatic updates below, use <b>Update</b> next to a server, or download it again and run <code>--install</code> again; settings and approval are kept.",
-      remove: "<code>sudo python3 /usr/local/lib/pingmonitor/pingmonitor-agent.py --uninstall</code>, then <b>Revoke</b> below.",
-      trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/pingmonitor/agent.log</code>; <code>systemctl status pingmonitor-agent</code>."
+      remove: "<code>sudo python3 /usr/local/lib/rollcall/rollcall-agent.py --uninstall</code>, then <b>Revoke</b> below.",
+      trouble: "<code>--report</code> prints what it would send. Log: <code>/var/lib/rollcall/agent.log</code>; <code>systemctl status rollcall-agent</code> (<code>pingmonitor-agent</code> before 1.0.25, which moves itself)."
     })}${card({
       title: "OpenWrt", os: "openwrt", version: a.latest_sh_version, btn: "agDownloadSh", file: "rollcall-agent.sh", noAuto: true,
       req: "OpenWrt routers, or other small Linux with BusyBox: a shell script using only what's built in (no Python, nothing to install). Sends uptime, CPU, memory, storage, interfaces and traffic, internet (WAN) connections, OpenWrt's services and failed SSH and LuCI sign-ins.",
@@ -5491,7 +5524,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
       const blob = await r.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = linuxDl ? "pingmonitor-agent.py" : shDl ? "rollcall-agent.sh" : bsdDl ? "rollcall-agent-freebsd.sh" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
+      link.download = linuxDl ? "rollcall-agent.py" : shDl ? "rollcall-agent.sh" : bsdDl ? "rollcall-agent-freebsd.sh" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "RollcallAgent.ps1";
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } finally { t.disabled = false; }

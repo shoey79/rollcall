@@ -317,18 +317,18 @@ def raised_copy(tmp: Path, kind: str, version: str) -> Path:
     app = tmp / "app_next"
     shutil.copytree(APP, app, ignore=shutil.ignore_patterns("__pycache__"))
     if kind == "windows":
-        p = app / "agent" / "PingMonitorAgent.ps1"
+        p = app / "agent" / "RollcallAgent.ps1"
         p.write_text(re.sub(r"\$AgentVersion = '[^']+'", f"$AgentVersion = '{version}'", p.read_text(encoding="utf-8"), count=1), encoding="utf-8")
     else:
-        p = app / "agent" / "pingmonitor-agent.py"
+        p = app / "agent" / "rollcall-agent.py"
         p.write_text(re.sub(r'^AGENT_VERSION = "[^"]+"', f'AGENT_VERSION = "{version}"', p.read_text(), count=1, flags=re.M))
     return app
 
 
 def current_version(kind):
     if kind == "windows":
-        return re.search(r"\$AgentVersion = '([^']+)'", (APP / "agent" / "PingMonitorAgent.ps1").read_text()).group(1)
-    return re.search(r'^AGENT_VERSION = "([^"]+)"', (APP / "agent" / "pingmonitor-agent.py").read_text(), re.M).group(1)
+        return re.search(r"\$AgentVersion = '([^']+)'", (APP / "agent" / "RollcallAgent.ps1").read_text()).group(1)
+    return re.search(r'^AGENT_VERSION = "([^"]+)"', (APP / "agent" / "rollcall-agent.py").read_text(), re.M).group(1)
 
 
 def run_and_check_report(agent, addon, proxy, what):

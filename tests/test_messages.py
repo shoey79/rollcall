@@ -24,7 +24,7 @@ import updatesign  # noqa: E402
 
 WINDOWS = sys.platform == "win32"
 PWSH = shutil.which("powershell.exe") if WINDOWS else (os.environ.get("PWSH") or shutil.which("pwsh"))
-AGENT_PS = APP / "agent" / "PingMonitorAgent.ps1"
+AGENT_PS = APP / "agent" / "RollcallAgent.ps1"
 try:
     import cryptography  # noqa: F401
     import aiohttp  # noqa: F401
@@ -68,7 +68,7 @@ def test_only_included_devices_once_each_until_it_expires(tmp_path):
 
 
 def linux_agent(key, tmp):
-    spec = importlib.util.spec_from_file_location("lx_msg_agent", APP / "agent" / "pingmonitor-agent.py")
+    spec = importlib.util.spec_from_file_location("lx_msg_agent", APP / "agent" / "rollcall-agent.py")
     mod = importlib.util.module_from_spec(spec)
     os.environ["PM_PREFIX"] = str(tmp)
     try:

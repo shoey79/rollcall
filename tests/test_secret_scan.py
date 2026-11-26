@@ -47,7 +47,7 @@ def _leaks(text, secrets):
 
 
 def _linux(root):
-    run = subprocess.run([sys.executable, str(AGENTS / "pingmonitor-agent.py"), "--secret-test", str(root)],
+    run = subprocess.run([sys.executable, str(AGENTS / "rollcall-agent.py"), "--secret-test", str(root)],
                          capture_output=True, text=True, timeout=300, encoding="utf-8",
                          env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert run.returncode == 0, run.stderr
@@ -66,7 +66,7 @@ def test_linux_agent_finds_them_and_never_sends_them(corpus):
 @pytest.mark.skipif(not PWSH, reason="needs PowerShell")
 def test_windows_agent_agrees_and_never_sends_them(corpus):
     root, secrets = corpus
-    script, folder = (str(x).replace("'", "''") for x in (AGENTS / "PingMonitorAgent.ps1", root))
+    script, folder = (str(x).replace("'", "''") for x in (AGENTS / "RollcallAgent.ps1", root))
     cmd = ("[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; "
            f"& '{script}' -SecretTest '{folder}'")
     env = {k: v for k, v in os.environ.items() if not (WIN_PS and k == "PSModulePath")}
@@ -84,7 +84,7 @@ def test_windows_agent_agrees_and_never_sends_them(corpus):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell 5.1 is only on Windows")
 def test_windows_agent_parses_on_windows_powershell_51():
-    script = str(AGENTS / "PingMonitorAgent.ps1").replace("'", "''")
+    script = str(AGENTS / "RollcallAgent.ps1").replace("'", "''")
     cmd = ("$e = $null; [void][Management.Automation.Language.Parser]::ParseFile('" + script + "', [ref]$null, [ref]$e); "
            "'{0} {1}' -f $PSVersionTable.PSVersion.Major, @($e).Count; $e | ForEach-Object { $_.Extent.StartLineNumber.ToString() + ': ' + $_.Message }")
     run = subprocess.run([WIN_PS, "-NoLogo", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=120)

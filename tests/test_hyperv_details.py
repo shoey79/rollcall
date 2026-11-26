@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-AGENT = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+AGENT = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
 PWSH = os.environ.get("PWSH") or shutil.which("pwsh")
 
 

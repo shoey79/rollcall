@@ -1271,7 +1271,7 @@ TASK_NOISE_PATHS = re.compile(r"^\\(Mozilla|Google|GoogleSystem|Adobe|Intel|NVID
 TASK_TIMED = {"daily", "weekly", "monthly", "time"}
 # Rollcall's own agent tasks: watched through the agent's reports, not as scheduled tasks (after a night off,
 # Windows counts every 5-minute run it missed)
-TASK_OWN = re.compile(r"^(Ping Monitor Agent|Rollcall Agent)( \(start-up\))?$", re.I)
+TASK_OWN = re.compile(r"^(Ping Monitor Agent|Rollcall Agent)( \(start-up\)| \(system file check\))?$", re.I)
 # How long a task can go without running after the computer starts before missed runs count again
 TASK_GRACE = {"time": 26 * 3600, "daily": 26 * 3600, "weekly": 8 * 86400, "monthly": 32 * 86400}
 

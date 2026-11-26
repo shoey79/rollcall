@@ -25,7 +25,7 @@ import updatesign  # noqa: E402
 
 WINDOWS = sys.platform == "win32"
 PWSH = shutil.which("powershell.exe") if WINDOWS else (os.environ.get("PWSH") or shutil.which("pwsh"))
-AGENT_PS = APP / "agent" / "PingMonitorAgent.ps1"
+AGENT_PS = APP / "agent" / "RollcallAgent.ps1"
 try:
     import cryptography  # noqa: F401
     HAVE_CRYPTO = True
@@ -35,7 +35,7 @@ needs_crypto = pytest.mark.skipif(not HAVE_CRYPTO, reason="needs cryptography (t
 
 
 def linux_agent(update_key):
-    spec = importlib.util.spec_from_file_location("lx_agent", APP / "agent" / "pingmonitor-agent.py")
+    spec = importlib.util.spec_from_file_location("lx_agent", APP / "agent" / "rollcall-agent.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.UPDATE_KEY = update_key

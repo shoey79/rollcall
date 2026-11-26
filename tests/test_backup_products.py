@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "rollcall" / "app"))
 import agents as agentlib  # noqa: E402
 
-AGENT = ROOT / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+AGENT = ROOT / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
 WIN_PS = shutil.which("powershell.exe") if sys.platform == "win32" else None
 PWSH = WIN_PS or os.environ.get("PWSH") or shutil.which("pwsh")
 NOW = int(time.time())

@@ -28,12 +28,12 @@
     Rollcall dashboard (Agents). Until then reports are refused.
 
 .PARAMETER Install
-    Copy the script to C:\ProgramData\PingMonitor, create the scheduled task
+    Copy the script to C:\ProgramData\Rollcall, create the scheduled task
     and run it once. Safe to run repeatedly (e.g. as a GPO startup script);
     it also updates the installed copy.
 
 .PARAMETER Uninstall
-    Remove the scheduled task and C:\ProgramData\PingMonitor.
+    Remove the scheduled task and C:\ProgramData\Rollcall (and anything left under the old name, C:\ProgramData\PingMonitor).
 
 .PARAMETER Action
     Install, Uninstall or Report: the same as the switches, as text. Use this
@@ -47,7 +47,7 @@
     one is, never the password. Nothing is sent.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File \\example.local\NETLOGON\PingMonitorAgent.ps1 -Install
+    powershell -ExecutionPolicy Bypass -File \\example.local\NETLOGON\RollcallAgent.ps1 -Install
 
 .EXAMPLE
     MECM, Software Library > Scripts: paste this script, approve it, then
@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.59'
+$AgentVersion = '1.0.60'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -76,7 +76,6 @@ $UpdateKey = '__PM_UPDATE_KEY__'
 # from Rollcall's signed reply). Reports then go to https://<same address>:<port>, checked against exactly that key.
 $TlsPin = '__PM_TLS_PIN__'
 $TlsPort = 0
-$TaskName = 'Ping Monitor Agent'
 # Where this script is running from, captured at the top level so Install can
 # copy it even when it's run from MECM's script store or as a script block.
 $SelfPath = $PSCommandPath
@@ -84,7 +83,19 @@ $SelfText = $null
 try { if ($MyInvocation.MyCommand.ScriptContents) { $SelfText = $MyInvocation.MyCommand.ScriptContents } } catch { }
 if (-not $SelfText) { try { $SelfText = $MyInvocation.MyCommand.ScriptBlock.ToString() } catch { } }
 $ErrorActionPreference = 'Stop'
-if (-not $DataPath) { $DataPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'PingMonitor' }
+# Rollcall's names (1.0.60 on); before, Ping Monitor's. An agent running from the old place keeps the old names
+# until it has moved itself (Move-ToNewName).
+$OldDataPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'PingMonitor'
+$NewDataPath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'Rollcall'
+$OldTaskName, $NewTaskName = 'Ping Monitor Agent', 'Rollcall Agent'
+$OldScriptName, $NewScriptName = 'PingMonitorAgent.ps1', 'RollcallAgent.ps1'
+$script:LegacyLayout = $false
+if (-not $DataPath) {
+    if ($PSCommandPath -and ((Split-Path $PSCommandPath -Parent) -eq $OldDataPath)) { $DataPath = $OldDataPath; $script:LegacyLayout = $true }
+    else { $DataPath = $NewDataPath }
+}
+$TaskName = if ($script:LegacyLayout) { $OldTaskName } else { $NewTaskName }
+$ScriptName = if ($script:LegacyLayout) { $OldScriptName } else { $NewScriptName }
 $StatePath = Join-Path $DataPath 'state.json'
 $LogPath = Join-Path $DataPath 'agent.log'
 $script:Errors = New-Object System.Collections.ArrayList
@@ -199,7 +210,7 @@ function Save-State($State) {
     $State | ConvertTo-Json -Depth 4 | Set-Content -Path $StatePath -Encoding UTF8
 }
 
-function Protect-DataFolder {
+function Protect-DataFolder([string]$Path = $DataPath) {
     # The token lives here: SYSTEM and Administrators only. The folder's permissions are replaced
     # whole, in one step (anything else on it, e.g. an account Explorer added when someone opened the
     # folder, is dropped), then everything inside goes back to inheriting just that.
@@ -213,7 +224,7 @@ function Protect-DataFolder {
             $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
                         (New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
         }
-        $dir = New-Object System.IO.DirectoryInfo($DataPath)
+        $dir = New-Object System.IO.DirectoryInfo($Path)
         try { $dir.SetAccessControl($sec) } catch {
             [System.IO.FileSystemAclExtensions]::SetAccessControl($dir, $sec)  # PowerShell 7 has it here instead
         }
@@ -3656,10 +3667,11 @@ function Invoke-AgentUpdate($State, $Offer) {
     # anything changes: it must be signed with Rollcall's own key (the public half is built into this script, so
     # a reply changed on the way can't sign one), be the newer version offered, and parse as PowerShell. Before
     # 1.0.53 it was signed with this agent's token, which crosses the network with every report.
-    # The old copy is kept as PingMonitorAgent.ps1.old. The new one runs from the next report.
+    # The old copy is kept as RollcallAgent.ps1.old (PingMonitorAgent.ps1.old before the move). The new one runs
+    # from the next report.
     if (-not $Offer -or -not $Offer.version -or -not (Test-NewerVersion ([string]$Offer.version) $AgentVersion)) { return }
     if (-not $UpdateKey -or $UpdateKey -like '__PM_*') { throw "This copy has no update key built in (download it again from Rollcall), so it can't check updates" }
-    $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
+    $dest = Join-Path $DataPath $ScriptName
     if (-not (Test-Path $dest)) { return }  # only an installed agent updates itself
     $active = if ($script:ActiveServer) { $script:ActiveServer } else { @(Get-ServerList)[0] }
     $uri = $active + '/agent/update?os=windows&sig=rsa&server=' + [uri]::EscapeDataString((@($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') }) -join ','))
@@ -3722,7 +3734,7 @@ function Get-AgentProcess {
     # Other PowerShell processes running this agent (the installed copy, or one run by hand from a console)
     try {
         @(Get-CimInstance -ClassName Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction Stop |
-            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'PingMonitorAgent\.ps1' })
+            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match '(PingMonitorAgent|RollcallAgent)\.ps1' })
     } catch { @() }
 }
 
@@ -3750,6 +3762,97 @@ function Stop-StuckRun([int]$Minutes = $StuckMinutes) {
     return $true
 }
 
+# ---------------------------------------------------------------------------
+# The move to Rollcall's own names (1.0.60): C:\ProgramData\PingMonitor\PingMonitorAgent.ps1 and the task
+# "Ping Monitor Agent" become C:\ProgramData\Rollcall\RollcallAgent.ps1 and "Rollcall Agent". An agent that
+# updated itself in the old place copies itself, its token and its state across and starts the new task; the old
+# one stays as the fallback until the new one has reported, and only then does the new one remove it. If the
+# move fails, the old one carries on and the next report says why.
+# ---------------------------------------------------------------------------
+function Get-NewLayoutState {
+    # The new place's state, if a move has been made and the new one has reported from it with this token
+    $p = Join-Path $NewDataPath 'state.json'
+    if (-not (Test-Path $p)) { return $null }
+    try { return (Get-Content $p -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function New-AgentTask([string]$Name, [string]$Script) {
+    $cmd = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$Script`""
+    if ($IgnoreCertificate) { $cmd += ' -IgnoreCertificate' }
+    $ErrorActionPreference = 'Continue'
+    $null = & schtasks.exe /Create /TN $Name /TR $cmd /SC MINUTE /MO $IntervalMinutes /RU SYSTEM /RL HIGHEST /F 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't create the scheduled task '$Name' (schtasks exit code $LASTEXITCODE)" }
+}
+
+function Move-ToNewName($State) {
+    if (-not $script:LegacyLayout) { return }
+    $now = (Get-Date).ToUniversalTime()
+    if ($State.rename_failed_at) {
+        try { if (($now - [DateTime]::Parse([string]$State.rename_failed_at, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal')).TotalHours -lt 24) { return } } catch { }
+    }
+    if ($State.rename_started_at) {
+        try { if (($now - [DateTime]::Parse([string]$State.rename_started_at, [Globalization.CultureInfo]::InvariantCulture, 'AdjustToUniversal')).TotalMinutes -lt 60) { return } } catch { }
+    }
+    try {
+        New-Item -ItemType Directory -Path $NewDataPath -Force | Out-Null
+        Protect-DataFolder $NewDataPath
+        $open = @(Get-DataFolderWriters $NewDataPath)
+        if ($open.Count) { throw "couldn't lock down $NewDataPath ($($open -join ', ') can change it)" }
+        $have = Get-NewLayoutState
+        if (-not ($have -and $have.token -eq $State.token)) {
+            # Its token and state (event cursors, caches), but not "last reported": that's for the new one to set
+            foreach ($f in @(Get-ChildItem -Path $DataPath -File -ErrorAction Stop)) {
+                if ($f.Name -match '\.(ps1|old|new|tmp|lock)$|^agent\.log$|^run-step\.txt$') { continue }
+                Copy-Item -Path $f.FullName -Destination (Join-Path $NewDataPath $f.Name) -Force
+            }
+            $raw = Get-Content (Join-Path $NewDataPath 'state.json') -Raw | ConvertFrom-Json
+            $raw.PSObject.Properties.Remove('last_run'); $raw.PSObject.Properties.Remove('rename_started_at'); $raw.PSObject.Properties.Remove('rename_failed_at')
+            $raw | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $NewDataPath 'state.json') -Encoding UTF8
+        }
+        $dest = Join-Path $NewDataPath $NewScriptName
+        Copy-Item -Path $PSCommandPath -Destination $dest -Force
+        New-AgentTask $NewTaskName $dest
+        Set-TaskTimeLimit @($NewTaskName)
+        $State.rename_started_at = ConvertTo-UtcString (Get-Date); $State.rename_failed_at = $null; $State.rename_error = $null
+        $null = & schtasks.exe /Run /TN $NewTaskName 2>&1
+        Write-AgentLog "Moving to the new name: $dest, task '$NewTaskName'. This one stays as the fallback until that one has reported"
+    } catch {
+        $State.rename_failed_at = ConvertTo-UtcString (Get-Date); $State.rename_error = [string]$_.Exception.Message
+        Write-AgentLog "WARN Couldn't move to the new name (carrying on as before; tried again in a day): $($_.Exception.Message)"
+    }
+}
+
+function Remove-OldName($State) {
+    # Run by the agent in its new place, after a report has gone: the old task and folder are no longer needed
+    if ($script:LegacyLayout -or $DataPath -ne $NewDataPath) { return }
+    $ErrorActionPreference = 'Continue'
+    $tasks = @($OldTaskName, "$OldTaskName (start-up)", "$OldTaskName (system file check)") | Where-Object { $null = & schtasks.exe /Query /TN $_ 2>&1; $LASTEXITCODE -eq 0 }
+    $oldScript = Join-Path $OldDataPath $OldScriptName
+    $oldState = Join-Path $OldDataPath 'state.json'
+    if (-not @($tasks).Count -and -not (Test-Path $oldState)) { return }
+    if (Test-Path $oldState) {
+        try { $o = Get-Content $oldState -Raw | ConvertFrom-Json } catch { $o = $null }
+        if ($o -and $o.token -and $o.token -ne $State.token) { return }  # another install's: not this agent's to remove
+    }
+    foreach ($t in @($tasks)) { $null = & schtasks.exe /Delete /TN $t /F 2>&1 }
+    Stop-AgentProcess @(Get-AgentProcess | Where-Object { $_.CommandLine -match [regex]::Escape($oldScript) })
+    try {
+        Get-ChildItem -Path $OldDataPath -Force -ErrorAction Stop | Remove-Item -Recurse -Force -ErrorAction Stop
+        # A small stand-in at the old name: a startup script that still runs the old version with -Install would
+        # otherwise put the old name back. The old installer keeps it (its version is higher), and when its task
+        # runs it, it removes that task again and does nothing else.
+        Set-Content -Path $oldScript -Encoding ASCII -Value @"
+# The Rollcall agent moved to $NewDataPath\$NewScriptName (task '$NewTaskName').
+# This stand-in only removes the old scheduled tasks if an old startup script puts them back.
+# Point any startup script or Group Policy at $NewScriptName, then this folder can be deleted.
+`$AgentVersion = '99.0.0'
+& schtasks.exe /Delete /TN '$OldTaskName' /F 2>`$null | Out-Null
+& schtasks.exe /Delete /TN '$OldTaskName (start-up)' /F 2>`$null | Out-Null
+"@
+        Write-AgentLog "Moved from '$OldTaskName' ($OldDataPath) to '$NewTaskName' ($NewDataPath); removed the old task(s) and files"
+    } catch { Write-AgentLog "WARN Removed the old task(s), but not all of $OldDataPath`: $($_.Exception.Message)" }
+}
+
 function Invoke-AgentRun([switch]$ReportOnly) {
     if ($Server -like '__PM_*' -or $EnrolKey -like '__PM_*') {
         throw 'This copy of the script has no add-on address or enrolment key. Download it from the Rollcall dashboard (Agents), or pass -Server and -EnrolKey.'
@@ -3763,6 +3866,13 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     }
     $state = Read-State
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
+    if ($script:LegacyLayout -and -not ($ReportOnly -or $ShowReport)) {
+        $ns = Get-NewLayoutState
+        if ($ns -and $ns.last_run -and $ns.token -eq $state.token) {
+            Write-AgentLog "This agent has moved to '$NewTaskName' ($NewDataPath), which is reporting: this old copy does nothing (the new one removes it)"
+            return
+        }
+    }
     $script:PreferredServer = [string]$state.last_server
     $script:PushedServers = @($state.servers | Where-Object { $_ -match '^https?://[^\s,;]+$' })
     $script:TlsPinNow = $null; $script:TlsPortNow = 0
@@ -3882,6 +3992,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     }
     Register-StartupTask
     Set-TaskTimeLimit
+    if ($script:LegacyLayout) { Move-ToNewName $state; try { Save-State $state } catch { } }
+    else { Remove-OldName $state }
     $wasChecked = [bool]$state.perm_checked
     Test-AgentFolderSecurity $state
     if ($state.integrity -or $state.perm_checked -ne $wasChecked) { try { Save-State $state } catch { } }
@@ -3907,7 +4019,16 @@ function Install-Agent {
     if ($open.Count) {  # never create a SYSTEM task that runs from a folder others can change (review F9)
         throw "Couldn't lock down $DataPath (these can still change it: $($open -join ', ')). The agent wasn't installed; check the folder's permissions and run the install again."
     }
-    $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
+    # Installing over an agent still under the old name (Ping Monitor): its token and state come across, so it
+    # stays approved; the new one removes the old task and folder once it has reported (Remove-OldName)
+    if ($DataPath -eq $NewDataPath -and (Test-Path (Join-Path $OldDataPath 'state.json')) -and -not (Test-Path (Join-Path $NewDataPath 'state.json'))) {
+        foreach ($f in @(Get-ChildItem -Path $OldDataPath -File)) {
+            if ($f.Name -match '\.(ps1|old|new|tmp|lock)$|^agent\.log$|^run-step\.txt$') { continue }
+            Copy-Item -Path $f.FullName -Destination (Join-Path $NewDataPath $f.Name) -Force
+        }
+        Write-AgentLog "Brought the token and state across from $OldDataPath (the old name); its task is removed after the first report"
+    }
+    $dest = Join-Path $DataPath $ScriptName
     # A startup script on the share can be older than a copy that has updated itself:
     # keep the newer one, so the two don't keep swapping versions.
     $installed = $null
@@ -3959,7 +4080,7 @@ function Set-TaskTimeLimit([string[]]$Names = @($TaskName, "$TaskName (start-up)
 function Register-StartupTask {
     $ErrorActionPreference = 'Continue'
     try {
-        $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
+        $dest = Join-Path $DataPath $ScriptName
         if (-not $PSCommandPath -or $PSCommandPath -ne $dest -or -not (Get-Command schtasks.exe -ErrorAction SilentlyContinue)) { return }
         $name = "$TaskName (start-up)"
         $null = & schtasks.exe /Query /TN $name 2>&1
@@ -3978,6 +4099,10 @@ function Uninstall-Agent {
     $ErrorActionPreference = 'Continue'
     $null = & schtasks.exe /Delete /TN "$TaskName (start-up)" /F 2>&1  # may not exist
     $null = & schtasks.exe /Delete /TN $SfcTaskName /F 2>&1  # the system file check's task, if it ever ran
+    if (-not $script:LegacyLayout) {  # anything left under the old name (Ping Monitor) goes too
+        foreach ($t in @($OldTaskName, "$OldTaskName (start-up)", "$OldTaskName (system file check)")) { $null = & schtasks.exe /Delete /TN $t /F 2>&1 }
+        if ($DataPath -eq $NewDataPath -and (Test-Path $OldDataPath)) { Remove-Item -Path $OldDataPath -Recurse -Force -ErrorAction SilentlyContinue }
+    }
     $ErrorActionPreference = 'Stop'
     if (Test-Path $DataPath) { Remove-Item -Path $DataPath -Recurse -Force }
     Write-Output 'Rollcall agent removed. Revoke it in the dashboard too if it was approved.'

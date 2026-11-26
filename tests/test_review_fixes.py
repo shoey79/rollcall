@@ -67,7 +67,7 @@ def test_f9_folder_writers_are_found():
     """The read-back after locking the folder: anyone but SYSTEM and Administrators with write access is named.
     (Windows permissions are stood in for: Get-Acl returns a made-up ACL.)"""
     import subprocess
-    agent = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+    agent = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
     script = r"""
 $ast = [Management.Automation.Language.Parser]::ParseFile('__A__', [ref]$null, [ref]$null)
 $f = $ast.Find({ param($x) $x -is [Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq 'Get-DataFolderWriters' }, $true)
@@ -128,7 +128,7 @@ def test_windows_agent_keeps_its_state_between_runs(tmp_path):
     """Found while fixing F7: Read-State only keeps fields it names, so the agent policy cache (read hourly) and the
     NetBackup / Data Protector history from 1.98.0 were lost at every run. Saved, then read back."""
     import subprocess
-    agent = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+    agent = Path(__file__).resolve().parents[1] / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
     script = r"""
 $ast = [Management.Automation.Language.Parser]::ParseFile('__A__', [ref]$null, [ref]$null)
 foreach ($n in 'Read-State', 'Save-State') { $f = $ast.Find({ param($x) $x -is [Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }.GetNewClosure(), $true); . ([scriptblock]::Create($f.Extent.Text)) }

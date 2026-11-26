@@ -34,7 +34,7 @@ script = call(f"{UI}/api/agents/script?os=linux&server={urllib.request.quote(AGE
 assert 'UPDATE_KEY = "__PM_UPDATE_KEY__"' not in script and re.search(r'^UPDATE_KEY = "[A-Za-z0-9+/=]{300,}"', script, re.M), \
     "the downloaded agent has no update key built in"
 prefix = tempfile.mkdtemp()
-path = os.path.join(prefix, "usr/local/lib/pingmonitor/pingmonitor-agent.py")
+path = os.path.join(prefix, "usr/local/lib/rollcall/rollcall-agent.py")
 os.makedirs(os.path.dirname(path))
 open(path, "w").write(script)
 env = {**os.environ, "PM_PREFIX": prefix}
@@ -42,7 +42,7 @@ subprocess.run([sys.executable, path], env=env, timeout=300)            # enrols
 for p in json.loads(call(UI + "/api/agents"))["pending"]:
     call(f"{UI}/api/agents/approve/{p['id']}", {}, "POST")
 subprocess.run([sys.executable, path], env=env, timeout=300, check=True)  # reports
-log = open(os.path.join(prefix, "var/lib/pingmonitor/agent.log")).read()
+log = open(os.path.join(prefix, "var/lib/rollcall/agent.log")).read()
 print(log[-1500:])
 assert "Report sent" in log, "the agent's report didn't get through"
 assert "without a good signature" not in log, "the add-on's addresses weren't signed"

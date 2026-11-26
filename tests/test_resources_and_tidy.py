@@ -20,7 +20,7 @@ import agents as A  # noqa: E402
 import metrics as M  # noqa: E402
 
 OPTS = {"agent_memory_warn": 90, "agent_memory_crit": 95, "agent_cpu_warn": 90, "agent_cpu_reports": 3}
-AGENT = ROOT / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+AGENT = ROOT / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
 PWSH = os.environ.get("PWSH") or "pwsh"
 
 

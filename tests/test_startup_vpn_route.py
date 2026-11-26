@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "rollcall" / "app"))
 import main  # noqa: E402
 import snmp  # noqa: E402
 
-AGENT = ROOT / "rollcall" / "app" / "agent" / "pingmonitor-agent.py"
+AGENT = ROOT / "rollcall" / "app" / "agent" / "rollcall-agent.py"
 
 
 # --- start-up allowance -------------------------------------------------------------------------

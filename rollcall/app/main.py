@@ -121,8 +121,8 @@ AGENT_HTTPS_PORT = int(os.environ.get("PM_AGENT_HTTPS_PORT", "8101"))  # built-i
 AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
 SYSLOG_PORT = int(os.environ.get("PM_SYSLOG_PORT", "5140"))  # inside the container; the host maps 514/udp to it
 SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a device yet
-AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
-LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
+AGENT_SCRIPT = Path(__file__).parent / "agent" / "RollcallAgent.ps1"
+LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.py"
 SH_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.sh"  # OpenWrt / BusyBox: no Python needed
 BSD_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent-freebsd.sh"  # pfSense / OPNsense / FreeBSD
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
@@ -6863,7 +6863,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                                      content_type="application/json")
         os_name = req.query.get("os") if req.query.get("os") in ("linux", "openwrt", "freebsd") else "windows"
         body = build_agent_script(os_name, server, monitor.agents.enrol_key, req.query.get("ignore_cert") == "1")
-        name = {"linux": "pingmonitor-agent.py", "openwrt": "rollcall-agent.sh", "freebsd": "rollcall-agent-freebsd.sh"}.get(os_name, "PingMonitorAgent.ps1")
+        name = {"linux": "rollcall-agent.py", "openwrt": "rollcall-agent.sh", "freebsd": "rollcall-agent-freebsd.sh"}.get(os_name, "RollcallAgent.ps1")
         return web.Response(body=body, content_type="application/octet-stream", headers={
             "Content-Disposition": f'attachment; filename="{name}"'})
 

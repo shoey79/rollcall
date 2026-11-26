@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "rollcall" / "app"))
 import agents as A  # noqa: E402
 
-AGENT = ROOT / "rollcall" / "app" / "agent" / "PingMonitorAgent.ps1"
+AGENT = ROOT / "rollcall" / "app" / "agent" / "RollcallAgent.ps1"
 PWSH = os.environ.get("PWSH") or shutil.which("pwsh")
 
 HARNESS = r"""

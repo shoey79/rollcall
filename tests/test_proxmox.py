@@ -74,7 +74,7 @@ sys.exit(9)""",
 
 
 def load_agent(tmp_path, monkeypatch):
-    spec = importlib.util.spec_from_file_location("lx_pve_agent", ROOT / "rollcall" / "app" / "agent" / "pingmonitor-agent.py")
+    spec = importlib.util.spec_from_file_location("lx_pve_agent", ROOT / "rollcall" / "app" / "agent" / "rollcall-agent.py")
     mod = importlib.util.module_from_spec(spec)
     monkeypatch.setenv("PM_PREFIX", str(tmp_path / "root"))
     spec.loader.exec_module(mod)

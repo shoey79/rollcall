@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 UPGRADE_CODE = "6E0B7D8A-3C41-4F6B-9B2E-6A2F4C1D9E10"   # never change: lets newer MSIs replace older ones
-COMPONENT_GUID = "9C3E2B71-5A0D-4E8F-A1B6-2D7C4E9F0A13"
+COMPONENT_GUID = "4B7D0E62-8F19-4C3A-B5E2-7A1D9C6F3B28"  # new with RollcallAgent.ps1 (1.0.60): its key file changed name
 
 WXS = """<?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
@@ -25,7 +25,7 @@ WXS = """<?xml version="1.0" encoding="utf-8"?>
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLDIR" Name="Rollcall">
           <Component Id="AgentScript" Guid="{component}" Win64="yes">
-            <File Id="AgentPs1" Name="PingMonitorAgent.ps1" Source="PingMonitorAgent.ps1" KeyPath="yes"/>
+            <File Id="AgentPs1" Name="RollcallAgent.ps1" Source="RollcallAgent.ps1" KeyPath="yes"/>
           </Component>
         </Directory>
       </Directory>
@@ -46,7 +46,7 @@ WXS = """<?xml version="1.0" encoding="utf-8"?>
 # wixl can't write "run this command line" custom actions, so the rows are replaced afterwards:
 # type 34 (exe, working directory) + 1024 deferred + 2048 no impersonation (runs as SYSTEM); +64 = ignore the exit code.
 _PS = ('"[System64Folder]WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass '
-       '-File "[INSTALLDIR]PingMonitorAgent.ps1"')
+       '-File "[INSTALLDIR]RollcallAgent.ps1"')
 _ROWS = [("RegisterAgent", 34 + 1024 + 2048, "INSTALLDIR", _PS + " -Install"),
          ("UnregisterAgent", 34 + 1024 + 2048 + 64, "INSTALLDIR", _PS + " -Uninstall")]
 
@@ -109,7 +109,7 @@ async def build(script: bytes, version: str) -> bytes:
     """script: the agent .ps1 (with BOM and CRLFs) to put in the installer."""
     ver = ".".join((re.findall(r"\d+", version) + ["0", "0", "0"])[:3])
     with tempfile.TemporaryDirectory(prefix="rollcall-msi-") as d:
-        Path(d, "PingMonitorAgent.ps1").write_bytes(script)
+        Path(d, "RollcallAgent.ps1").write_bytes(script)
         Path(d, "agent.wxs").write_text(WXS.format(version=ver, upgrade=UPGRADE_CODE, component=COMPONENT_GUID), encoding="utf-8")
         await _run("wixl", "-a", "x64", "-o", "agent.msi", "agent.wxs", cwd=d)
         idt = "Action\tType\tSource\tTarget\tExtendedType\r\ns72\ti2\tS72\tS255\tI4\r\nCustomAction\tAction\r\n" + \
