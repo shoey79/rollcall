@@ -3028,6 +3028,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         `<tr><td>${esc(when(f.time))}</td><td>${esc(GP[f.id] || "Event " + f.id)} <small class="muted">${f.id}</small></td><td><small>${esc(f.message)}</small></td></tr>`)) : "") +
       `<p class="hint">From Group Policy's results in the System log. Amber when it's failing and hasn't applied for 3 hours (it refreshes every 90 minutes or so), so a failure at start-up that the next refresh fixes doesn't alert. ${(d.checks || []).some(x => x.key === "gpo") ? ignBtn("gpo", "gpo", "Group Policy") + " this check on this device." : ""}</p>`);
     flush("roles");
+    if (c.firewall) html += firewallSection(c.firewall, c.temps, (d.checks || []).some(x => x.key === "firewall"), ignBtn, rowCls);
+    else if (c.temps && (c.temps.sensors || []).length) html += sect("Temperatures", c.temps.sensors.map(t => `<span class="chip" style="display:inline-flex">${esc(t.name)} ${t.celsius ?? "?"} °C</span>`).join(" "));
     if (c.wan && (c.wan.interfaces || []).length) {
       const on = (d.checks || []).some(x => x.key === "wan");
       const dur = s => !s ? "" : s >= 86400 ? Math.floor(s / 86400) + " d" : s >= 3600 ? Math.floor(s / 3600) + " h" : Math.max(1, Math.floor(s / 60)) + " min";
@@ -4735,6 +4737,28 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { b.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
   await openDetails(detKey, ["security", "Passwords left in files"]);
 });
+// pfSense / OPNsense (the FreeBSD agent): gateways, CARP, IPsec, OpenVPN, pf states, temperatures and updates
+function firewallSection(fw, temps, on, ignBtn, rowCls) {
+  const ms = v => v == null ? "—" : v < 10 ? v.toFixed(1) + " ms" : Math.round(v) + " ms";
+  const GW = {online: "okc", none: "okc"}, up = fw.update || {};
+  let out = sect(fw.product || "Firewall", `<div class="kv"><div><span>Version</span>${esc(fw.version || "—")}</div>
+    <div><span>Updates</span>${up.available === true ? `<b class="old">${esc(up.version || "an update")} available</b>` : up.available === false ? `<span class="okc">Up to date</span>` : "—"}${up.checked ? `<br><small class="muted">checked ${esc(new Date(up.checked).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}))}</small>` : ""}</div>
+    ${fw.states ? `<div><span>State table</span>${(fw.states.current || 0).toLocaleString()}${fw.states.limit ? ` of ${fw.states.limit.toLocaleString()} <small class="muted">(${(100 * fw.states.current / fw.states.limit).toFixed(0)}%)</small>` : ""}</div>` : ""}
+    ${temps ? `<div><span>Temperature</span>${(temps.sensors || []).length ? temps.sensors.map(t => `${t.celsius ?? "?"} °C`).join(", ") : temps.virtual ? "<small class=\"muted\">none: a virtual machine has no sensors</small>" : "<small class=\"muted\">no sensors</small>"}</div>` : ""}</div>`);
+  if ((fw.gateways || []).length) out += sect("Gateways", tbl(["Gateway", "Monitor", "Delay", "Loss", "Status", ""], fw.gateways.map(g => {
+    const st = String(g.status || "").toLowerCase(), bad = !(st in GW);
+    return `<tr class="${rowCls(bad, "wan", g.name)}"><td><b>${esc(g.name)}</b></td><td>${esc(g.monitor || "")}</td><td>${ms(g.delay_ms)}${g.stddev_ms != null ? ` <small class="muted">± ${ms(g.stddev_ms)}</small>` : ""}</td>
+      <td>${g.loss_pct != null ? g.loss_pct + "%" : "—"}</td><td>${bad ? `<b class="${/down/.test(st) ? "failtxt" : "old"}">${esc(g.status)}</b>` : `<span class="okc">${esc(g.status || "online")}</span>`}</td><td>${bad && on ? ignBtn("wan", g.name, g.name) : ""}</td></tr>`;
+  })) + `<p class="hint">From the firewall's own gateway monitoring (dpinger). A gateway down is red; packet loss or high delay amber.</p>`);
+  if ((fw.carp || []).length) out += sect("CARP (high availability)", tbl(["Interface", "VHID", "State"], fw.carp.map(c =>
+    `<tr><td>${esc(c.interface)}</td><td>${esc(String(c.vhid ?? ""))}</td><td>${/MASTER/i.test(c.state) ? `<b>MASTER</b>` : /BACKUP/i.test(c.state) ? "BACKUP" : `<b class="old">${esc(c.state)}</b>`}</td></tr>`)));
+  const ip = fw.ipsec;
+  if (ip && ip.configured) out += sect("IPsec", `<p>${ip.up} up · ${ip.configured - ip.mobile} site-to-site configured${ip.mobile ? ` · ${ip.mobile} for mobile clients (not expected to be up)` : ""}</p>`
+    + (ip.down.length ? `<p><b class="old">Down:</b> ${ip.down.map(esc).join(", ")}</p>` : ""));
+  if ((fw.openvpn || []).length) out += sect("OpenVPN", tbl(["Instance", "Kind", "State"], fw.openvpn.map(o =>
+    `<tr><td>${esc(o.name)}</td><td>${esc(o.kind)}</td><td>${o.kind === "server" ? `${o.clients} client${o.clients === 1 ? "" : "s"}` : /CONNECTED/i.test(o.state) ? `<span class="okc">CONNECTED</span>` : `<b class="old">${esc(o.state)}</b>`}</td></tr>`)));
+  return out + `<p class="hint">Read only: the agent never changes the firewall's settings.</p>`;
+}
 // Proxmox VE (Linux agent 1.0.24 on a Proxmox host): cluster, guests, storage, ZFS, replication, HA, Ceph. Read only.
 const gbOf = b => b >= 1099511627776 ? (b / 1099511627776).toFixed(1) + " TB" : (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1) + " GB";
 const fullBar = (used, total) => { const p = total ? 100 * used / total : 0;
@@ -5027,7 +5051,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], proxmox: ["roles", "Proxmox VE"], pbs: ["roles", "Proxmox Backup Server"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], firewall: ["roles", "Gateways"], temps: ["roles"], proxmox: ["roles", "Proxmox VE"], pbs: ["roles", "Proxmox Backup Server"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");
@@ -5197,7 +5221,7 @@ function viaTag(x) {
   return ` <span class="viatag">${word}</span>`;
 }
 // Which agent's instructions the Agents window shows (remembered in this browser)
-let agOsTab = (() => { try { const t = localStorage.getItem("rollcall.agOsTab"); return ["windows", "linux", "openwrt"].includes(t) ? t : "windows"; } catch (e) { return "windows"; } })();
+let agOsTab = (() => { try { const t = localStorage.getItem("rollcall.agOsTab"); return ["windows", "linux", "openwrt", "freebsd"].includes(t) ? t : "windows"; } catch (e) { return "windows"; } })();
 // Sizes: in MB under 1 GB (a router's few MB of memory or flash), otherwise GB as the agent gave it
 function gbText(gb) {
   const n = Number(gb);
@@ -5321,12 +5345,12 @@ function renderAgents() {
     </div>`;
   const updWarn = !a.ssl && (a.auto_update?.windows || a.auto_update?.linux)
     ? `<p class="hint">⚠ Agents report over plain HTTP. Updates are signed with each server's own token, but turning on <b>Agent port uses HTTPS</b> under Manage &rsaquo; Settings &rsaquo; Agent port is still recommended.</p>` : "";
-  const kindOf = x => x.agent_kind === "sh" ? "openwrt" : x.os_family === "linux" ? "linux" : "windows";
+  const kindOf = x => x.agent_kind === "sh" ? (/pfSense|OPNsense|FreeBSD/.test(x.os || "") ? "freebsd" : "openwrt") : x.os_family === "linux" ? "linux" : "windows";
   const osTab = (os, label) => {
     const n = a.agents.filter(x => kindOf(x) === os).length;
     return `<button type="button" class="tab${os === agOsTab ? " on" : ""}" role="tab" aria-selected="${os === agOsTab}" data-agtab="${os}">${label}${n ? ` <span class="n">${n}</span>` : ""}</button>`;
   };
-  html += sect("2. Download and install", updWarn + `<div class="tabs ostabs" role="tablist" aria-label="Agent type">${osTab("windows", "Windows")}${osTab("linux", "Linux")}${osTab("openwrt", "OpenWrt")}</div>
+  html += sect("2. Download and install", updWarn + `<div class="tabs ostabs" role="tablist" aria-label="Agent type">${osTab("windows", "Windows")}${osTab("linux", "Linux")}${osTab("openwrt", "OpenWrt")}${osTab("freebsd", "pfSense / FreeBSD")}</div>
     <div>${card({
       title: "Windows", os: "windows", version: a.latest_version, btn: "agDownload", file: "PingMonitorAgent.ps1",
       msi: `<b>Installer for anyone</b>: send the .msi to people who aren't in IT. They double-click it and accept the administrator prompt, and the device appears below for approval. It's listed in <i>Installed apps</i> as <i>Rollcall agent</i>, and removing it there uninstalls the agent. For silent installs: <code>msiexec /i RollcallAgent.msi /qn</code>. It isn't code-signed, so Windows SmartScreen may warn ("More info → Run anyway"), and many email systems block .msi attachments: share it with a link (e.g. OneDrive) instead.`,
@@ -5360,6 +5384,16 @@ function renderAgents() {
       update: "Download it again and run <code>--install</code> again; approval is kept. It doesn't update itself.",
       remove: "<code>sh /etc/rollcall/agent.sh --uninstall</code>, then <b>Revoke</b> below.",
       trouble: "<code>sh /etc/rollcall/agent.sh --report</code> prints what it would send. Log: <code>/tmp/rollcall-agent.log</code> (in memory: cleared on restart). For HTTPS to Home Assistant the router needs <code>ca-bundle</code> and an SSL library for <code>uclient-fetch</code>, which recent OpenWrt includes."
+    })}${card({
+      title: "pfSense / FreeBSD", os: "freebsd", version: a.latest_bsd_version, btn: "agDownloadBsd", file: "rollcall-agent-freebsd.sh", noAuto: true,
+      req: "pfSense, OPNsense or FreeBSD: a shell script using what's built in, and curl (pfSense and OPNsense have it; on FreeBSD <code>pkg install curl</code>). Sends uptime, CPU, memory, temperatures, disks and ZFS pools, interfaces with traffic and errors, and on a firewall its gateways, CARP, IPsec and OpenVPN tunnels, the state table and whether a pfSense update is waiting. Read only: it never changes the firewall's settings.",
+      install: [
+        "Copy the file to the firewall, e.g. <code>scp rollcall-agent-freebsd.sh admin@192.168.1.1:/tmp/</code> (pfSense: enable SSH under <i>System → Advanced</i>, or paste it in <i>Diagnostics → Edit File</i>)",
+        "As root (pfSense's shell, option 8) run <code>sh /tmp/rollcall-agent-freebsd.sh --install</code>.",
+        "It copies itself to <code>/usr/local/etc/rollcall</code>, adds a cron job in <code>/usr/local/etc/cron.d</code> that runs every 5 minutes (pfSense doesn't rewrite that folder, so it survives changes made in the GUI), and the firewall appears below for approval."],
+      update: "Download it again and run <code>--install</code> again; approval is kept. It doesn't update itself. After a major pfSense or OPNsense upgrade, check it's still reporting.",
+      remove: "<code>sh /usr/local/etc/rollcall/agent.sh --uninstall</code>, then <b>Revoke</b> below.",
+      trouble: "<code>sh /usr/local/etc/rollcall/agent.sh --report</code> prints what it would send. Log: <code>/var/log/rollcall-agent.log</code>. The pfSense update check runs once a day (it takes several seconds)."
     })}</div>`);
   html += sect(`Waiting for approval (${a.pending.length})`, a.pending.length ? tbl(["Server", "Address", "Operating system", "Asked", ""], a.pending.map(p =>
     `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent${p.replaces_from ? `, which last reported from ${esc(p.replaces_from)}${p.replaces_from !== p.source_ip ? ": <b>not the address this came from</b>" : ""}` : ""}</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
@@ -5375,15 +5409,15 @@ function renderAgents() {
   html += sect(`Approved (${a.agents.length})`, a.agents.length ? tbl(["Server", "On dashboard as", "Last report", "Agent", "Roles", ""], a.agents.map(x => {
     const age = x.last_report ? now - x.last_report : null;
     const stale = age == null || age > staleSec;
-    const kind = kindOf(x), sh = kind === "openwrt";
-    const latest = sh ? a.latest_sh_version : kind === "linux" ? a.latest_linux_version : a.latest_version;
+    const kind = kindOf(x), sh = kind === "openwrt" || kind === "freebsd";
+    const latest = kind === "freebsd" ? a.latest_bsd_version : sh ? a.latest_sh_version : kind === "linux" ? a.latest_linux_version : a.latest_version;
     const old = latest && x.version && cmpVer(latest, x.version) > 0;
     const auto = !sh && a.auto_update && a.auto_update[kind];
     const from = x.forwarded_for ? `${x.forwarded_for} (through ${x.source_ip || "a proxy"})` : x.source_ip;
     return `<tr><td><b>${esc(x.hostname)}</b><br><small class="muted">${esc((x.ips || []).join(", "))}</small></td>
       <td>${x.host_name ? esc(x.host_name) : `<span class="muted">Not on the dashboard</span>`}</td>
       <td class="${stale ? "stale" : ""}">${x.last_report ? ago(x.last_report, now) : "Waiting for first report"}${x.sent_to ? `<br><small class="muted" title="${esc("Sent to " + x.sent_to + (from ? ", from " + from : ""))}">to ${esc(x.sent_to.replace(/^https?:\/\//, ""))}${viaTag(x)}${from ? `<br>from ${esc(from)}` : ""}</small>` : ""}</td>
-      <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (kind === "windows" ? "update the script on the share" : "download it and run --install again") : ""}">${esc(x.version || "?")} <small class="muted">${{windows: "Windows", linux: "Linux", openwrt: "OpenWrt"}[kind]}</small></td>
+      <td class="${old ? "old" : ""}" title="${old ? "Newer version " + esc(latest) + " available: " + (kind === "windows" ? "update the script on the share" : "download it and run --install again") : ""}">${esc(x.version || "?")} <small class="muted">${{windows: "Windows", linux: "Linux", openwrt: "OpenWrt", freebsd: "FreeBSD"}[kind]}</small></td>
       <td><small>${esc((x.roles || []).join(", "))}</small></td>
       <td><div class="actions">${old && sh ? `<small class="muted">Download it again to update</small>` : old ? (x.update_queued || auto ? `<small class="muted">Updates at next report</small>`
         : `<button type="button" data-updatenow="${esc(x.id)}">Update</button>`) : ""}<button type="button" class="danger" data-revoke="${esc(x.id)}" data-name="${esc(x.hostname)}">Revoke</button></div></td></tr>`;
@@ -5439,8 +5473,8 @@ document.getElementById("agBody").addEventListener("click", async e => {
     if (!r.ok) alert("That didn't work (" + r.status + ")");
     await loadAgents(); load();
   };
-  if (t.id === "agDownload" || t.id === "agDownloadLinux" || t.id === "agDownloadMsi" || t.id === "agDownloadSh") {
-    const linuxDl = t.id === "agDownloadLinux", msiDl = t.id === "agDownloadMsi", shDl = t.id === "agDownloadSh";
+  if (t.id === "agDownload" || t.id === "agDownloadLinux" || t.id === "agDownloadMsi" || t.id === "agDownloadSh" || t.id === "agDownloadBsd") {
+    const linuxDl = t.id === "agDownloadLinux", msiDl = t.id === "agDownloadMsi", shDl = t.id === "agDownloadSh", bsdDl = t.id === "agDownloadBsd";
     const inside = document.getElementById("agServer").value.trim().replace(/\/+$/, "");
     const outside = document.getElementById("agServerExt").value.trim().replace(/\/+$/, "");
     for (const v of [inside, outside].filter(Boolean)) if (!/^https?:\/\/[^\s'",;]+$/.test(v)) return alert(`Enter each address as http://host:port ("${v}" isn't)`);
@@ -5449,7 +5483,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
     try { localStorage.setItem("pm_agent_server", inside); localStorage.setItem("pm_agent_server_ext", outside); } catch (err) {}
     await saveServers();
     const ign = document.getElementById("agIgnoreCert");
-    const url = (msiDl ? "api/agents/msi?server=" : "api/agents/script?server=") + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : shDl ? "&os=openwrt" : "");
+    const url = (msiDl ? "api/agents/msi?server=" : "api/agents/script?server=") + encodeURIComponent(server) + (ign && ign.checked ? "&ignore_cert=1" : "") + (linuxDl ? "&os=linux" : shDl ? "&os=openwrt" : bsdDl ? "&os=freebsd" : "");
     t.disabled = true;
     try {
       const r = await fetch(url);
@@ -5457,7 +5491,7 @@ document.getElementById("agBody").addEventListener("click", async e => {
       const blob = await r.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = linuxDl ? "pingmonitor-agent.py" : shDl ? "rollcall-agent.sh" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
+      link.download = linuxDl ? "pingmonitor-agent.py" : shDl ? "rollcall-agent.sh" : bsdDl ? "rollcall-agent-freebsd.sh" : msiDl ? `RollcallAgent-${agInfo.latest_version || "agent"}.msi` : "PingMonitorAgent.ps1";
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } finally { t.disabled = false; }

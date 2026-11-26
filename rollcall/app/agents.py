@@ -341,6 +341,12 @@ def normalize_report(r) -> dict:
         d["signature_version"] = str(d.get("signature_version") or "")[:40] or None
         age = d.get("signature_age_days")
         d["signature_age_days"] = int(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+    if "firewall" in c:  # the pfSense / OPNsense agent
+        c["firewall"] = clean_firewall(c["firewall"])
+    if "temps" in c:
+        t = _as_dict(c["temps"])
+        c["temps"] = {"sensors": [{"name": str(x.get("name") or "")[:60], "celsius": _num(x.get("celsius"), None)}
+                                  for x in _as_list(t.get("sensors")) if isinstance(x, dict)][:16], "virtual": t.get("virtual") is True}
     if "proxmox" in c:  # Linux agent 1.0.24+ on a Proxmox VE host
         c["proxmox"] = clean_proxmox(c["proxmox"])
     if "pbs" in c:
@@ -797,6 +803,71 @@ def _rows(v, keys, n):
         if isinstance(x, dict):
             out.append({k: (str(x[k])[:200] if isinstance(x.get(k), str) else x.get(k)) for k in keys if k in x})
     return out
+
+
+def clean_firewall(raw) -> dict:
+    d = _as_dict(raw)
+    ip = d.get("ipsec") if isinstance(d.get("ipsec"), dict) else None
+    st = d.get("states") if isinstance(d.get("states"), dict) else None
+    up = d.get("update") if isinstance(d.get("update"), dict) else None
+    return {"product": str(d.get("product") or "")[:20], "version": str(d.get("version") or "")[:40] or None,
+            "gateways": _rows(d.get("gateways"), ("name", "monitor", "delay_ms", "stddev_ms", "loss_pct", "status", "substatus"), 32),
+            "carp": _rows(d.get("carp"), ("interface", "state", "vhid"), 32),
+            "openvpn": _rows(d.get("openvpn"), ("name", "kind", "state", "clients"), 32),
+            "ipsec": {"configured": _num(ip.get("configured")), "mobile": _num(ip.get("mobile")), "up": _num(ip.get("up")),
+                      "down": [str(x)[:60] for x in _as_list(ip.get("down")) if x][:20]} if ip else None,
+            "states": {"current": _num(st.get("current")), "limit": _num(st.get("limit"))} if st else None,
+            "update": {"checked": str(up.get("checked") or "")[:30] or None, "available": up.get("available") if isinstance(up.get("available"), bool) else None,
+                       "version": str(up.get("version") or "")[:30] or None} if up else None}
+
+
+GW_BAD = {"down": CRIT, "force_down": CRIT, "loss": WARN, "highloss": WARN, "delay": WARN, "highdelay": WARN}
+
+
+def firewall_check(fw: dict, ign: "Ignore | None" = None) -> dict:
+    """pfSense / OPNsense: a gateway down is red (after two reports); packet loss or high delay, an IPsec tunnel or
+    OpenVPN client down, a CARP address in INIT, or the state table over 90% full are amber. An update waiting
+    is said, never alerted."""
+    crit, warn = [], []
+    gws = [g for g in fw.get("gateways") or [] if not (ign and ign.has("wan", g.get("name")))]
+    for g in gws:
+        lv = GW_BAD.get(str(g.get("status") or "").lower())
+        if lv:
+            (crit if lv == CRIT else warn).append(f"gateway {g.get('name')} {g.get('status')}"
+                                                  + (f" ({g['loss_pct']:g}% loss)" if _num(g.get("loss_pct")) else ""))
+    for c in fw.get("carp") or []:
+        if str(c.get("state") or "").upper() == "INIT":
+            warn.append(f"CARP {c.get('interface')} vhid {c.get('vhid')} INIT")
+    ip = fw.get("ipsec") or {}
+    if ip.get("down"):
+        warn.append("IPsec down: " + ", ".join(ip["down"][:5]))
+    for o in fw.get("openvpn") or []:
+        if o.get("kind") == "client" and str(o.get("state") or "").upper() not in ("CONNECTED", ""):
+            warn.append(f"OpenVPN {o.get('name')} {o.get('state')}")
+    st = fw.get("states") or {}
+    if _num(st.get("limit")) and _num(st.get("current")) >= 0.9 * st["limit"]:
+        warn.append(f"state table {100 * st['current'] / st['limit']:.0f}% full")
+    if crit or warn:
+        return _check("firewall", fw.get("product") or "Firewall", CRIT if crit else WARN, "; ".join(crit + warn), confirm=bool(crit))
+    bits = [f"{len(gws)} gateway{'s' if len(gws) != 1 else ''} online" if gws else "no gateways monitored"]
+    if ip.get("up"):
+        bits.append(f"{ip['up']} IPsec up")
+    m = [c for c in fw.get("carp") or [] if str(c.get("state") or "").upper() == "MASTER"]
+    if fw.get("carp"):
+        bits.append(f"CARP {'master' if len(m) == len(fw['carp']) else 'backup' if not m else 'mixed'}")
+    up = fw.get("update") or {}
+    if up.get("available"):
+        bits.append(f"update {up.get('version') or ''} available".replace("  ", " "))
+    return _check("firewall", fw.get("product") or "Firewall", OK, "; ".join(bits))
+
+
+def temps_check(t: dict) -> dict | None:
+    """Only when a sensor is hot: amber from 85 °C, red from 95 °C."""
+    hot = [x for x in t.get("sensors") or [] if _num(x.get("celsius")) >= 85]
+    if not hot:
+        return None
+    worst = max(x["celsius"] for x in hot)
+    return _check("temps", "Temperature", CRIT if worst >= 95 else WARN, ", ".join(f"{x['name']} {x['celsius']:g} °C" for x in hot[:4]))
 
 
 def clean_proxmox(raw) -> dict:
@@ -2005,6 +2076,10 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                              ("Critical state: " + ", ".join(f"{v['name']} ({v['state']})" for v in bad)) if bad
                              else f"{running} of {len(vms)} VMs running"))
 
+    if isinstance(rc.get("firewall"), dict):
+        checks.append(firewall_check(rc["firewall"], ign))
+    if isinstance(rc.get("temps"), dict) and (tc := temps_check(rc["temps"])):
+        checks.append(tc)
     if isinstance(rc.get("proxmox"), dict):
         checks.append(proxmox_check(rc["proxmox"], opts))
     if isinstance(rc.get("pbs"), dict):

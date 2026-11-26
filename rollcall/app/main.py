@@ -124,6 +124,7 @@ SYSLOG_HELD = 200  # messages kept per sender that isn't matched to a device yet
 AGENT_SCRIPT = Path(__file__).parent / "agent" / "PingMonitorAgent.ps1"
 LINUX_AGENT_SCRIPT = Path(__file__).parent / "agent" / "pingmonitor-agent.py"
 SH_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent.sh"  # OpenWrt / BusyBox: no Python needed
+BSD_AGENT_SCRIPT = Path(__file__).parent / "agent" / "rollcall-agent-freebsd.sh"  # pfSense / OPNsense / FreeBSD
 WINGET_PATH = Path(os.environ.get("PM_WINGET", str(DB_PATH.parent / "winget-source2.msix")))  # the winget catalogue, refreshed daily
 VULN_DIR = Path(os.environ.get("PM_VULNS", str(DB_PATH.parent / "vulns")))  # vulnerability data, refreshed daily
 OFFLINE_PATH = DB_PATH.parent / "offline.json"  # the last offline data bundle imported: when it was made and imported
@@ -6701,7 +6702,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                               key=lambda r: r["requested_at"]),
             "latest_version": _script_version(),
             "legacy_until": float(AGENT_TLS.state.get("legacy_until") or 0),
-            "latest_linux_version": _linux_script_version(), "latest_sh_version": _sh_script_version(),
+            "latest_linux_version": _linux_script_version(), "latest_sh_version": _sh_script_version(), "latest_bsd_version": _sh_script_version(BSD_AGENT_SCRIPT),
             "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
             "rollout": {k: v for k, v in (monitor.agent_settings.get("rollout") or {}).items()
                         if v.get("version") == (_linux_script_version() if k == "linux" else _script_version())},
@@ -6860,9 +6861,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not server:
             raise web.HTTPBadRequest(text=json.dumps({"error": "Enter each address as http://host:port (up to 4)"}),
                                      content_type="application/json")
-        os_name = req.query.get("os") if req.query.get("os") in ("linux", "openwrt") else "windows"
+        os_name = req.query.get("os") if req.query.get("os") in ("linux", "openwrt", "freebsd") else "windows"
         body = build_agent_script(os_name, server, monitor.agents.enrol_key, req.query.get("ignore_cert") == "1")
-        name = {"linux": "pingmonitor-agent.py", "openwrt": "rollcall-agent.sh"}.get(os_name, "PingMonitorAgent.ps1")
+        name = {"linux": "pingmonitor-agent.py", "openwrt": "rollcall-agent.sh", "freebsd": "rollcall-agent-freebsd.sh"}.get(os_name, "PingMonitorAgent.ps1")
         return web.Response(body=body, content_type="application/octet-stream", headers={
             "Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -8002,8 +8003,8 @@ def update_public_key() -> str:
 
 def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: bool) -> bytes:
     """The agent script with this add-on's address and enrolment key built in."""
-    if os_name == "openwrt":
-        text = SH_AGENT_SCRIPT.read_text(encoding="utf-8")
+    if os_name in ("openwrt", "freebsd"):
+        text = (BSD_AGENT_SCRIPT if os_name == "freebsd" else SH_AGENT_SCRIPT).read_text(encoding="utf-8")
         text = text.replace('SERVER="__PM_SERVER__"', f'SERVER="{server}"', 1)
         text = text.replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{enrol_key}"', 1)
         ca = AGENT_TLS.cert_pem().strip() if AGENT_TLS.on else ""
@@ -8046,9 +8047,9 @@ def _linux_script_version() -> str | None:
         return None
 
 
-def _sh_script_version() -> str | None:
+def _sh_script_version(path: Path | None = None) -> str | None:
     try:
-        m = re.search(r'^AGENT_VERSION="([^"]+)"', SH_AGENT_SCRIPT.read_text(encoding="utf-8"), re.M)
+        m = re.search(r'^AGENT_VERSION="([^"]+)"', (path or SH_AGENT_SCRIPT).read_text(encoding="utf-8"), re.M)
         return m.group(1) if m else None
     except OSError:
         return None
