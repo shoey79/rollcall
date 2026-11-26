@@ -32,7 +32,10 @@ Remove each line once it's released.
 
 ## Requested features (not started)
 
-(none)
+- Notes on each device (owner asked 26 Nov): a free-text box on each device where admins (and editors) can keep
+  their own notes (where it lives, who to call, quirks). Shown on the device's Overview, saved with the device (in
+  exports and backups), kept when the device is edited; view-only users can read them but not change them. Plain
+  text, a sensible size cap, with who last changed it and when. Consider making notes searchable.
 
 ## Built, waiting for release
 
