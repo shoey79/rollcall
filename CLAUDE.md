@@ -28,7 +28,9 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- Settings, AI hints (owner asked 26 Nov): lay out each provider's model and API key side by side on the same row
+  (Claude model | Anthropic key, OpenAI model | OpenAI key, Gemini model | Gemini key); today the models are one
+  column and the keys the other, so they don't line up.
 
 ## Requested features (not started)
 
