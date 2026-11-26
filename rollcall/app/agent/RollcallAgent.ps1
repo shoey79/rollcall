@@ -3880,8 +3880,12 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     }
     if (-not (Test-Path $DataPath)) { New-Item -ItemType Directory -Path $DataPath -Force | Out-Null; Protect-DataFolder }
     $opened = @(Get-DataFolderWriters)
+    $pre = @{ perm_checked = $true; integrity = $null }
     if ($opened.Count) {
-        Protect-DataFolder  # opened up since: put it back, and only carry on if that worked (review F9)
+        # Opened up since: say exactly what was found (as the check after the report does), put it back, and only
+        # carry on if that worked (review F9)
+        Test-AgentFolderSecurity $pre
+        Protect-DataFolder
         $open = @(Get-DataFolderWriters)
         if ($open.Count) { throw "Not running: $DataPath could be changed by $($open -join ', '), and its permissions couldn't be put back" }
         Write-AgentLog "WARN the agent's folder had been opened up; its permissions were put back before running"
@@ -3890,8 +3894,9 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     $state = Read-State
     if ($opened.Count) {
         # Put back before this run, so the check after the report finds nothing: Rollcall is still told, as before
-        $state.integrity = @{ at = ConvertTo-UtcString (Get-Date); first = $false
-                              what = @($opened | Select-Object -First 9 | ForEach-Object { Limit-Text "$_ had access to the agent folder" 200 }) }
+        $state.integrity = if ($pre.integrity) { $pre.integrity } else {
+            @{ at = ConvertTo-UtcString (Get-Date); first = $false
+               what = @($opened | Select-Object -First 9 | ForEach-Object { Limit-Text "$_ had access to the agent folder" 200 }) } }
         try { Save-State $state } catch { }
     }
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
