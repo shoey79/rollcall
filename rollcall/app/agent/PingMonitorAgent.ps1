@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.57'
+$AgentVersion = '1.0.58'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -160,6 +160,11 @@ function Read-State {
             if ($raw.veeam_cursor) { $state.veeam_cursor = [int64]$raw.veeam_cursor }
             if ($raw.veeam_agent) { $state.veeam_agent = [string]$raw.veeam_agent }
             if ($raw.veeam_agent_cursor) { $state.veeam_agent_cursor = [int64]$raw.veeam_agent_cursor }
+            # Agent policies' computers (read hourly), other backup products' history, and the last signed serial
+            if ($raw.veeam_policy) { $state.veeam_policy = [string]$raw.veeam_policy; $state.veeam_policy_key = [string]$raw.veeam_policy_key
+                try { $state.veeam_policy_checked = [int64]$raw.veeam_policy_checked } catch { } }
+            foreach ($p in @($raw.PSObject.Properties | Where-Object { $_.Name -like 'bp_*' })) { $state[$p.Name] = [string]$p.Value }
+            if ($raw.sig_serial) { try { $state.sig_serial = [int64]$raw.sig_serial } catch { } }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
             if ($raw.secrets_sent) { $state.secrets_sent = [string]$raw.secrets_sent }
@@ -213,6 +218,29 @@ function Protect-DataFolder {
         $null = & icacls.exe (Join-Path $DataPath '*') /setowner '*S-1-5-32-544' /T /C /Q 2>&1
         $null = & icacls.exe (Join-Path $DataPath '*') /reset /T /C /Q 2>&1
     } catch { Write-AgentLog "WARN couldn't set folder permissions: $($_.Exception.Message)" }
+}
+
+# Who other than SYSTEM and Administrators could change the agent's folder: read back after Protect-DataFolder,
+# so a folder that couldn't be locked down (an unusual file system, or a policy) is never run from (review F9).
+# Returns their names; empty when it's locked down.
+function Get-DataFolderWriters([string]$Path = $DataPath) {
+    $ok = @('S-1-5-18', 'S-1-5-32-544')
+    # write, append, extended attributes, delete children, attributes, delete, permissions, ownership, generic write/all
+    $mask = 0x2 -bor 0x4 -bor 0x10 -bor 0x40 -bor 0x100 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+    $out = @()
+    if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) { return @() }  # Windows file permissions only (tests run elsewhere)
+    try {
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        foreach ($r in @($acl.Access)) {
+            if ([string]$r.AccessControlType -ne 'Allow') { continue }
+            $rights = 0; try { $rights = [int64]$r.FileSystemRights } catch { $rights = $mask }  # unreadable: assume it can write
+            if (($rights -band $mask) -eq 0) { continue }
+            $sid = $null
+            try { $sid = $r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = [string]$r.IdentityReference }
+            if ($ok -notcontains $sid) { $out += [string]$r.IdentityReference }
+        }
+    } catch { $out += "(couldn't read its permissions: $($_.Exception.Message))" }
+    return @($out | Select-Object -Unique)
 }
 
 # Each run: the agent's folder and everything in it must still belong to SYSTEM or Administrators,
@@ -3325,7 +3353,7 @@ function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         if ($IgnoreCertificate) {
             if ($PSVersionTable.PSVersion.Major -ge 6) { $params.SkipCertificateCheck = $true }
-            else { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
+            else { $prevCb = [Net.ServicePointManager]::ServerCertificateValidationCallback; [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }; $cbSet = $true }
         }
     }
     try {
@@ -3337,6 +3365,9 @@ function Send-JsonTo([string]$Srv, [string]$Path, $Body, [string]$Token) {
         $resp = $_.Exception.Response
         if ($resp) { return @{ status = [int]$resp.StatusCode; body = $null } }
         throw
+    } finally {
+        # -IgnoreCertificate: only for this request to Rollcall, not every later HTTPS call (review F14)
+        if ($cbSet) { [Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCb }
     }
 }
 
@@ -3467,10 +3498,14 @@ function Invoke-AgentUpdate($State, $Offer) {
     $params = @{ Uri = $uri; Method = 'Get'; TimeoutSec = 60; UseBasicParsing = $true; Headers = @{ Authorization = "Bearer $($State.token)" } }
     if ($uri -like 'https:*' -and $IgnoreCertificate) {
         if ($PSVersionTable.PSVersion.Major -ge 6) { $params.SkipCertificateCheck = $true }
-        else { [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true } }
+        else { $prevCb = [Net.ServicePointManager]::ServerCertificateValidationCallback; [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }; $cbSet = $true }
     }
-    $raw = if (Test-PinnedUrl $uri) { $p = Invoke-PinnedRequest $uri 'GET' $null $State.token 60; if ($p.status -ne 200) { throw "HTTP $($p.status)" }; $p.bytes }
-           else { (Invoke-WebRequest @params).RawContentStream.ToArray() }
+    # -IgnoreCertificate in Windows PowerShell can only be set for the whole process: put it back straight after
+    # this one request to Rollcall, so nothing else the agent fetches skips the check (review F14)
+    try {
+        $raw = if (Test-PinnedUrl $uri) { $p = Invoke-PinnedRequest $uri 'GET' $null $State.token 60; if ($p.status -ne 200) { throw "HTTP $($p.status)" }; $p.bytes }
+               else { (Invoke-WebRequest @params).RawContentStream.ToArray() }
+    } finally { if ($cbSet) { [Net.ServicePointManager]::ServerCertificateValidationCallback = $prevCb } }
     $got = $null
     try { $got = [Text.Encoding]::UTF8.GetString($raw) | ConvertFrom-Json } catch { }
     if (-not $got -or -not $got.script -or -not $got.signature) { throw 'The update came without a signature, so it was not installed' }
@@ -3551,6 +3586,12 @@ function Invoke-AgentRun([switch]$ReportOnly) {
         throw 'This copy of the script has no add-on address or enrolment key. Download it from the Rollcall dashboard (Agents), or pass -Server and -EnrolKey.'
     }
     if (-not (Test-Path $DataPath)) { New-Item -ItemType Directory -Path $DataPath -Force | Out-Null; Protect-DataFolder }
+    if (@(Get-DataFolderWriters).Count) {
+        Protect-DataFolder  # opened up since: put it back, and only carry on if that worked (review F9)
+        $open = @(Get-DataFolderWriters)
+        if ($open.Count) { throw "Not running: $DataPath could be changed by $($open -join ', '), and its permissions couldn't be put back" }
+        Write-AgentLog "WARN the agent's folder had been opened up; its permissions were put back before running"
+    }
     $state = Read-State
     if (-not $state.token) { $state.token = New-Token; Save-State $state }
     $script:PreferredServer = [string]$state.last_server
@@ -3611,12 +3652,31 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($script:ActiveServer) { $state.last_server = $script:ActiveServer }
     # New addresses only with Rollcall's signature: a reply changed on the way can't send this agent elsewhere.
     # Without one, it carries on with the addresses it has.
-    $signed = $res.body -and $res.body.config_sig -and (Test-RollcallSignature (Get-ConfigText $res.body) ([string]$res.body.config_sig))
+    # With a serial (Rollcall 1.99 on): signed with a number that never goes down, so an older signed reply replayed
+    # later is refused. Once this agent has had one, it needs one every time (review F7).
+    $lastSerial = [int64]0; try { $lastSerial = [int64]$state.sig_serial } catch { }
+    $serial = $null
+    if ($res.body -and $null -ne $res.body.sig_serial -and $res.body.config_sig2 -and ([string]$res.body.sig_serial -match '^\d{1,15}$')) { $serial = [int64]$res.body.sig_serial }
+    $tail = if ($null -ne $serial) { "serial=$serial`n" } else { '' }
+    if ($null -ne $serial) {
+        $signed = Test-RollcallSignature ([Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString((Get-ConfigText $res.body))) + $tail)) ([string]$res.body.config_sig2)
+        if ($signed -and $serial -lt $lastSerial) {
+            Write-AgentLog "WARN Rollcall's reply was signed earlier than one this agent already had (an old reply sent again?); ignored"
+            $signed = $false; $serial = $null
+        } elseif ($signed) { $state.sig_serial = $serial }
+    } elseif ($lastSerial -gt 0) {
+        $signed = $false
+        if ($res.body -and ($res.body.servers -or $res.body.route -or $res.body.tls -or $res.body.config_sig)) { Write-AgentLog "WARN Rollcall's reply had no serial, though earlier ones did; ignored its addresses and HTTPS details" }
+    } else {
+        $signed = $res.body -and $res.body.config_sig -and (Test-RollcallSignature (Get-ConfigText $res.body) ([string]$res.body.config_sig))
+    }
     if ($res.body -and -not $signed -and ($res.body.servers -or $res.body.route)) { Write-AgentLog "WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has" }
     # Rollcall's own HTTPS: the port and key, signed with the update key (so not changeable on the way)
-    if ($res.body -and $res.body.tls) {
+    if ($res.body -and $res.body.tls -and ($null -ne $serial -or $lastSerial -eq 0)) {
         $tp = [int]$res.body.tls.port; $tk = [string]$res.body.tls.pin
-        if ($tp -gt 0 -and $tk -and (Test-RollcallSignature ([Text.Encoding]::UTF8.GetBytes("rollcall-agent-tls/1`nport=$tp`npin=$tk`n")) ([string]$res.body.tls_sig))) {
+        $ttext = "rollcall-agent-tls/1`nport=$tp`npin=$tk`n"
+        $tlsOk = if ($null -ne $serial) { Test-RollcallSignature ([Text.Encoding]::UTF8.GetBytes($ttext + $tail)) ([string]$res.body.tls_sig2) } else { Test-RollcallSignature ([Text.Encoding]::UTF8.GetBytes($ttext)) ([string]$res.body.tls_sig) }
+        if ($tp -gt 0 -and $tk -and $tlsOk) {
             if (-not $state.tls -or $state.tls.pin -ne $tk -or [int]$state.tls.port -ne $tp -or $state.tls.off) { Write-AgentLog "Rollcall's HTTPS is on: reports go to port $tp from the next run, to Rollcall's own key only" }
             $state.tls = @{ port = $tp; pin = $tk; off = $false }
         } else { Write-AgentLog "WARN Rollcall's HTTPS details didn't have a good signature; ignored" }
@@ -3672,6 +3732,10 @@ function Install-Agent {
     }
     New-Item -ItemType Directory -Path $DataPath -Force | Out-Null
     Protect-DataFolder
+    $open = @(Get-DataFolderWriters)
+    if ($open.Count) {  # never create a SYSTEM task that runs from a folder others can change (review F9)
+        throw "Couldn't lock down $DataPath (these can still change it: $($open -join ', ')). The agent wasn't installed; check the folder's permissions and run the install again."
+    }
     $dest = Join-Path $DataPath 'PingMonitorAgent.ps1'
     # A startup script on the share can be older than a copy that has updated itself:
     # keep the newer one, so the two don't keep swapping versions.

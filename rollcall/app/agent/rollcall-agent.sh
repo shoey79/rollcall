@@ -14,21 +14,27 @@
 # The first report asks to join; approve it in the Rollcall dashboard (Manage > Agents).
 # Downloaded from the dashboard, the add-on's address and enrolment key are already filled in.
 
-AGENT_VERSION="1.0.4"
+AGENT_VERSION="1.0.5"
 SERVER="__PM_SERVER__"
 ENROL_KEY="__PM_ENROL_KEY__"
 IGNORE_CERT=0
+# Rollcall's own HTTPS certificate authority, built in when the script is downloaded with HTTPS on. Only this is
+# trusted; a certificate in a reply never replaces it (replies aren't signed, and this agent can't check them).
+TLS_CA='__PM_TLS_CA__'
+umask 077   # everything this agent writes (its token, the report it sends) is root's only
 
 R="${RC_ROOT:-}"   # tests only: a folder standing in for / (OpenWrt's files under it)
 DIR="${RC_DIR:-/etc/rollcall}"
 STATE="$DIR/token"
 PEM="$DIR/rollcall.pem"; TLSPORT="$DIR/tls_port"   # Rollcall's own HTTPS: its certificate and port (1.0.3)
 LOG="${RC_LOG:-/tmp/rollcall-agent.log}"
+[ -L "$LOG" ] && rm -f "$LOG"   # never append through a link someone left at the fixed name
 RUN="${RC_RUN:-/tmp}"            # RAM: the run lock, and where the system log was read up to
 SINCE="$RUN/rollcall-since"      # in RAM, not flash: written every run, and the log it marks is in RAM too
 LOCK="$RUN/rollcall.lock"
 CRON="${RC_CRONTAB:-/etc/crontabs/root}"
-TMP="${TMPDIR:-/tmp}/rollcall.$$"
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/rollcall.XXXXXX" 2>/dev/null) || { TMPD="${TMPDIR:-/tmp}/rollcall.$$"; rm -rf "$TMPD"; mkdir -m 700 "$TMPD" || exit 1; }
+TMP="$TMPD/r"   # a private folder: its files aren't at names others could guess
 ERRORS=""
 LOGREAD=logread; [ -x "$R/sbin/logread" ] && LOGREAD="$R/sbin/logread"   # OpenWrt's own (ubox), which has -t; not BusyBox's
 
@@ -240,21 +246,31 @@ post() {
     fi
 }
 
-# Rollcall's own HTTPS: kept on flash only when it changes (the certificate lasts years), removed when it's off.
+# Rollcall's own HTTPS. The certificate authority built into this script is the one trusted. A reply only says which
+# port: someone on the network could change that, but without Rollcall's key they can't answer on it. A copy of
+# the script without it built in (downloaded with HTTPS off) trusts the first one Rollcall sends, once, and never
+# replaces it. Nothing in a reply turns HTTPS off: if Rollcall stops answering on its port, plain HTTP is next.
+tls_builtin() {
+    case "$TLS_CA" in *"BEGIN CERTIFICATE"*) ;; *) return 1 ;; esac
+    mkdir -p "$DIR"
+    printf '%s\n' "$TLS_CA" > "$TMP.ca"
+    cmp -s "$TMP.ca" "$PEM" || { cp "$TMP.ca" "$PEM"; chmod 600 "$PEM"; }
+}
 tls_reply() {
     have jsonfilter || return 0
     port=$(jsonfilter -i "$TMP.reply" -e '@.tls.port' 2>/dev/null)
-    if [ -n "$port" ]; then
+    case "$port" in ''|*[!0-9]*) return 0 ;; esac
+    if [ ! -s "$PEM" ]; then
         jsonfilter -i "$TMP.reply" -e '@.tls_cert' 2>/dev/null > "$TMP.pem"
         grep -q 'BEGIN CERTIFICATE' "$TMP.pem" || return 0
-        cmp -s "$TMP.pem" "$PEM" || { cp "$TMP.pem" "$PEM"; chmod 600 "$PEM"; log "Rollcall's HTTPS is on: reports go to port $port from the next run, trusting only its certificate"; }
-        [ "$(cat "$TLSPORT" 2>/dev/null)" = "$port" ] || echo "$port" > "$TLSPORT"
-    elif [ -f "$PEM" ] && grep -q '"config_sig"' "$TMP.reply" 2>/dev/null; then
-        rm -f "$PEM" "$TLSPORT"; log "Rollcall's HTTPS was turned off; reports go over the address this agent has"
+        cp "$TMP.pem" "$PEM"; chmod 600 "$PEM"
+        log "Rollcall's HTTPS is on: reports go to port $port from the next run, trusting only the certificate it sent now (download the agent again to have it built in)"
     fi
+    [ "$(cat "$TLSPORT" 2>/dev/null)" = "$port" ] || echo "$port" > "$TLSPORT"
 }
 
 send() {
+    tls_builtin
     [ -s "$STATE" ] || { mkdir -p "$DIR"; tr -dc 'a-f0-9' < /dev/urandom | head -c 64 > "$STATE"; chmod 600 "$STATE"; }
     token=$(cat "$STATE")
     build_report > "$TMP.body"   # not in a pipe: it sets HOSTNAME
@@ -303,7 +319,8 @@ send() {
 }
 
 install() {
-    mkdir -p "$DIR" && cp "$0" "$DIR/agent.sh" && chmod 700 "$DIR" "$DIR/agent.sh" || { echo "Couldn't copy to $DIR"; exit 1; }
+    mkdir -p -m 700 "$DIR" && chmod 700 "$DIR" && cat "$0" > "$DIR/agent.sh.new" && chmod 700 "$DIR/agent.sh.new" \
+        && mv "$DIR/agent.sh.new" "$DIR/agent.sh" || { echo "Couldn't copy to $DIR"; exit 1; }   # private from the start
     grep -q rollcall/agent.sh "$CRON" 2>/dev/null || echo "*/5 * * * * sh $DIR/agent.sh" >> "$CRON"
     grep -qx "$DIR/" /etc/sysupgrade.conf 2>/dev/null || echo "$DIR/" >> /etc/sysupgrade.conf 2>/dev/null
     [ -x /etc/init.d/cron ] && { /etc/init.d/cron enable; /etc/init.d/cron restart; } >/dev/null 2>&1
@@ -332,7 +349,7 @@ take_lock() {
     echo $$ > "$LOCK/pid"; return 0
 }
 
-trap 'rm -f "$TMP".*; [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"' EXIT
+trap 'rm -rf "$TMPD"; [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"' EXIT
 [ -f "$DIR/since" ] && rm -f "$DIR/since"   # 1.0.0 kept this on flash and wrote it every run
 case "$1" in
     --install) install ;;

@@ -78,18 +78,19 @@ class Addon:
             (data / "agent_tls").mkdir(exist_ok=True)
             (data / "agent_tls" / "state.json").write_text(json.dumps({"https": https, "plain_http": True}))
 
-    def start(self, app: Path = APP):
+    def start(self, app: Path = APP, extra_env: dict | None = None, ready: int = 200):
         env = {**os.environ, "PM_OPTIONS": str(self.data / "options.json"), "PM_DB": str(self.data / "ping_monitor.db"),
                "PM_PORT": str(self.ui_port), "PM_AGENT_PORT": str(self.agent_port), "PM_AGENT_HTTPS_PORT": str(self.https_port),
                "PM_SYSLOG_PORT": str(free_port()),
                "PM_SSL_DIR": str(self.data / "ssl"), "PM_HA_API": "http://127.0.0.1:9/api",
                "PM_SUPERVISOR_API": "http://127.0.0.1:9", "PM_HA_WS": "ws://127.0.0.1:9/ws", "PYTHONUNBUFFERED": "1"}
         env.pop("SUPERVISOR_TOKEN", None)  # outside Home Assistant: the test is the admin
+        env.update(extra_env or {})
         self.log = open(self.data / "addon.log", "a")
         self.proc = subprocess.Popen([sys.executable, "-u", str(app / "main.py")], env=env, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(120):
             try:
-                if call(self.ui + "/api/status", headers=UI, timeout=2)[0] == 200:
+                if call(self.ui + "/api/status", headers=UI, timeout=2)[0] == ready:
                     return self
             except OSError:
                 pass
@@ -199,6 +200,12 @@ class Proxy:
             return out
         if body.get("config_sig"):
             self.last_config_sig = body["config_sig"]
+        if self.mode == "record":      # keeps a real, signed reply to send again later (review F7)
+            self.recorded = dict(body)
+        elif self.mode == "replay":
+            body = dict(self.recorded)
+        elif self.mode == "strip":     # the recorded reply, without its serial: the old signature alone
+            body = {k: v for k, v in self.recorded.items() if k not in ("sig_serial", "config_sig2", "tls_sig2")}
         if self.mode.startswith("offer_"):
             body["agent_update"] = {"version": "9.9.9"}
         elif self.mode == "downgrade":
@@ -356,7 +363,14 @@ def scenario(agent, tmp: Path, made: list):
     aid = addon.agent()["id"]
     released = agent.version()
 
-    # ... moves to this version the old way (it only knows the token-keyed signature)
+    # ... moves to this version the old way (it only knows the token-keyed signature). Over plain HTTP that's only
+    # done when an admin allows it (review F5): first not, then allowed for the week
+    if agent.version() < "1.0.53" if agent.kind == "windows" else agent.version() < "1.0.21":
+        addon.api(f"/api/agents/{aid}/update-now", {}, "POST")
+        run_and_check_report(agent, addon, proxy, "old way, not allowed")
+        assert agent.version() == released, "updated the old way over plain HTTP without an admin's go-ahead"
+        assert addon.agent()["legacy_update"] is True
+        addon.api("/api/agents/legacy-updates", {"allow": True}, "POST")
     addon.api(f"/api/agents/{aid}/update-now", {}, "POST")
     run_and_check_report(agent, addon, proxy, "moving across")
     new = current_version(agent.kind)
@@ -378,6 +392,9 @@ def scenario(agent, tmp: Path, made: list):
     addon.api(f"/api/agents/{aid}/update-now", {}, "POST")
     run_and_check_report(agent, addon, proxy, "signed update")
     assert agent.version() == later, f"the signed update wasn't installed\n{agent.log()[-3000:]}"
+    if agent.kind == "linux":  # review F2: the copy kept for rollback holds the enrolment key too: root only
+        old = agent.installed.with_name(agent.installed.name + ".old")
+        assert old.exists() and old.stat().st_mode & 0o777 == 0o700, oct(old.stat().st_mode)
     assert any("sig=rsa" in u for u in proxy.update_requests[-1:]), proxy.update_requests
     run_and_check_report(agent, addon, proxy, "first run of the signed update")
     assert addon.agent()["version"] == later
@@ -405,6 +422,25 @@ def scenario(agent, tmp: Path, made: list):
         run_and_check_report(agent, addon, proxy, f"after {mode}")
         assert not agent.marker.exists()
     assert addon.agent()["version"] == later
+
+    # 4. Review F7: a signed reply recorded earlier and sent again after what agents are told has changed is
+    # refused (its serial is lower); so is the same reply with its serial taken off
+    proxy.mode = "record"
+    run_and_check_report(agent, addon, proxy, "recorded")
+    assert proxy.recorded.get("sig_serial") and proxy.recorded.get("config_sig2")
+    time.sleep(1.1)  # the serial is the time of the change, in seconds
+    addon.api("/api/agents/servers", {"inside": proxy.url, "outside": ""}, "POST")
+    proxy.mode = "pass"
+    run_and_check_report(agent, addon, proxy, "new addresses")
+    for mode, says in (("replay", "signed earlier than one this agent already had"), ("strip", "had no serial, though earlier ones did")):
+        proxy.mode = mode
+        before = len(agent.log())
+        run_and_check_report(agent, addon, proxy, mode)
+        assert says in agent.log()[before:], f"{mode}: expected '{says}'\n{agent.log()[before:][-2000:]}"
+    proxy.mode = "pass"
+    before = len(agent.log())
+    run_and_check_report(agent, addon, proxy, "after replays")
+    assert "signed earlier" not in agent.log()[before:] and "no serial" not in agent.log()[before:]
 
 
 @pytest.mark.skipif(not HAVE_ADDON_DEPS, reason="needs the add-on's packages (aiohttp, cryptography)")

@@ -1179,7 +1179,7 @@ One Python file (`pingmonitor-agent.py`, Python 3.8+, standard library only, so 
 1. In the dashboard, open **Manage → Agents** and use **Download pingmonitor-agent.py**. It uses the same address as the Windows script, so check that first.
 2. Copy it to the server, e.g. `scp pingmonitor-agent.py admin@server:`
 3. On the server, run `sudo python3 pingmonitor-agent.py --install`.
-   - For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage`, `job.read` (or `queue.read`) and `systemMetadata.read` permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`): `sudo python3 pingmonitor-agent.py --install --immich-api-key YOUR_KEY`.
+   - For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage`, `job.read` (or `queue.read`) and `systemMetadata.read` permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`): `sudo python3 pingmonitor-agent.py --install --immich-api-key YOUR_KEY`. To keep the key out of the process list while it installs, use `--immich-api-key -` and paste it when asked, or set `RC_IMMICH_API_KEY` (e.g. `sudo RC_IMMICH_API_KEY=… python3 pingmonitor-agent.py --install`).
    - If Immich isn't in a local container, add `--immich-url http://host:2283`.
 4. Approve it under **Agents → Waiting for approval**.
 

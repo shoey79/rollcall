@@ -40,6 +40,7 @@ class AgentTLS:
     def __init__(self, folder: Path):
         self.dir = Path(folder)
         self.key_path, self.cert_path, self.state_path = self.dir / "key.pem", self.dir / "cert.pem", self.dir / "state.json"
+        self.ca_path = self.dir / "ca.pem"  # never reissued: what the router agent trusts (review F1)
         self.state = {"https": False, "plain_http": True}
         try:
             self.state.update(json.loads(self.state_path.read_text()))
@@ -110,7 +111,8 @@ class AgentTLS:
         from cryptography.x509.oid import NameOID
         want = {"localhost", "127.0.0.1"} | {str(h).strip().lower().strip("[]") for h in hosts if str(h).strip()}
         have = set(self.names())
-        if self.cert_path.exists() and want <= have:
+        ca = self.ensure_ca()
+        if self.cert_path.exists() and want <= have and self._issued_by_ca():
             return False
         names = sorted(want | have)[:100]
         sans = []
@@ -124,20 +126,67 @@ class AgentTLS:
                 if all(c.isalnum() or c in "-." for c in n):
                     sans.append(x509.DNSName(n))
         now = datetime.datetime.now(datetime.timezone.utc)
+        # The certificate Rollcall serves: its names, issued by its own authority (same key, so agents that pin the
+        # key see no change), and sent with the authority so the router agent can check it against the one it trusts
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Rollcall agents")])
-        cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(self.key().public_key())
+        pub = self.key().public_key()
+        cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(ca.subject).public_key(pub)
                 .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
-                .not_valid_after(now + datetime.timedelta(days=365 * YEARS))
+                .not_valid_after(min(now + datetime.timedelta(days=365 * YEARS), getattr(ca, "not_valid_after_utc", None) or ca.not_valid_after.replace(tzinfo=datetime.timezone.utc)))
                 .add_extension(x509.SubjectAlternativeName(list(dict.fromkeys(sans))), critical=False)
-                .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+                .add_extension(x509.SubjectKeyIdentifier.from_public_key(pub), critical=False)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(pub), critical=False)
                 .sign(self.key(), hashes.SHA256()))
         tmp = self.cert_path.with_suffix(".tmp")
-        tmp.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        tmp.write_bytes(cert.public_bytes(serialization.Encoding.PEM) + self.ca_path.read_bytes())
         os.replace(tmp, self.cert_path)
         return True
 
+    def ensure_ca(self):
+        """Rollcall's own certificate authority for agent HTTPS: made once with the same key and never reissued, so a
+        router agent that trusts it never needs a new one (review F1). Lasts 25 years."""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.x509.oid import NameOID
+        if self.ca_path.exists():
+            try:
+                return x509.load_pem_x509_certificate(self.ca_path.read_bytes())
+            except ValueError:
+                pass
+        now = datetime.datetime.now(datetime.timezone.utc)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Rollcall agents CA")])
+        pub = self.key().public_key()
+        ca = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(pub)
+              .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+              .not_valid_after(now + datetime.timedelta(days=365 * 25))
+              .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+              .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True, content_commitment=False,
+                                           key_encipherment=False, data_encipherment=False, key_agreement=False,
+                                           encipher_only=False, decipher_only=False), critical=True)
+              .add_extension(x509.SubjectKeyIdentifier.from_public_key(pub), critical=False)
+              .sign(self.key(), hashes.SHA256()))
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.ca_path.with_suffix(".tmp")
+        tmp.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+        os.replace(tmp, self.ca_path)
+        return ca
+
+    def _issued_by_ca(self) -> bool:
+        """False for a certificate from before 1.99 (self-signed, no authority): it's remade once."""
+        from cryptography import x509
+        try:
+            cert = x509.load_pem_x509_certificate(self.cert_path.read_bytes())
+            return cert.issuer != cert.subject
+        except (OSError, ValueError):
+            return False
+
     def cert_pem(self) -> str:
-        return self.cert_path.read_text() if self.cert_path.exists() else ""
+        """What the router agent trusts: the authority, which never changes (not the served certificate, which does)."""
+        try:
+            return self.ca_path.read_text() if self.ca_path.exists() else ""
+        except OSError:
+            return ""
 
     def context(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)

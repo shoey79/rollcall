@@ -131,7 +131,7 @@ def test_report(openwrt):
     assert p.returncode == 0, p.stderr
     r = json.loads(p.stdout)
     assert "agent_token" not in r                                     # --report never shows the token
-    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.4" and r["tls_capable"] is False
+    assert r["agent_kind"] == "sh" and r["os_family"] == "linux" and r["agent_version"] == "1.0.5" and r["tls_capable"] is False
     assert r["hostname"] == "Lab-Router" and r["os"].startswith("OpenWrt 23.05.5 r24106") and r["os_id"] == "openwrt"
     assert r["hw_model"] == "Test Router Model X" and r["roles"] == ["Router (OpenWrt)"] and r["errors"] == []
     assert isinstance(r["cpu_pct"], float) and r["mem_total_mb"] > 0 and len(r["load"]) == 3 and r["uptime_s"] > 0
@@ -356,12 +356,61 @@ def test_router_moves_to_rollcalls_own_https(openwrt):
         assert addon.agent()["sent_to"] == f"https://127.0.0.1:{addon.https_port}"
         assert pem.stat().st_mtime_ns == stamp        # not written again: unchanged
         addon.api("/api/agents/tls", {"https": False}, "POST")
-        run(env, script=script)                       # over HTTPS this time fails (off): HTTP; told it's off
+        run(env, script=script)                       # HTTPS doesn't answer now: plain HTTP is next
         run(env, script=script)
-        assert not pem.exists() and "Rollcall's HTTPS was turned off" in (tmp / "agent.log").read_text()
+        # Review F1: nothing in a reply turns HTTPS off or replaces the certificate; it just isn't answering
+        assert pem.exists() and pem.stat().st_mtime_ns == stamp
         assert addon.agent()["sent_to"] == addon.agent_url
     finally:
         addon.stop()
+
+
+def test_router_trusts_only_the_built_in_authority(openwrt):
+    """Review F1: downloaded with HTTPS on, the script has Rollcall's certificate authority built in. A certificate in
+    a reply (unsigned: someone on the network could put their own there) never replaces it."""
+    env, tmp = openwrt
+    curl = shutil.which("curl")
+    if not curl:
+        pytest.skip("needs curl")
+    (tmp / "shims" / "curl").symlink_to(curl)
+    addon = _addon(tmp).start()
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_update_signing_e2e import UI, call
+    try:
+        st, body = call(f"{addon.ui}/api/agents/script?os=openwrt&server={addon.agent_url}", headers=UI)
+        assert st == 200 and b"TLS_CA='-----BEGIN CERTIFICATE-----" in body, body[:400]
+        ca = (tmp / "addon" / "agent_tls" / "ca.pem").read_text().strip()
+        assert ca.encode() in body
+        script = tmp / "agent.sh"
+        script.write_bytes(body)
+        run(env, script=script)
+        addon.approve_all()
+        run(env, script=script)                       # learns the port
+        run(env, script=script)                       # over HTTPS, trusting the built-in authority
+        assert addon.agent()["sent_to"] == f"https://127.0.0.1:{addon.https_port}", (tmp / "agent.log").read_text()
+        pem = tmp / "rollcall" / "rollcall.pem"
+        assert pem.read_text().strip() == ca
+    finally:
+        addon.stop()
+    # Now a "Rollcall" that hands out someone else's certificate and a port, and no HTTPS: nothing changes
+    class Evil(Rollcall):
+        def do_POST(self):  # noqa: N802
+            self.body()
+            data = json.dumps({"ok": True, "tls": {"port": 4443}, "tls_cert": "-----BEGIN CERTIFICATE-----\nEVIL\n-----END CERTIFICATE-----\n",
+                               "config_sig": "x"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Evil)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        script.write_text(script.read_text().replace(addon.agent_url, f"http://127.0.0.1:{srv.server_port}"))
+        run(env, script=script)
+        assert pem.read_text().strip() == ca and "EVIL" not in pem.read_text()
+    finally:
+        srv.shutdown()
 
 
 @needs_openwrt

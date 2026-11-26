@@ -600,7 +600,7 @@ class Feeds:
                         size = 0
                         with open(tmp, "wb") as f:
                             async for chunk in r.content.iter_chunked(1 << 20):
-                                f.write(chunk)
+                                await asyncio.to_thread(f.write, chunk)  # off the event loop (review F14)
                                 size += len(chunk)
                         tmp.replace(zpath)
                         meta.update(etag=r.headers.get("ETag"), size=size)

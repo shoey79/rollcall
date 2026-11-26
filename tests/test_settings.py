@@ -14,7 +14,7 @@ import settingslib  # noqa: E402
 
 config = yaml.safe_load((ROOT / "rollcall" / "config.yaml").read_text())
 names = yaml.safe_load((ROOT / "rollcall" / "translations" / "en.yaml").read_text())["configuration"]
-schema = {k: v for k, v in config["schema"].items() if k != "hosts"}
+schema = {k: v for k, v in config["schema"].items() if k != "hosts" and k not in settingslib.HA_ONLY}
 fields = {f["key"]: f for f in settingslib.fields()}
 
 
@@ -52,7 +52,7 @@ def test_labels_match_configuration_tab():
 
 
 def test_defaults_are_valid():
-    opts = {k: v for k, v in config["options"].items() if k != "hosts"}
+    opts = {k: v for k, v in config["options"].items() if k != "hosts" and k not in settingslib.HA_ONLY}
     clean, errors = settingslib.clean(opts)
     assert not errors, errors
     assert clean == opts

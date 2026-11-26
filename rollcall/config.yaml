@@ -123,6 +123,7 @@ options:
   openai_model: gpt-5.4-mini
   gemini_api_key: ""
   gemini_model: gemini-3.5-flash-lite
+  ingress_only: true
   hosts: []
 schema:
   interval: int(30,3600)
@@ -221,6 +222,7 @@ schema:
   openai_model: str?
   gemini_api_key: password?
   gemini_model: str?
+  ingress_only: bool?
   hosts:
     - name: str
       host: str

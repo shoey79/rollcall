@@ -24,9 +24,13 @@ from pathlib import Path
 log = logging.getLogger("ping_monitor")
 
 OK, WARN, CRIT = "ok", "warn", "crit"
-HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
-TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
+# \Z, not $: with .match, $ also matches before a trailing newline (review F13)
+HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\Z")
+TOKEN_RE = re.compile(r"^[0-9a-f]{64}\Z")
 MAX_PENDING = 200
+# Enrolment needs only the shared key, so one source can't fill the list (review F6): new requests per source address
+# per hour, and pending requests per source; when the list is full, the busiest source's oldest goes first.
+PER_SOURCE_HOUR, PER_SOURCE_PENDING = 10, 20
 
 DEFAULT_EVENT_WATCH = ["Kernel-Power:41", "EventLog:6008", "BugCheck:1001", "disk:7", "disk:51",
                        "disk:153", "Ntfs:55", "Ntfs:98"]
@@ -51,6 +55,7 @@ class AgentStore:
         self.reports_dir = reports_dir
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.data = {"enrol_key": None, "agents": {}, "pending": {}, "rejected": []}
+        self._recent: dict[str, list[float]] = {}  # source address -> when it made new requests (last hour)
         if path.exists():
             try:
                 self.data.update(json.loads(path.read_text()))
@@ -82,7 +87,8 @@ class AgentStore:
         return self.data["enrol_key"]
 
     def check_key(self, key: str) -> bool:
-        return hmac.compare_digest(str(key or ""), self.enrol_key)
+        # As bytes: compare_digest raises on non-ASCII str, which turned a wrong key into an HTTP 500 (review F10)
+        return hmac.compare_digest(str(key or "").encode("utf-8", "replace"), self.enrol_key.encode("utf-8", "replace"))
 
     def rotate_key(self) -> str:
         self.data["enrol_key"] = secrets.token_urlsafe(24)
@@ -116,13 +122,29 @@ class AgentStore:
         if state in ("approved", "pending", "rejected"):
             return state, None
         hostname = info["hostname"]
+        src = str(source_ip or "?")
+        now = _now()
+        recent = [t for t in self._recent.get(src, []) if now - t < 3600]
+        if len(recent) >= PER_SOURCE_HOUR:
+            self._recent[src] = recent
+            return "limited", None
+        self._recent[src] = recent + [now]
+        if len(self._recent) > 1000:  # forget the quietest sources
+            for k in sorted(self._recent, key=lambda k: max(self._recent[k] or [0]))[:500]:
+                del self._recent[k]
         # One pending request per hostname: a newer one replaces the older.
         for pid, p in list(self.pending.items()):
             if p["hostname"].lower() == hostname.lower():
                 del self.pending[pid]
+        mine = sorted((p for p in self.pending.values() if str(p.get("source_ip") or "?") == src), key=lambda p: p["requested_at"])
+        for p in mine[:max(0, len(mine) - PER_SOURCE_PENDING + 1)]:
+            del self.pending[p["id"]]
         if len(self.pending) >= MAX_PENDING:
-            oldest = min(self.pending.values(), key=lambda p: p["requested_at"])
-            del self.pending[oldest["id"]]
+            by_src: dict[str, list] = {}
+            for p in self.pending.values():
+                by_src.setdefault(str(p.get("source_ip") or "?"), []).append(p)
+            busiest = max(by_src.values(), key=len)
+            del self.pending[min(busiest, key=lambda p: p["requested_at"])["id"]]
         replaces = next((a["id"] for a in self.agents.values()
                          if a["hostname"].lower() == hostname.lower()), None)
         rec = {"id": secrets.token_hex(6), "token_hash": token_hash(token), "requested_at": _now(),
@@ -143,6 +165,7 @@ class AgentStore:
                      **{k: p.get(k) for k in ("hostname", "fqdn", "ips", "os", "agent_version", "os_family", "agent_kind")},
                      "token_hash": p["token_hash"]}
         agent["approved_at"] = _now()
+        agent["enrolled_from"] = p.get("source_ip")  # until its first report says where it sends from
         self.agents[agent["id"]] = agent
         self.save()
         return agent

@@ -256,6 +256,11 @@ def _whole(v, lo: int, hi: int) -> int:
     return n
 
 
+# Set only in Home Assistant's Configuration tab, never from Rollcall's own Settings: turning it off from inside the
+# dashboard would defeat it (it's what stops anything but Home Assistant from opening the dashboard).
+HA_ONLY = {"ingress_only"}
+
+
 def clean(changes: dict) -> tuple[dict, dict]:
     """Check the dialog's changes against the schema. Returns (clean values, {key: problem})."""
     out, errors = {}, {}

@@ -108,8 +108,8 @@ AGENT_REPORTS = Path(os.environ.get("PM_AGENT_REPORTS", str(DB_PATH.parent / "ag
 DISCOVERY_PATH = Path(os.environ.get("PM_DISCOVERY", str(DB_PATH.parent / "discovery.json")))  # the last network scan
 ICONS_DIR = Path(os.environ.get("PM_ICONS", str(DB_PATH.parent / "icons")))  # uploaded device pictures
 ICON_TYPES = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "svg": "image/svg+xml"}
-ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)$")
-ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))$")
+ICON_FILE = re.compile(r"^[a-z0-9]{12}\.(png|jpg|webp|svg)\Z")
+ICON_REF = re.compile(r"^(b:[a-z0-9-]{1,24}|u:[a-z0-9]{12}\.(png|jpg|webp|svg))\Z")
 AGENT_PORT = int(os.environ.get("PM_AGENT_PORT", "8100"))
 AGENT_HTTPS_PORT = int(os.environ.get("PM_AGENT_HTTPS_PORT", "8101"))  # built-in HTTPS for agents (agenttls.py)
 AGENT_FRESH = int(os.environ.get("PM_AGENT_FRESH", "600"))  # a report this recent counts as "up" (two agent runs)
@@ -176,6 +176,7 @@ DEFAULTS = {
     "persistent_notification": True,
     "notify_recovery": True,
     "log_level": "info",
+    "ingress_only": True,
     "maintenance_minutes": 30,
     "notification_url": "",
     "email_send": "off",
@@ -1454,7 +1455,8 @@ class HomeAssistant:
             current = json.loads(OPTIONS_PATH.read_text())
         except (OSError, ValueError):
             current = {}
-        merged = {**current, **{k: v for k, v in saved.items() if k in DEFAULTS and k != "hosts"}}
+        # (not "Dashboard only through Home Assistant": an export from an install with it off mustn't turn it off here)
+        merged = {**current, **{k: v for k, v in saved.items() if k in DEFAULTS and k != "hosts" and k not in settingslib.HA_ONLY}}
         merged["hosts"] = current.get("hosts") or []
         try:
             async with self.session.post(f"{SUPERVISOR_API}/addons/self/options", json={"options": merged},
@@ -3445,6 +3447,15 @@ class Monitor:
         out["ready"] = bool(out["https"]) and not out["http"] and not out["unknown"] and not out["no_tls"]
         return out
 
+    def sig_serial(self, servers, route, tls) -> int:
+        """A number that goes up whenever what agents are told (addresses, route, HTTPS) changes, and never down: the
+        time of the change, kept with the HTTPS settings (so in backups)."""
+        fp = hashlib.sha256(json.dumps([servers, route, tls], sort_keys=True, default=str).encode()).hexdigest()
+        st = AGENT_TLS.state
+        if st.get("serial_fp") != fp or not st.get("serial"):
+            AGENT_TLS.set(serial=max(int(st.get("serial") or 0) + 1, int(time.time())), serial_fp=fp)
+        return int(AGENT_TLS.state["serial"])
+
     def tls_reply(self, agent: dict) -> dict:
         """For the reply to a report: the HTTPS port and key, signed with the update key agents already trust, so
         it can't be changed on the way; the router agent (which can't check either) gets the certificate itself."""
@@ -3581,10 +3592,19 @@ class Monitor:
     async def agent_pending_notice(self, rec: dict) -> None:
         log.info("Agent on %s (%s) is asking to join; approve it under Agents",
                  rec["hostname"], ", ".join(rec.get("ips") or []) or rec.get("source_ip"))
-        what = "replace its existing agent" if rec.get("replaces") else "join"
-        await self.persist(f"ping_monitor_pending_{rec['id']}", "Rollcall: agent waiting for approval",
-                           f"{rec['hostname']} ({', '.join(rec.get('ips') or []) or rec.get('source_ip')}) "
-                           f"wants to {what}. Approve or reject it in Rollcall, under Agents.")
+        await self.pending_notice()
+
+    async def pending_notice(self) -> None:
+        """One notification for everything waiting, not one each (a flood of requests was a flood of them: review F6)."""
+        waiting = sorted((self.agents.pending.values() if self.agents else []), key=lambda p: p["requested_at"])
+        if not waiting:
+            await self.dismiss("ping_monitor_pending")
+            return
+        names = ", ".join(f"{p['hostname']}{' (replacing its agent)' if p.get('replaces') else ''}" for p in waiting[:8])
+        more = f" and {len(waiting) - 8} more" if len(waiting) > 8 else ""
+        await self.persist("ping_monitor_pending",
+                           f"Rollcall: {len(waiting)} agent{'s' if len(waiting) != 1 else ''} waiting for approval",
+                           f"{names}{more}. Approve or reject them in Rollcall, under Agents.")
 
     def same_computer(self, h: Host) -> Host | None:
         """For an entry without an agent: another entry whose agent is on the same device
@@ -3643,14 +3663,16 @@ class Monitor:
 
     async def approve_agent(self, pid: str) -> dict:
         agent = self.agents.approve(pid)
-        await self.dismiss(f"ping_monitor_pending_{pid}")
+        await self.dismiss(f"ping_monitor_pending_{pid}")  # from before 1.99
+        await self.pending_notice()
         h = await self._link(agent, create=True)
         log.info("Approved the agent on %s%s", agent["hostname"], f" (dashboard: {h.name})" if h else "")
         return agent
 
     async def reject_agent(self, pid: str) -> dict:
         rec = self.agents.reject(pid)
-        await self.dismiss(f"ping_monitor_pending_{pid}")
+        await self.dismiss(f"ping_monitor_pending_{pid}")  # from before 1.99
+        await self.pending_notice()
         log.info("Rejected the agent request from %s", rec["hostname"])
         return rec
 
@@ -4168,6 +4190,9 @@ class Monitor:
         latest = _linux_script_version() if os_name == "linux" else _script_version()
         running = report.get("agent_version") or agent.get("agent_version")
         now = set(self.agent_settings.get("update_now") or [])
+        legacy = _vt(running or "0") < _vt("1.0.21" if os_name == "linux" else "1.0.53")
+        if legacy and agent.get("via") == "http" and time.time() > float(AGENT_TLS.state.get("legacy_until") or 0):
+            return None  # it would be refused over plain HTTP (review F5): not offered until an admin allows it
         if not latest or not running or _vt(latest) <= _vt(running):
             if agent["id"] in now:  # done
                 now.discard(agent["id"])
@@ -5983,23 +6008,36 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if size + len(data) > 1024 ** 3:
             path.unlink(missing_ok=True)
             return web.json_response({"error": "The export is too large"}, status=400)
-        with open(path, "ab") as f:
-            f.write(data)
+        def append():
+            with open(path, "ab") as f:
+                f.write(data)
+        await asyncio.to_thread(append)  # off the event loop (review F14)
         return web.json_response({"size": size + len(data)})
 
     async def import_data(req):
+        # The export is read from a file, never whole into memory (review F11): a Raspberry Pi has little to spare
         if req.query.get("upload"):
             path = _upload_path(req)
             if not path.exists():
                 return web.json_response({"error": "Upload not found; try again"}, status=400)
-            data = await asyncio.to_thread(path.read_bytes)
-            path.unlink(missing_ok=True)
         else:
-            data = await req.read()
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            path = upload_dir / f"direct-{secrets.token_hex(8)}.zip"
+            written = 0
+            with open(path, "wb") as f:
+                async for piece in req.content.iter_chunked(1024 * 1024):
+                    written += len(piece)
+                    if written > 1024 ** 3:
+                        f.close()
+                        path.unlink(missing_ok=True)
+                        return web.json_response({"error": "The export is too large"}, status=400)
+                    await asyncio.to_thread(f.write, piece)
         try:
-            manifest = await asyncio.to_thread(stage_restore, data)
+            manifest = await asyncio.to_thread(stage_restore, path)
         except ValueError as err:
             return web.json_response({"error": str(err)}, status=400)
+        finally:
+            path.unlink(missing_ok=True)
         log.info("Import staged (%s hosts, %s agents, exported from version %s); restarting to apply it",
                  manifest.get("hosts"), manifest.get("agents"), manifest.get("addon_version"))
         options_note = None
@@ -6291,6 +6329,21 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return web.json_response({"ok": True})
 
     # -- Agents (admin) ---------------------------------------------------
+    def _legacy_agent(a) -> bool:
+        if a.get("agent_kind") == "sh":
+            return False
+        v = a.get("agent_version")
+        return bool(v) and _vt(v) < _vt("1.0.21" if a.get("os_family") == "linux" else "1.0.53")
+
+    async def agents_legacy(req):
+        """Allow old agents' updates (checked with their token) over plain HTTP for a week, or stop allowing it."""
+        body = await _json_body(req)
+        on = bool(body.get("allow"))
+        AGENT_TLS.set(legacy_until=time.time() + 7 * 86400 if on else 0)
+        user = await access.who(req)
+        log.info("Old agents' updates over plain HTTP %s by %s", "allowed for a week" if on else "stopped", user.get("display") or "an admin")
+        return web.json_response({"legacy_until": AGENT_TLS.state.get("legacy_until") or 0})
+
     def _agent_row(a):
         h = monitor.hosts.get(a.get("host_key") or "")
         return {"id": a["id"], "hostname": a["hostname"], "fqdn": a.get("fqdn"), "ips": a.get("ips") or [],
@@ -6300,7 +6353,9 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 "sent_to": a.get("sent_to"), "source_ip": a.get("source_ip"), "forwarded_for": a.get("forwarded_for"),
                 "host_key": h.key if h else None, "host_name": h.name if h else None,
                 **monitor.agent_side(a),
-                "update_queued": a["id"] in (monitor.agent_settings.get("update_now") or [])}
+                "update_queued": a["id"] in (monitor.agent_settings.get("update_now") or []),
+                # too old to check updates with Rollcall's key (review F5): only updated over HTTPS, or when allowed
+                "legacy_update": _legacy_agent(a)}
 
     async def agents_list(_req):
         st = monitor.agents
@@ -6311,9 +6366,14 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             "agents": sorted((_agent_row(a) for a in st.agents.values()), key=lambda r: r["hostname"]),
             "pending": sorted(({k: p.get(k) for k in ("id", "hostname", "fqdn", "ips", "os", "agent_version",
                                                        "requested_at", "source_ip", "os_family")}
-                               | {"replaces": bool(p.get("replaces"))} for p in st.pending.values()),
+                               | {"replaces": bool(p.get("replaces")),
+                                  # where the agent it would replace last reported from, to compare with the sender
+                                  "replaces_from": (st.agents.get(p.get("replaces")) or {}).get("source_ip")
+                                  or (st.agents.get(p.get("replaces")) or {}).get("enrolled_from")}
+                               for p in st.pending.values()),
                               key=lambda r: r["requested_at"]),
             "latest_version": _script_version(),
+            "legacy_until": float(AGENT_TLS.state.get("legacy_until") or 0),
             "latest_linux_version": _linux_script_version(), "latest_sh_version": _sh_script_version(),
             "auto_update": {k: bool((monitor.agent_settings.get("auto_update") or {}).get(k)) for k in ("windows", "linux")},
             "rollout": {k: v for k, v in (monitor.agent_settings.get("rollout") or {}).items()
@@ -6431,11 +6491,23 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         a = await monitor.approve_agent(pid)
         return web.json_response({"approved": a["id"]})
 
-    async def agents_approve_all(_req):
-        ids = list(monitor.agents.pending)
+    async def agents_approve_all(req):
+        """Approve the requests the admin was shown (the page sends their ids), not whatever is pending now: one
+        that arrived after the page loaded, or one that would replace an existing agent, needs its own Approve
+        (review F3)."""
+        try:
+            body = await req.json()
+        except (ValueError, UnicodeDecodeError):
+            body = None
+        seen = body.get("ids") if isinstance(body, dict) else None
+        if not isinstance(seen, list) or not all(isinstance(x, str) for x in seen):
+            return web.json_response({"error": "Send the ids of the requests to approve"}, status=400)
+        ids = [pid for pid in dict.fromkeys(seen) if pid in monitor.agents.pending
+               and not monitor.agents.pending[pid].get("replaces")]
         for pid in ids:
             await monitor.approve_agent(pid)
-        return web.json_response({"approved": len(ids)})
+        skipped = len(seen) - len(ids)
+        return web.json_response({"approved": len(ids), "skipped": skipped})
 
     async def agents_reject(req):
         pid = req.match_info["pid"]
@@ -6544,6 +6616,11 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         h = monitor.hosts.get(req.match_info["key"])
         if not h:
             raise web.HTTPNotFound()
+        # Open to every viewer, so at most once every 5 seconds per device: pressing it repeatedly (or a script)
+        # can't keep a device checking flat out (review F14)
+        if time.time() - getattr(h, "check_asked", 0) < 5:
+            return web.json_response({"queued": h.key, "already": True})
+        h.check_asked = time.time()
         h.next_due = 0
         h.snmp_rediscover = True     # someone wants it fresh: re-read the port names too (normally every 6 hours)
         return web.json_response({"queued": h.key})
@@ -7197,6 +7274,22 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         await monitor.delete_host(h)
         return web.json_response({"deleted": h.key})
 
+    # Only Home Assistant's ingress gateway (and Rollcall itself) may use the dashboard's port: who's viewing comes
+    # from a header the gateway sets, so anything else on Home Assistant's internal network could otherwise claim to
+    # be an admin (review F4). Off outside Home Assistant, and can be turned off in the add-on's Configuration tab.
+    ingress_from = {x.strip() for x in os.environ.get("PM_INGRESS_FROM", "172.30.32.2,127.0.0.1,::1").split(",") if x.strip()}
+    refused_from: set = set()
+
+    @web.middleware
+    async def ingress_only(req, handler):
+        if SUPERVISOR_TOKEN and monitor.opts.get("ingress_only", True) and req.remote not in ingress_from:
+            if req.remote not in refused_from and len(refused_from) < 50:
+                refused_from.add(req.remote)
+                log.warning("Refused a request to the dashboard from %s: only Home Assistant's ingress may use it "
+                            "(the add-on option 'Dashboard only through Home Assistant')", req.remote)
+            raise web.HTTPForbidden(text="Open Rollcall from Home Assistant")
+        return await handler(req)
+
     @web.middleware
     async def no_store(req, handler):
         resp = await handler(req)
@@ -7204,7 +7297,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    app = web.Application(middlewares=[no_store], client_max_size=512 * 1024 * 1024)  # imports
+    app = web.Application(middlewares=[ingress_only, no_store], client_max_size=512 * 1024 * 1024)  # imports
     app.router.add_get("/api/presets", presets)
     app.router.add_post("/api/hosts", editor_only(add_host))
     app.router.add_put("/api/hosts/{key}", editor_only(update_host))
@@ -7263,6 +7356,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/agent/disk", editor_only(agent_disk))
     app.router.add_post("/api/hosts/{key}/agent/resources", editor_only(agent_resources))
     app.router.add_post("/api/agents/tls", admin_only(agents_tls))
+    app.router.add_post("/api/agents/legacy-updates", admin_only(agents_legacy))
     app.router.add_get("/api/messages", admin_only(messages_list))
     app.router.add_post("/api/messages", admin_only(messages_send))
     app.router.add_post("/api/messages/included", admin_only(messages_included))
@@ -7393,7 +7487,8 @@ def save_views(views: list[dict]) -> None:
 # --------------------------------------------------------------------------
 BACKUP_FORMAT = "ping_monitor_backup"
 RESTORE_DIR = DB_PATH.parent / "restore_pending"
-REPORT_NAME = re.compile(r"^agent_reports/[0-9a-f]{6,32}\.json$")
+BODY_TOKEN_MAX = 512 * 1024  # a router report (token in the body) is a few KB; read before it's known who sent it
+REPORT_NAME = re.compile(r"^agent_reports/[0-9a-f]{6,32}\.json\Z")
 
 
 def backup_files() -> dict[str, Path]:
@@ -7402,7 +7497,8 @@ def backup_files() -> dict[str, Path]:
             # the key that signs agent updates: restored with everything else, agents keep trusting updates
             "update_key.pem": UPDATE_KEY_PATH,
             # built-in HTTPS: the same key, so agents keep trusting it after a restore
-            "agent_tls_key.pem": AGENT_TLS.key_path, "agent_tls_cert.pem": AGENT_TLS.cert_path, "agent_tls.json": AGENT_TLS.state_path}
+            "agent_tls_key.pem": AGENT_TLS.key_path, "agent_tls_cert.pem": AGENT_TLS.cert_path, "agent_tls.json": AGENT_TLS.state_path,
+            "agent_tls_ca.pem": AGENT_TLS.ca_path}
 
 
 def make_backup(version: str | None) -> bytes:
@@ -7448,10 +7544,14 @@ def make_backup(version: str | None) -> bytes:
     return buf.getvalue()
 
 
-def stage_restore(data: bytes) -> dict:
-    """Check an export and unpack it to be applied at the next start. Returns its manifest."""
+RESTORE_MAX = 1024 ** 3  # bytes actually unpacked, not what the zip says its files are
+
+
+def stage_restore(src) -> dict:
+    """Check an export (a file, or bytes) and unpack it to be applied at the next start. Returns its manifest.
+    Each file is copied out a piece at a time, counting what's really written (review F11)."""
     try:
-        z = zipfile.ZipFile(io.BytesIO(data))
+        z = zipfile.ZipFile(src if isinstance(src, (str, Path)) else io.BytesIO(src))
     except zipfile.BadZipFile:
         raise ValueError("That isn't an export file from this add-on (not a zip)")
     with z:
@@ -7478,10 +7578,18 @@ def stage_restore(data: bytes) -> dict:
             raise ValueError("agents.json in the export is damaged")
         shutil.rmtree(RESTORE_DIR, ignore_errors=True)
         RESTORE_DIR.mkdir(parents=True)
+        total = 0
         for n in names:
             target = RESTORE_DIR / n
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(z.read(n))
+            with z.open(n) as fin, open(target, "wb") as fout:
+                while piece := fin.read(1024 * 1024):
+                    total += len(piece)
+                    if total > RESTORE_MAX:
+                        fout.close()
+                        shutil.rmtree(RESTORE_DIR, ignore_errors=True)
+                        raise ValueError("The export is too large")
+                    fout.write(piece)
     if (RESTORE_DIR / "history.db").exists():
         try:
             con = sqlite3.connect(RESTORE_DIR / "history.db")
@@ -7563,6 +7671,9 @@ def build_agent_script(os_name: str, server: str, enrol_key: str, ignore_cert: b
         text = SH_AGENT_SCRIPT.read_text(encoding="utf-8")
         text = text.replace('SERVER="__PM_SERVER__"', f'SERVER="{server}"', 1)
         text = text.replace('ENROL_KEY="__PM_ENROL_KEY__"', f'ENROL_KEY="{enrol_key}"', 1)
+        ca = AGENT_TLS.cert_pem().strip() if AGENT_TLS.on else ""
+        if "BEGIN CERTIFICATE" in ca and "'" not in ca:  # the one certificate it trusts, built in (review F1)
+            text = text.replace("TLS_CA='__PM_TLS_CA__'", f"TLS_CA='{ca}'", 1)
         if ignore_cert:
             text = text.replace("IGNORE_CERT=0", "IGNORE_CERT=1", 1)
         return text.replace("\r\n", "\n").encode("utf-8")
@@ -7659,6 +7770,9 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         except ValueError as err:
             raise web.HTTPBadRequest(text=str(err))
         state, rec = store.request(info, token, req.remote)
+        if state == "limited":
+            log.warning("Agent enrolment from %s refused: too many new requests from that address this hour", req.remote)
+            return web.json_response({"error": "too many requests; try again later"}, status=429)
         if state == "approved":
             return web.json_response({"status": "approved"})
         if state == "rejected":
@@ -7672,7 +7786,19 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         body = None
         if not token:  # the OpenWrt agent sends its token in the report: uclient-fetch can't add headers
-            body = await read_json(req)
+            # Read before anyone's known, so kept to what a router report needs (a few KB), not the 4 MB other
+            # agents may send once they've been recognised by their header (review F12)
+            if (req.content_length or 0) > BODY_TOKEN_MAX:
+                return web.json_response({"error": "report too big"}, status=413)
+            raw = await req.content.read(BODY_TOKEN_MAX + 1)  # also when it's sent in chunks, with no length
+            if len(raw) > BODY_TOKEN_MAX:
+                return web.json_response({"error": "report too big"}, status=413)
+            try:
+                body = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                raise web.HTTPBadRequest(text="invalid JSON")
+            if not isinstance(body, dict):
+                raise web.HTTPBadRequest(text="expected an object")
             token = str(body.get("agent_token") or "")
         state, agent = store.lookup(token)
         if state == "pending":
@@ -7718,6 +7844,16 @@ def build_agent_app(monitor: Monitor) -> web.Application:
         if offer:
             resp["agent_update"] = offer
         resp.update(monitor.tls_reply(agent))  # Windows 1.0.54, Linux 1.0.22, router 1.0.3 on move to HTTPS
+        # The same, signed again with a serial that only goes up (Windows 1.0.58, Linux 1.0.23 on): an older signed
+        # reply replayed later (an old address list, or "HTTPS on" after it was turned off) is refused (review F7)
+        try:
+            serial = monitor.sig_serial(servers or [], route, resp.get("tls"))
+            resp["sig_serial"] = serial
+            resp["config_sig2"] = SIGNER.sign(updatesign.config_text(servers or [], route) + f"serial={serial}\n".encode())
+            if resp.get("tls"):
+                resp["tls_sig2"] = SIGNER.sign(agenttls.tls_text(int(resp["tls"]["port"]), resp["tls"]["pin"]) + f"serial={serial}\n".encode())
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't sign the agent addresses with a serial: %s", err)
         shown = monitor.messages_for(agent)
         if shown:
             resp["messages"] = shown  # Windows 1.0.54, Linux 1.0.22 on show them; each is signed
@@ -7751,6 +7887,13 @@ def build_agent_app(monitor: Monitor) -> web.Application:
                 log.warning("Couldn't sign the agent update: %s", err)
                 return web.json_response({"error": "no signing key"}, status=503)
             return web.json_response({"script": base64.b64encode(body).decode(), "signature": signature})
+        # Older agents (Windows before 1.0.53, Linux before 1.0.21) check an update with a key made from their token,
+        # which they send with every report: over plain HTTP, someone on the path could make their own update (review
+        # F5). Only over HTTPS, or for a week when an admin allows it to move old agents across.
+        if _arrived_via(req) == "http" and time.time() > float(AGENT_TLS.state.get("legacy_until") or 0):
+            log.warning("Didn't send %s an update the old way (checked with its token) over plain HTTP: allow it for "
+                        "a week under Agents, or reinstall that agent", agent.get("hostname"))
+            return web.json_response({"error": "updates for this agent version need HTTPS, or an admin's go-ahead"}, status=403)
         key = bytes.fromhex(agentlib.token_hash(token))
         sig = hmac.new(key, body, hashlib.sha256).hexdigest()
         return web.Response(body=body, content_type="application/octet-stream", headers={"X-Rollcall-Signature": sig})

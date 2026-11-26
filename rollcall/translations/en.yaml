@@ -101,6 +101,12 @@ configuration:
   m365_client_secret:
     name: "Microsoft 365 client secret"
     description: "The app registration's client secret. Stored with the add-on's settings and never shown again."
+  ingress_only:
+    name: Dashboard only through Home Assistant
+    description: >-
+      Only Home Assistant (its sidebar and ingress) can open Rollcall's dashboard, not other add-ons or containers on
+      Home Assistant's internal network. Turn off only if the dashboard stops opening after an update, and say so on
+      GitHub.
   log_level:
     name: Log level
     description: How much the add-on writes to its Log tab. "info" is right for everyday use; "debug" helps when troubleshooting.

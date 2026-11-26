@@ -5103,11 +5103,14 @@ function renderAgents() {
       trouble: "<code>sh /etc/rollcall/agent.sh --report</code> prints what it would send. Log: <code>/tmp/rollcall-agent.log</code> (in memory: cleared on restart). For HTTPS to Home Assistant the router needs <code>ca-bundle</code> and an SSL library for <code>uclient-fetch</code>, which recent OpenWrt includes."
     })}</div>`);
   html += sect(`Waiting for approval (${a.pending.length})`, a.pending.length ? tbl(["Server", "Address", "Operating system", "Asked", ""], a.pending.map(p =>
-    `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
+    `<tr><td><b>${esc(p.hostname)}</b>${p.replaces ? `<br><small class="old">Replaces its existing agent${p.replaces_from ? `, which last reported from ${esc(p.replaces_from)}${p.replaces_from !== p.source_ip ? ": <b>not the address this came from</b>" : ""}` : ""}</small>` : ""}<br><small class="muted">${esc(p.fqdn || "")}</small></td>
       <td>${esc((p.ips || []).join(", "))}<br><small class="muted">sent from ${esc(p.source_ip || "?")}</small></td><td>${esc(p.os || "")}</td><td>${ago(p.requested_at, now)}</td>
       <td><div class="actions"><button type="button" class="primary" data-approve="${esc(p.id)}">Approve</button><button type="button" class="danger" data-reject="${esc(p.id)}">Reject</button></div></td></tr>`)) +
-    (a.pending.length > 1 ? `<p><button type="button" id="agApproveAll">Approve all ${a.pending.length}</button></p>` : "")
+    (a.pending.filter(p => !p.replaces).length > 1 ? `<p><button type="button" id="agApproveAll">Approve all ${a.pending.filter(p => !p.replaces).length} new servers</button>${a.pending.some(p => p.replaces) ? ` <small class="muted">Requests that replace an existing agent need approving one at a time.</small>` : ""}</p>` : "")
     : `<p class="empty-note">None. Servers appear here within 5 minutes of the agent being installed. Check that the address and sender IP look right before approving.</p>`);
+  // Agents too old to check an update with Rollcall's key: only updated over HTTPS, or for a week when allowed here
+  const legacy = a.agents.filter(x => x.legacy_update), legacyOn = (a.legacy_until || 0) * 1000 > Date.now();
+  if (legacy.length) html += `<p class="hint warn" style="margin:0 0 8px">⚠ ${legacy.length} agent${legacy.length > 1 ? "s are" : " is"} too old to check an update with Rollcall's own key (${esc(nameList(legacy.map(x => x.hostname)))}). Their updates are checked with a key made from their token, which crosses the network with each report, so over plain HTTP they're only sent when you allow it. ${legacyOn ? `Allowed until ${new Date(a.legacy_until * 1000).toLocaleString()}. <button type="button" class="mini" data-legacy="0">Stop</button>` : `Reinstall them, or <button type="button" class="mini" data-legacy="1">allow their updates for a week</button> (once updated, they use Rollcall's key).`}</p>`;
   const drift = a.agents.filter(x => x.via && x.expected && x.via !== x.expected);
   if (drift.length) html += `<p class="hint warn" style="margin:0 0 8px">⚠ ${drift.length} agent${drift.length > 1 ? "s" : ""} reported through the ${drift.length === drift.filter(x => x.via === "outside").length ? "external" : "other"} address, though ${drift.length > 1 ? "their" : "its"} own address says otherwise (marked ⚠ below). Older agents keep using the address that worked last; they choose by network once updated.</p>`;
   html += sect(`Approved (${a.agents.length})`, a.agents.length ? tbl(["Server", "On dashboard as", "Last report", "Agent", "Roles", ""], a.agents.map(x => {
@@ -5201,12 +5204,22 @@ document.getElementById("agBody").addEventListener("click", async e => {
     } finally { t.disabled = false; }
   } else if (t.dataset.updatenow) {
     await post("api/agents/" + encodeURIComponent(t.dataset.updatenow) + "/update-now");
+  } else if (t.dataset.legacy) {
+    const r = await fetch("api/agents/legacy-updates", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({allow: t.dataset.legacy === "1"})});
+    if (!r.ok) alert("That didn't work (" + r.status + ")");
+    await loadAgents(); load();
   } else if (t.dataset.approve) {
     await post("api/agents/approve/" + encodeURIComponent(t.dataset.approve));
   } else if (t.dataset.reject) {
     if (confirm("Reject this request? That copy of the agent won't be able to ask again unless it's reinstalled.")) await post("api/agents/reject/" + encodeURIComponent(t.dataset.reject));
   } else if (t.id === "agApproveAll") {
-    if (confirm(`Approve all ${agInfo.pending.length} servers?`)) await post("api/agents/approve-all");
+    // Only the new servers shown here; replacements, and anything that arrived since, need their own Approve
+    const ids = agInfo.pending.filter(p => !p.replaces).map(p => p.id);
+    if (confirm(`Approve these ${ids.length} new servers?\n\n${agInfo.pending.filter(p => !p.replaces).map(p => `${p.hostname} (from ${p.source_ip || "?"})`).join("\n")}`)) {
+      const r = await fetch("api/agents/approve-all", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids})});
+      if (!r.ok) alert("That didn't work (" + r.status + ")");
+      await loadAgents(); load();
+    }
   } else if (t.dataset.revoke) {
     if (confirm(`Revoke the agent on ${t.dataset.name}? Its agent checks disappear from the dashboard. To add it back later, uninstall and reinstall the agent on that server.`))
       await post("api/agents/" + encodeURIComponent(t.dataset.revoke), "DELETE");

@@ -50,7 +50,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-AGENT_VERSION = "1.0.22"
+AGENT_VERSION = "1.0.23"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 # The public half of Rollcall's own signing key, built in when the script is downloaded: agent updates and the
@@ -1384,10 +1384,27 @@ def secret_report(state):
 # --------------------------------------------------------------------------
 # The agent's token, settings and script must stay root's alone: anyone who could change the script
 # could run commands as root. Each run puts back any change and tells Rollcall what it found.
+def write_private(path, data):
+    """Write a file only root can read, with the mode set as it's created (not chmod afterwards), and never through
+    a symlink. Copies of the script hold the enrolment key (review F2)."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    try:
+        if os.path.islink(path):
+            os.remove(path)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o700)
+    with os.fdopen(fd, "wb") as f:
+        os.fchmod(f.fileno(), 0o700)  # an existing file keeps its old mode otherwise
+        f.write(data)
+
+
 def check_own_permissions(state):
     if os.geteuid() != 0:
         return []
     want = [(DATA_DIR, 0o700, True), (CONFIG_PATH, 0o600, True), (INSTALL_PATH, 0o700, True),
+            (INSTALL_PATH + ".old", 0o700, True), (INSTALL_PATH + ".new", 0o700, True),  # copies hold the key too
             (os.path.dirname(INSTALL_PATH), 0o755, False), (os.path.dirname(CONFIG_PATH), 0o755, False),
             (os.path.join(UNIT_DIR, UNIT + ".service"), 0o644, False), (os.path.join(UNIT_DIR, UNIT + ".timer"), 0o644, False)]
     try:
@@ -1412,6 +1429,9 @@ def check_own_permissions(state):
             except OSError:
                 pass
         cur = stat.S_IMODE(st.st_mode)
+        if stat.S_ISLNK(st.st_mode):  # chmod would follow it to wherever it points: report, don't touch (review F14)
+            found.append("%s was a symbolic link" % name)
+            continue
         if mode is not None and ((exact and cur != mode) or (not exact and cur & 0o022)):
             new = mode if exact else cur & ~0o022
             found.append("%s could be %s by others (%s)" % (name, "changed" if cur & 0o022 else "read", oct(cur)[2:]))
@@ -1721,9 +1741,9 @@ def self_update(offer, token, server, ignore):
         raise RuntimeError("the update is not the version offered, so it was not installed")
     compile(text, INSTALL_PATH, "exec")  # raises SyntaxError if it's broken
     tmp = INSTALL_PATH + ".new"
-    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700), "w") as f:
-        f.write(text)
-    shutil.copyfile(INSTALL_PATH, INSTALL_PATH + ".old")
+    write_private(tmp, text)
+    with open(INSTALL_PATH, "rb") as f:
+        write_private(INSTALL_PATH + ".old", f.read())  # root only, like the script itself (review F2)
     os.replace(tmp, INSTALL_PATH)
     log("Updated the agent from %s to %s; the new version runs from the next report" % (AGENT_VERSION, version))
 
@@ -1796,14 +1816,34 @@ def agent_run(conf, report_only=False):
         state["last_server"] = ACTIVE["server"]
     # New addresses only with Rollcall's signature: a reply changed on the way can't send this agent elsewhere.
     # Without one, it carries on with the addresses it has.
-    signed = bool(body) and rollcall_signed(config_text(body), body.get("config_sig"))
+    # With a serial (Rollcall 1.99 on): signed with a number that never goes down, so an older signed reply replayed
+    # later is refused. Once this agent has had one, it needs one every time (review F7).
+    serial = (body or {}).get("sig_serial")
+    last = int(state.get("sig_serial") or 0)
+    with_serial = isinstance(serial, int) and not isinstance(serial, bool) and bool((body or {}).get("config_sig2"))
+    tail = ("serial=%d\n" % serial).encode() if with_serial else b""
+    if with_serial:
+        signed = rollcall_signed(config_text(body) + tail, body.get("config_sig2"))
+        if signed and serial < last:
+            log("WARN Rollcall's reply was signed earlier than one this agent already had (an old reply sent again?); ignored")
+            signed, with_serial = False, False
+        elif signed:
+            state["sig_serial"] = serial
+    elif last:
+        signed = False
+        if body and (body.get("servers") or body.get("route") or body.get("tls") or body.get("config_sig")):
+            log("WARN Rollcall's reply had no serial, though earlier ones did; ignored its addresses and HTTPS details")
+    else:
+        signed = bool(body) and rollcall_signed(config_text(body), body.get("config_sig"))
     if body and not signed and (body.get("servers") or body.get("route")):
         log("WARN Rollcall's reply had addresses without a good signature; kept the ones this agent has")
     # Rollcall's own HTTPS: the port and key, signed with the update key (so not changeable on the way)
     tls = (body or {}).get("tls")
-    if isinstance(tls, dict):
+    if isinstance(tls, dict) and (with_serial or not last):
         tp, tk = int(tls.get("port") or 0), str(tls.get("pin") or "")
-        if tp > 0 and tk and rollcall_signed(("rollcall-agent-tls/1\nport=%d\npin=%s\n" % (tp, tk)).encode(), body.get("tls_sig")):
+        ttext = ("rollcall-agent-tls/1\nport=%d\npin=%s\n" % (tp, tk)).encode()
+        tls_ok = rollcall_signed(ttext + tail, body.get("tls_sig2")) if with_serial else rollcall_signed(ttext, body.get("tls_sig"))
+        if tp > 0 and tk and tls_ok:
             old = state.get("tls") or {}
             if old.get("pin") != tk or int(old.get("port") or 0) != tp or old.get("off"):
                 log("Rollcall's HTTPS is on: reports go to port %d from the next run, to Rollcall's own key only" % tp)
@@ -1895,7 +1935,8 @@ def install(args):
     if installed and newer(installed.group(1), AGENT_VERSION):
         log("Kept the installed agent %s (newer than this copy, %s)" % (installed.group(1), AGENT_VERSION))
     elif src != os.path.abspath(INSTALL_PATH):
-        shutil.copyfile(src, INSTALL_PATH)
+        with open(src, "rb") as f:
+            write_private(INSTALL_PATH, f.read())  # root only from the moment it exists (review F2)
     os.chmod(INSTALL_PATH, 0o700)
     conf = load_json(CONFIG_PATH, {})
     for k in ("server", "enrol_key", "immich_url", "immich_api_key"):
@@ -1928,7 +1969,8 @@ def uninstall():
         raise SystemExit("Run --uninstall as root (sudo).")
     if not PREFIX:
         run(["systemctl", "disable", "--now", UNIT + ".timer"])
-    for p in (os.path.join(UNIT_DIR, UNIT + ".service"), os.path.join(UNIT_DIR, UNIT + ".timer"), INSTALL_PATH, CONFIG_PATH):
+    for p in (os.path.join(UNIT_DIR, UNIT + ".service"), os.path.join(UNIT_DIR, UNIT + ".timer"), INSTALL_PATH, CONFIG_PATH,
+              INSTALL_PATH + ".old", INSTALL_PATH + ".new"):
         try:
             os.remove(p)
         except FileNotFoundError:
@@ -1946,13 +1988,21 @@ def main():
     ap.add_argument("--report", action="store_true", help="print the report without sending it")
     ap.add_argument("--interval", type=int, default=5, help="minutes between reports (default 5)")
     ap.add_argument("--server", help="add-on address, e.g. http://192.168.1.5:8100")
-    ap.add_argument("--enrol-key", dest="enrol_key")
+    ap.add_argument("--enrol-key", dest="enrol_key", help='or "-" to read it from standard input, or set RC_ENROL_KEY')
     ap.add_argument("--immich-url", dest="immich_url", help="Immich address (default: found from its container)")
-    ap.add_argument("--immich-api-key", dest="immich_api_key", help="admin API key for job queues and statistics")
+    ap.add_argument("--immich-api-key", dest="immich_api_key",
+                    help='admin API key for job queues and statistics ("-" reads it from standard input, or set RC_IMMICH_API_KEY)')
     ap.add_argument("--secret-test", dest="secret_test", metavar="PATH",
                     help="scan PATH for passwords left in files and print what would be reported (nothing is sent)")
     ap.add_argument("--ignore-cert", dest="ignore_cert", action="store_true", help="accept a self-signed HTTPS certificate")
     args = ap.parse_args()
+    # Keys given on the command line show in the process list while it runs (review F14): they can also come from
+    # RC_ENROL_KEY / RC_IMMICH_API_KEY, or "-" to read them from standard input
+    for k, env in (("enrol_key", "RC_ENROL_KEY"), ("immich_api_key", "RC_IMMICH_API_KEY")):
+        v = getattr(args, k)
+        if v == "-":
+            v = sys.stdin.readline().strip()
+        setattr(args, k, v or os.environ.get(env) or None)
     try:
         if args.uninstall:
             return uninstall()
