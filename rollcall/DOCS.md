@@ -27,13 +27,13 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 1. [Quick start](#quick-start)
 2. [Using the dashboard](#using-the-dashboard): Overview, tabs, Details, adding devices, discovering devices, icons
 3. [Checks](#checks): how status works, presets, custom checks, certificates, SIP, other addresses, Home Assistant sensors
-4. [Watching devices](#watching-devices): SNMP, syslog, HPE iLO, Jellyfin, Plex, Starlink, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
+4. [Watching devices](#watching-devices): SNMP (Cisco and Juniper too), syslog, HPE iLO, VMware, OPNsense, Jellyfin, Plex, Starlink, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
 5. [Windows agent](#windows-agent)
-6. [Linux agent](#linux-agent) and [OpenWrt agent](#openwrt-agent)
-7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux
+6. [Linux agent](#linux-agent) (with Proxmox), [OpenWrt agent](#openwrt-agent) and [pfSense, OPNsense and FreeBSD agent](#pfsense-opnsense-and-freebsd-agent)
+7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux, and [offline use](#offline-use)
 8. [Agent addresses and updates](#agent-addresses-and-updates): HTTPS, updates, messages to users' screens
 9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
-10. [Administration](#administration): settings, who can change things, the database, export and import, hints for errors, security
+10. [Administration](#administration): settings, what's new, who can change things, the database, export and import, hints for errors, security
 11. [Reference](#reference): every option, ports, sensors and events, files
 12. [Troubleshooting](#troubleshooting)
 
@@ -517,6 +517,19 @@ Problems go red, and notify, only if they're still there at the next check, so a
 
 Communities and v3 passwords aren't shown on the dashboard; leaving them blank when editing keeps the saved ones. They are included in exports, so keep export files safe.
 
+#### Cisco and Juniper
+
+Any switch or router gets the standard SNMP readings (ports, traffic, errors, PoE). Cisco and Juniper kit, recognised by its SNMP object ID, also gets what its own MIBs say about the box, in a **Cisco** or **Juniper** section of the SNMP tab:
+
+- **Cisco:** CPU (1 and 5 minutes) and memory pools; fans, power supplies and temperatures (CISCO-ENVMON, or ENTITY-SENSOR on Nexus and newer IOS XE); a stack's members, their roles and whether the stack ring is redundant; whether the running configuration has changed since it was saved; and an ASA's failover state.
+- **Juniper:** CPU, memory and temperature for each component (routing engines, FPCs), routing engine redundancy, the chassis's yellow and red alarms, and its parts (FRUs).
+- **Both:** BGP and OSPF neighbours and their state.
+- **Red:** a fan, power supply or temperature critical or shut down, a stack member not ready, an ASA pair with no active unit, a Juniper component down, or a red chassis alarm. **Amber:** a warning from any of those, a stack ring that isn't redundant, unsaved configuration changes, a failover unit in another state, a yellow alarm, a part (FRU) with a problem, a BGP neighbour that isn't established, or CPU or memory over 90%.
+- Problems can be acknowledged or ignored like other SNMP problems, and readings added as chips.
+- Cisco's `%LINK`, `%LINEPROTO` and `%SYS` log messages get hints (see [Syslog](#syslog)).
+
+This was built from Cisco's and Juniper's MIBs and tested against a stand-in, not real kit. If something reads wrongly, `snmpwalk` output from the device (with names and addresses blanked) on a GitHub issue helps.
+
 ### Syslog
 
 Rollcall receives syslog on **UDP port 514** of the Home Assistant machine. You can change or turn off the port under the add-on's **Configuration → Network**.
@@ -587,6 +600,43 @@ For HPE servers with **iLO 3** or **iLO 4**, Rollcall can log in to the iLO and 
 - **Acknowledge** and **Ignore** work as for SNMP: acknowledged, a problem stops counting while it's there and no worse; ignored, it never alerts on that server.
 - If the iLO turns the user name or password down, the check goes amber and Rollcall waits 30 minutes before trying again, so the iLO's log doesn't fill with failed logins.
 - iLO 2 and earlier, and iLO 5 and later, aren't supported by this check. The `idrac` preset (or `ilo`) still checks that any management controller's web page answers.
+
+### VMware
+
+ESXi hosts, vCenter Server and the Aria appliances, read with a read-only account. Choose the **VMware ESXi / vCenter health** preset (or one of the **VMware Aria** ones) and enter the account under **Edit**.
+
+1. Make a user for Rollcall and give it the **Read-only** role: on ESXi under *Host → Actions → Permissions*; on vCenter under *Administration → Access Control → Global Permissions*, with **Propagate to children**.
+2. Add the device by the ESXi host's or vCenter's address, tick the preset, and enter the user (e.g. `rollcall@vsphere.local`) and password. Leave **Address** blank for `https://` on the device's address.
+
+Rollcall only reads, every 5 minutes, over HTTPS, and logs out each time. Whether it's an ESXi host or a vCenter is found from its answer.
+
+- **ESXi and vCenter** (the vSphere API): each host's connection, maintenance mode, power, uptime, CPU and memory use, hardware health sensors (temperatures, fans, power supplies, voltages and the overall state), memory, CPU and storage hardware status; each datastore's free space; VMs on, off and suspended (templates left out); clusters with HA and DRS on or off; and triggered alarms.
+- **vCenter 7.0 U2 and later** also have a REST API, from which Rollcall reads the appliance's own health (system, load, memory, storage, swap, database storage, software packages), its services, its file-based backup schedule and latest backups, and whether an update is waiting. Older vCenters, or an account that can't use it, just leave that part out.
+- **Aria Operations:** the node's status (online), the version, and how many critical and immediate alerts are active. **Aria Automation:** its `/health` page, the version, and that the account can log in. **Aria Operations for Logs:** the version and that the account can log in.
+- **The certificate** each one presents is checked for expiry, like the certificate check (`cert_warn_days`, `cert_crit_days`).
+
+| | Amber | Red (and alerts) |
+|---|---|---|
+| **Hosts** | A yellow sensor or hardware status | A host not responding or disconnected from vCenter; a red sensor or hardware status |
+| **Datastores** | Under 10% free | Under 5% free, or not accessible |
+| **Alarms** | A yellow alarm | A red alarm. Alarms acknowledged in vSphere don't count |
+| **vCenter appliance** | Health yellow or orange; a service set to start automatically that isn't running, or unhealthy | Health red; the latest file-based backup failed |
+| **Aria** | Critical alerts in Aria Operations | Aria Operations' node not online; Aria Automation's health page not answering |
+| **Certificate** | Expiring within `cert_warn_days` | Within `cert_crit_days`, or expired |
+
+Maintenance mode and a waiting update are shown, never alerted. **Ignore** on a problem's row in the **VMware** tab stops it counting on that device (e.g. a datastore of ISOs that's always nearly full); ignored ones are listed under the table with **Stop ignoring**. If the account is turned down the check goes amber and Rollcall waits 30 minutes before trying again, so it can't lock the account out. VMs, hosts in maintenance, alarms, datastores' free space, temperatures and fans, and the certificate's days left can be added as chips. vSAN's own health checks need VMware's separate vSAN API and aren't read; a vSAN datastore's free space is.
+
+The password is only ever sent to the address it was entered for, and isn't shown again. Built and tested against VMware's own simulator (vcsim) and VMware's documented answers: if something reads wrongly on yours, say so on GitHub.
+
+### OPNsense
+
+OPNsense can be read without an agent, through its own API (the **OPNsense health (API key, no agent)** preset). For pfSense, or to also see disks, interfaces and traffic, use the [pfSense, OPNsense and FreeBSD agent](#pfsense-opnsense-and-freebsd-agent) instead.
+
+1. In OPNsense, add a user for Rollcall (*System → Access → Users*) with only these privileges: **Lobby: Dashboard**, **System: Gateways** and **System: Firmware**, plus **Interfaces: Virtual IPs: Status**, **Status: IPsec** and **Status: OpenVPN** if you use them.
+2. Under that user, add an API key. OPNsense downloads a file with the key and its secret.
+3. Tick the preset on the device and enter the key and secret under **Edit**. Leave **Address** blank for `https://` on the device's address.
+
+Rollcall reads it at each check, only with GET requests. It's judged like the agent's report: a gateway down is red; packet loss or high delay, an IPsec tunnel or OpenVPN client down, a CARP address in INIT, or the state table over 90% full are amber; a CPU temperature from 85 °C is amber and from 95 °C red. An update waiting is shown, not alerted. A section the key isn't allowed to read is left out, not an error. The **OPNsense** tab shows uptime, memory, load, the version and updates, gateways, CARP, IPsec and OpenVPN. The key and secret are only ever sent to the address they were entered for, and aren't shown again.
 
 ### Jellyfin
 
@@ -733,10 +783,10 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 
 ![Manage → Agents: where agents report to, and the downloads](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/agents.png)
 
-1. In the dashboard, open **Manage → Agents** and download **PingMonitorAgent.ps1**. Check the address first: it's what your servers use to reach Home Assistant on port 8100 (use the IP if they can't resolve the name). The script has the address and the enrolment key built in.
+1. In the dashboard, open **Manage → Agents** and download **RollcallAgent.ps1**. Check the address first: it's what your servers use to reach Home Assistant on port 8100 (use the IP if they can't resolve the name). The script has the address and the enrolment key built in.
 2. Copy it to `\\your-domain\NETLOGON`, or any share the servers can read.
 3. Run it on the servers, by one of these:
-   - **Group Policy** for the servers' OU: *Computer Configuration → Policies → Windows Settings → Scripts → Startup*, script `powershell.exe`, parameters `-NoProfile -ExecutionPolicy Bypass -File \\your-domain\NETLOGON\PingMonitorAgent.ps1 -Install`.
+   - **Group Policy** for the servers' OU: *Computer Configuration → Policies → Windows Settings → Scripts → Startup*, script `powershell.exe`, parameters `-NoProfile -ExecutionPolicy Bypass -File \\your-domain\NETLOGON\RollcallAgent.ps1 -Install`.
    - **By hand:** run that command once as an administrator on a server to start straight away.
    - **MECM (Run Scripts):** *Software Library → Scripts → Create Script*, import the script and have it approved (by default an author can't approve their own). Right-click a device collection → **Run Script**, choose it, set **Action** to `Install` and leave the rest at their defaults. It runs as SYSTEM straight away. MECM warns about the switch parameters; that's expected, and it's why `Action` exists. If it fails with a signing error, your client settings' PowerShell execution policy is *All Signed*: sign the script, or use *Bypass* for that collection.
    - **The installer**, for devices looked after by people outside IT; see below.
@@ -747,7 +797,9 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 
    If the same device has two entries, e.g. one you added for ping and another the agent linked to, the one without the agent says **This looks like the same device as …** at the top of its details. **Merge into this entry** moves the agent onto it, with the other entry's checks, agent settings (ignores, filters, acknowledgements) and graphs, and removes the other entry. The entry you merge into keeps its name, address, history and Home Assistant sensors, and nothing re-alerts.
 
-**What `-Install` does:** copies the script to `C:\ProgramData\PingMonitor` and creates a scheduled task, **Ping Monitor Agent**, that runs every 5 minutes as SYSTEM. After its first report it adds a second task, **Ping Monitor Agent (start-up)**, that runs a minute after Windows starts, so a restart shows straight away. From agent 1.0.47 that start-up run waits up to 3 minutes for Rollcall to be reachable (DHCP, the domain network or a VPN can take longer than a minute), rather than giving up until the next 5-minute run. Running it again is safe, and is one way to update. The task keeps its old name so existing installs update in place.
+**What `-Install` does:** copies the script to `C:\ProgramData\Rollcall` and creates a scheduled task, **Rollcall Agent**, that runs every 5 minutes as SYSTEM. After its first report it adds a second task, **Rollcall Agent (start-up)**, that runs a minute after Windows starts, so a restart shows straight away. From agent 1.0.47 that start-up run waits up to 3 minutes for Rollcall to be reachable (DHCP, the domain network or a VPN can take longer than a minute), rather than giving up until the next 5-minute run. Running it again is safe, and is one way to update.
+
+**Agents installed before 1.0.60** used Rollcall's old name: `PingMonitorAgent.ps1` in `C:\ProgramData\PingMonitor`, task **Ping Monitor Agent**. At its first run as 1.0.60 or later, an agent in the old place copies itself, its token and its state to `C:\ProgramData\Rollcall` and creates the **Rollcall Agent** task. The old task stays as the fallback until the new one has reported; only then are the old task and folder removed. If the move fails, the old one carries on and its next report says why (it tries again a day later). Running the new script with `-Install` over an old install does the same. Nothing needs redeploying, but a Group Policy startup script can be pointed at `RollcallAgent.ps1` at your convenience; one still running the old file is harmless.
 
 | Switch | Does |
 |---|---|
@@ -755,7 +807,7 @@ One PowerShell script, the same on every server. Every 5 minutes it works out wh
 | `-Uninstall` (`-Action Uninstall`) | Removes it |
 | `-ShowReport` (`-Action Report`) | Prints what it would send, for troubleshooting |
 
-The agent logs to `C:\ProgramData\PingMonitor\agent.log`. To keep agents current without redeploying, see [Updating agents automatically](#updating-agents-automatically).
+The agent logs to `C:\ProgramData\Rollcall\agent.log`. To keep agents current without redeploying, see [Updating agents automatically](#updating-agents-automatically).
 
 #### Windows installer (.msi)
 
@@ -1002,7 +1054,7 @@ The agent (1.0.24 or later) lists the scheduled tasks outside Task Scheduler's *
 
 - **Amber** when a task's last run failed, or a timed task (daily, weekly, monthly, one-off) missed a run or is over an hour past its due time. The result code is explained where it's a common one, e.g. `0x1` (script error), `0x8007052E` (the account's password is wrong), `0x80070569` (the account isn't allowed to log on as a batch job).
 - **Runs missed while the computer was off don't count.** Windows counts those as missed too, so a server started in the morning would otherwise report every overnight run it slept through. Rollcall compares them with when the computer started: runs missed before then show as *Missed while off* and don't alert. A task that then still hasn't run a day after start-up (a week for weekly tasks) is amber again, and so is one that hasn't run for over a week because its runs always fall while the computer is off (Rollcall suggests ticking *Run task as soon as possible after a scheduled start is missed*).
-- **Rollcall's own agent task** (*Ping Monitor Agent*, every 5 minutes) isn't watched here: the agent's reports already show whether it runs.
+- **Rollcall's own agent task** (*Rollcall Agent*, every 5 minutes) isn't watched here: the agent's reports already show whether it runs.
 - **Not alerted on:** disabled tasks; tasks that are running; results that just mean "ready" or "hasn't run yet"; and other vendors' updaters that fail routinely (Edge, Google, OneDrive, Adobe, Mozilla, Intel, NVIDIA and similar), which show as *Not watched*.
 - **Servers only.** Windows 10/11 PCs list their tasks but don't alert, as they're full of vendor tasks.
 - It clears once the task next runs successfully. To leave one out, use **Ignore** on its row (`task:<name>`); to leave the check off a server, ignore the whole check (`task:tasks`).
@@ -1036,6 +1088,16 @@ The Security tab (admins only, agent 1.0.17 or later) lists every direct member 
 - Groups in the list (e.g. Domain Admins) are listed, not expanded into their members.
 - On a domain controller, this is the domain's built-in Administrators group.
 - Rollcall remembers the list. Anyone added after it first looked shows the date they appeared and is highlighted for 30 days. Additions and removals are listed under **Changes**, at the agent's next report. Additions also raise the usual 4732 security-event alert.
+
+### System file check
+
+An optional weekly `sfc /verifyonly` (agent 1.0.59 or later): Windows' own check that its system files are as they should be. It's read only, the `/verifyonly` form, which never repairs or changes anything.
+
+- **Turning it on:** `agent_sfc` chooses which devices run it (`off`, `servers`, `workstations` or `all`; off by default). Each device can also be turned on or off in its details, under **System files**, whatever the setting.
+- **When:** weekly, on `agent_sfc_day` at `agent_sfc_hour`, in each device's own time. A device that's off then runs it the next time it's on. **Run now** in its details starts one at the agent's next report.
+- **It takes 10 to 30 minutes of CPU and disk**, so it runs in the background at low priority, separately from the agent's 5-minute run, which carries on as usual.
+- **The result** is read from Windows' own log of the check (`CBS.log`), not sfc's screen output, which is unreliable. **System files** goes amber when files don't match what Windows expects, naming them, with what to run to repair them (`DISM /Online /Cleanup-Image /RestoreHealth`, then `sfc /scannow`). It's never red: nothing is down because of it. It says so when it couldn't run (another update or repair in progress, or a restart pending).
+- **DISM too:** with `agent_sfc_dism` on, `DISM /Online /Cleanup-Image /ScanHealth` (also read only) follows it, which checks the component store that Windows repairs system files from.
 
 ### Tuning
 
@@ -1155,18 +1217,18 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **Ignore all:** accepts everything found so far on that device, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
 - **Turning it off** for a device removes its check and Rollcall's findings straight away. The agent deletes its own scan files on its next run.
 - To try it on a folder without sending anything:
-  - Windows: `PingMonitorAgent.ps1 -SecretTest D:\Shares`
-  - Linux: `python3 pingmonitor-agent.py --secret-test /srv`
+  - Windows: `RollcallAgent.ps1 -SecretTest D:\Shares`
+  - Linux: `python3 rollcall-agent.py --secret-test /srv`
 
   Each prints what would be reported.
 
 ### Agent security
 
-- **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\PingMonitor`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then says who changed it and when it was put back, e.g. *Its folder's permissions were changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov* (Windows doesn't record who changes permissions, so the "who" is whoever took ownership to change them; otherwise it names the accounts given access). The full list is under **What the agent found** in Details. It's amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
+- **The agents keep their own files locked down.** Each run, the Windows agent checks that its folder (`C:\ProgramData\Rollcall`) and everything in it still belong to SYSTEM or Administrators, give nobody else access and don't take permissions from the folder above. The Linux agent checks its script, settings, data folder and systemd units are root's and not open to others. Anything changed, e.g. someone giving themselves access to read the log, is put back. Rollcall's **Agent files** check then says who changed it and when it was put back, e.g. *Its folder's permissions were changed by CONTOSO\admin; the agent reset them at 14:32 on 19 Nov* (Windows doesn't record who changes permissions, so the "who" is whoever took ownership to change them; otherwise it names the accounts given access). The full list is under **What the agent found** in Details. It's amber for 24 hours or until you press **Acknowledge** (on the check, or in the Security tab), and visible to admins and editors only. A later change turns it amber again. The first check after the agent updates only tidies up, without the amber, as hand-installed agents on Windows 10/11 are owned by whoever installed them.
 - **The password scan never sends passwords**, only where each one is (see [Passwords left in files](#passwords-left-in-files)).
 - **Nothing runs on the servers at the add-on's request**, apart from an agent update you've turned on, signed with a key only Rollcall has (see [Updating agents automatically](#updating-agents-automatically)), and messages to users' screens if you turn them on (see [Messages to users' screens](#messages-to-users-screens)).
 - **Limit who can reach the agent ports.** Allow TCP 8100 (and 8101 with HTTPS on) at your firewall only from the networks your agents report from.
-- **Each server has its own token**, generated on the server and stored in `C:\ProgramData\PingMonitor` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
+- **Each server has its own token**, generated on the server and stored in `C:\ProgramData\Rollcall` (readable only by SYSTEM and Administrators). The add-on keeps only a hash of it.
 - **The enrolment key only lets a server ask to join.** Nothing is accepted until an admin approves it, so a leaked key can't feed data in. **Rotate key** under Agents if needed; approved servers keep working.
 - **Revoke** stops a server's reports. Deleting a device from the dashboard also revokes its agent. A revoked or rejected copy can't ask again; to re-add the server, run `-Uninstall` then `-Install` on it.
 - **Reports can go over HTTPS with Rollcall's own certificate** (see [HTTPS for agents](#https-for-agents)). Without it they go over plain HTTP, readable on your network. Using your own certificate on the agent port instead (`agent_ssl`, with `agent_certfile` and `agent_keyfile` in Home Assistant's `/ssl` folder) still works; **Accept a self-signed certificate** then makes agents accept any certificate, so it keeps reports private but doesn't stop something else standing in for Rollcall. Rollcall's own HTTPS does.
@@ -1175,18 +1237,20 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 
 ## Linux agent
 
-One Python file (`pingmonitor-agent.py`, Python 3.8+, standard library only, so nothing to install on Ubuntu 20.04 or newer). It uses the same enrolment, approval, alerts, Details, Ignore buttons and disk thresholds as the Windows agent, and shows as **Linux ✓** on the dashboard.
+One Python file (`rollcall-agent.py`, Python 3.8+, standard library only, so nothing to install on Ubuntu 20.04 or newer). It uses the same enrolment, approval, alerts, Details, Ignore buttons and disk thresholds as the Windows agent, and shows as **Linux ✓** on the dashboard.
 
 ### Setting it up
 
-1. In the dashboard, open **Manage → Agents** and use **Download pingmonitor-agent.py**. It uses the same address as the Windows script, so check that first.
-2. Copy it to the server, e.g. `scp pingmonitor-agent.py admin@server:`
-3. On the server, run `sudo python3 pingmonitor-agent.py --install`.
-   - For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage`, `job.read` (or `queue.read`) and `systemMetadata.read` permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`): `sudo python3 pingmonitor-agent.py --install --immich-api-key YOUR_KEY`. To keep the key out of the process list while it installs, use `--immich-api-key -` and paste it when asked, or set `RC_IMMICH_API_KEY` (e.g. `sudo RC_IMMICH_API_KEY=… python3 pingmonitor-agent.py --install`).
+1. In the dashboard, open **Manage → Agents** and use **Download rollcall-agent.py**. It uses the same address as the Windows script, so check that first.
+2. Copy it to the server, e.g. `scp rollcall-agent.py admin@server:`
+3. On the server, run `sudo python3 rollcall-agent.py --install`.
+   - For Immich's job queues and statistics, add an API key created by an Immich admin with the `server.statistics`, `server.storage`, `job.read` (or `queue.read`) and `systemMetadata.read` permissions (Immich → Account Settings → API Keys; Immich before 1.138 needs `all`): `sudo python3 rollcall-agent.py --install --immich-api-key YOUR_KEY`. To keep the key out of the process list while it installs, use `--immich-api-key -` and paste it when asked, or set `RC_IMMICH_API_KEY` (e.g. `sudo RC_IMMICH_API_KEY=… python3 rollcall-agent.py --install`).
    - If Immich isn't in a local container, add `--immich-url http://host:2283`.
 4. Approve it under **Agents → Waiting for approval**.
 
-It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmonitor-agent.timer`, every 5 minutes, at low CPU and disk priority). Its token and log are in `/var/lib/pingmonitor/`, and its settings, including the API key, in `/etc/pingmonitor/agent.conf` (all root only).
+It installs to `/usr/local/lib/rollcall/` and adds a systemd timer (`rollcall-agent.timer`, every 5 minutes, at low CPU and disk priority). Its token and log are in `/var/lib/rollcall/`, and its settings, including the API key, in `/etc/rollcall/agent.conf` (all root only).
+
+Agents installed before 1.0.25 used the old name (`pingmonitor-agent.py`, `/var/lib/pingmonitor`, `/etc/pingmonitor`, unit `pingmonitor-agent`). They move themselves when they update, as the Windows agent does: the new unit has to report before the old one is removed, and a failed move leaves the old one running and says why.
 
 | Command | Does |
 |---|---|
@@ -1194,7 +1258,7 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 | `--uninstall` | Removes it |
 | `--report` | Prints what it would send |
 
-`systemctl status pingmonitor-agent` and `/var/lib/pingmonitor/agent.log` show what it's doing.
+`systemctl status rollcall-agent` and `/var/lib/rollcall/agent.log` show what it's doing.
 
 ### What it checks
 
@@ -1217,6 +1281,24 @@ It installs to `/usr/local/lib/pingmonitor/` and adds a systemd timer (`pingmoni
 - **Immich updates:** when a newer release is out, the Immich check turns amber ("update available: v2.2.3 (running v2.1.0)"), with one notification per release linking to its release notes. The newest release comes from Immich's own version check if the API key can read it (`systemMetadata.read`, and **Version check** on in Immich's Administration → Settings), otherwise from GitHub, at most every 6 hours. To stop flagging them, use **Ignore** next to the version in Details (`update:immich`).
 - **Alerted as they happen:** out-of-memory kills, disk I/O and filesystem (ext4/XFS/btrfs) errors, any critical journal entry, users created or deleted, and users added to groups such as `sudo` or `docker`. SSH logins are listed in Details but not alerted.
 - **Administrators** (Security tab, admins only, agent 1.0.11 or later): who can act as root. That's members of the `sudo`, `wheel` and `admin` groups (including users whose main group it is), other accounts with uid 0, and users and `%groups` given rules in sudoers (marked "some commands" if a rule doesn't allow everything). Additions and removals are tracked as on Windows.
+
+### Proxmox VE and Backup Server
+
+On a Proxmox VE host (agent 1.0.24 or later) the Linux agent adds a **Proxmox VE** check and section; on a Proxmox Backup Server, a **Proxmox Backup Server** one. Nothing to set up: it's found from `pvesh` and `proxmox-backup-manager`, and only read (`get`, never `set`).
+
+- **The cluster:** quorum and each node online or not (a standalone host says so).
+- **VMs and containers** on the cluster: state, node, uptime, CPU and memory, and HA state.
+- **Storage** (enabled, active, how full, what it holds) and **ZFS pools** (health and how full).
+- **Replication jobs**, **HA resources**, **Ceph**'s health if it's there, and the **subscription** and pending updates (from apt, like any Linux host).
+- **Backups:** each vzdump job's result goes on the **Backups** tab, like Veeam's: a failed backup is red, with its log, and **Acknowledge** works the same.
+- **Proxmox Backup Server:** each datastore's use, and the last verify, prune, garbage collection and sync jobs (shown with their results; only the datastores alert).
+
+| | Amber | Red (and alerts) |
+|---|---|---|
+| **Proxmox VE** | A node offline (fewer than half); storage not active or 90% full; a ZFS pool DEGRADED; a replication job failing; Ceph HEALTH_WARN | Quorum lost; half the nodes or more offline; storage 97% full; a ZFS pool FAULTED or worse; an HA resource in error, fence or recovery; Ceph HEALTH_ERR |
+| **Proxmox Backup Server** | A datastore 90% full | A datastore 97% full or with an error |
+
+Install the agent on each node you want watched; a cluster's guests, storage and quorum show on every node that has it.
 
 ## OpenWrt agent
 
@@ -1256,6 +1338,42 @@ It doesn't update itself: to update, download it again and run `--install` again
 - **Failed sign-ins** come from the system log (`logread`): who, from where and how many times, each counted once.
 - Updates, vulnerabilities and the journal aren't checked: OpenWrt is updated by flashing new firmware.
 
+## pfSense, OPNsense and FreeBSD agent
+
+One shell script (`rollcall-agent-freebsd.sh`) for pfSense, OPNsense and plain FreeBSD, using only what they have built in, plus `curl` (pfSense and OPNsense include it; on FreeBSD, `pkg install curl`). Read only: it never changes the firewall's settings. For OPNsense without installing anything, see [OPNsense](#opnsense).
+
+### Setting it up
+
+1. In the dashboard, open **Manage → Agents** and use **Download rollcall-agent-freebsd.sh** on the pfSense / OPNsense / FreeBSD card.
+2. Copy it to the firewall, e.g. `scp rollcall-agent-freebsd.sh admin@192.168.1.1:/tmp/` (pfSense: enable SSH under *System → Advanced*).
+3. On the firewall, as root (pfSense: shell option 8), run `sh /tmp/rollcall-agent-freebsd.sh --install`.
+4. Approve it under **Agents → Waiting for approval**.
+
+It copies itself to `/usr/local/etc/rollcall/` (with its token) and adds a cron entry in `/usr/local/etc/cron.d/`, both under `/usr/local`, which pfSense and OPNsense keep through upgrades. Its log is `/var/log/rollcall-agent.log`. It doesn't update itself: to update, download it again and run `--install` again (approval is kept). After a major pfSense or OPNsense upgrade, check it's still reporting. With HTTPS on, reports go over HTTPS from the start, checked against Rollcall's own certificate authority built into the download.
+
+| Command | Does |
+|---|---|
+| `--install` | Installs or updates the agent |
+| `--uninstall` | Removes it and its cron entry |
+| `--report` | Prints what it would send |
+
+### What it checks
+
+| Check | Goes amber | Goes red (and alerts) |
+|---|---|---|
+| **Agent** | A run slower than `agent_slow_seconds` | No report for `agent_stale_minutes` |
+| **Disk** | A filesystem under its amber level | Under its red level |
+| **Storage** | | A ZFS pool that isn't ONLINE |
+| **Firewall** (pfSense, OPNsense) | Packet loss or high delay on a gateway; an IPsec tunnel or OpenVPN client down; a CARP address in INIT; the state table over 90% full | A gateway down (two reports) |
+| **Temperature** | A sensor at 85 °C or more | 95 °C or more |
+| **Network** (adapters you tick) | A ticked interface disabled or slower | A ticked interface down or gone (two reports) |
+
+- **Gateways** come from the firewall's own monitoring (dpinger): delay, its variation and loss for each. One can be ignored by its name with **Ignore** in Details.
+- **IPsec:** tunnels that are up, and site-to-site ones that aren't. Mobile-client (road warrior) connections aren't expected to be up, so they're counted but never alerted.
+- **Updates** (pfSense) are checked once a day, because the check takes several seconds: shown, never alerted.
+- **Temperatures:** a firewall in a virtual machine has no sensors, and the Details say so.
+- Memory and CPU are checked as on other agents, and interfaces show their traffic and errors.
+
 ---
 
 ## Known vulnerabilities
@@ -1278,6 +1396,19 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 - `off`: Linux devices aren't checked.
 
 The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Vulnerabilities tab says so, and the data already downloaded is used until it can.
+
+## Offline use
+
+For a network without the internet (an airgapped one), turn on `offline` (**Offline (no internet)** in Settings). Rollcall then downloads nothing and doesn't warn that it can't:
+
+- **Vulnerability data** (Microsoft, CISA, OSV.dev) and **the winget catalogue** (for software updates on Windows) come from a bundle you import instead.
+- Jellyfin's latest release isn't looked up, so its "update available" can't show. (Immich's is looked up by the Linux agent on the Immich server, not by the add-on; without the internet it simply finds nothing.)
+- Hints from AI need the internet, so leave them off.
+- Nothing else changes: checks, agents, alerts and the dashboard need no internet.
+
+**Getting the data in:** on a Rollcall that has the internet, open **Manage → Offline data** and **Download offline data**. That file holds only the vulnerability lists and the winget catalogue: no devices, settings, keys or anything about that network. Take it to the offline Rollcall and **Import** it under the same menu. Devices are checked against it straight away. The Vulnerabilities and Software tabs say the data is offline and how old it is, so refresh it as often as you'd like it to be current.
+
+**Installing the add-on without the internet:** the add-on is built from Home Assistant's base image and a few Alpine packages (`python3`, `py3-aiohttp`, `py3-cryptography`, `py3-regex`, `iputils`, `tzdata`, `msitools`), so a Home Assistant with no internet needs those from a local mirror, or the add-on's image copied in. Once it's running it needs nothing from outside.
 
 ---
 
@@ -1335,7 +1466,7 @@ An agent only installs an update if all of these pass; otherwise it keeps its cu
 
 The addresses Rollcall tells agents to report to (under **Agents → Where the agents report to**) are signed the same way, so a changed reply can't send an agent somewhere else. An agent that gets addresses without a good signature keeps the ones it has, and says so in its log. A failed check never stops an agent reporting.
 
-The previous copy is kept next to it (`PingMonitorAgent.ps1.old`, `pingmonitor-agent.py.old`). Only installed agents update themselves; a copy run by hand from a share doesn't. A Group Policy startup script pointing at an older copy won't undo an update, because `-Install` never replaces a newer installed copy with an older one.
+The previous copy is kept next to it (`RollcallAgent.ps1.old`, `rollcall-agent.py.old`). Only installed agents update themselves; a copy run by hand from a share doesn't. A Group Policy startup script pointing at an older copy won't undo an update, because `-Install` never replaces a newer installed copy with an older one.
 
 ### Messages to users' screens
 
@@ -1467,6 +1598,10 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 - **Who can make changes** (`admin_only_changes`, `editors`), **Messages to users' screens** and **Error hints** can only be changed by Home Assistant admins, not by editors.
 - **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
 - Devices aren't listed here; add and edit them on the dashboard.
+
+### What's new
+
+After Rollcall is updated, each admin gets a short pop-up the first time they open it, listing what changed since the version they last saw: each change's headline, newest first, covering every version they skipped, with **Full changelog** to read the details in the dashboard (or on GitHub). It shows once per admin, wherever they sign in, because the version each admin last saw is kept by the add-on, not in the browser. It isn't shown to other users, or at all after a fresh install. **What's new** under the version in the menu opens it again.
 
 ### Who can see and change things
 
@@ -1602,6 +1737,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_time_crit_seconds` | 240 | Time: red at this (Kerberos sign-ins fail at 300) |
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
+| `offline` | false | For a network without the internet: download nothing, and use imported data instead (see [Offline use](#offline-use)) |
 | `vuln_checks` | true | The **Vulnerabilities** check on devices with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
@@ -1609,6 +1745,10 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `ip_ranges` | `[]` | Names for parts of your network, shown next to each device's address and in Details, e.g. `Servers=10.0.1.0/24`, `IoT=192.168.20.10-200`, `Workstations=10.0.2.*`. Several ranges can share a name (`Servers=10.0.1.0/24, 10.0.3.0/24`); where they overlap, the smallest wins. The search box matches them too |
 | `name_line` | auto | What the list shows under each name, unless a device has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
+| `agent_sfc` | off | Which Windows devices run the weekly read-only system file check: `off`, `servers`, `workstations` or `all` (see [System file check](#system-file-check)) |
+| `agent_sfc_day` | sunday | The day it runs, in each device's own time |
+| `agent_sfc_hour` | 3 | The hour it starts (0–23) |
+| `agent_sfc_dism` | false | Also run DISM `/ScanHealth` (read only) on the component store |
 | `agent_event_alerts` | true | Alert on watched System-log events |
 | `agent_security_alerts` | true | Alert on watched Security-log events |
 | `agent_event_watch` | Kernel-Power:41, EventLog:6008, BugCheck:1001, disk:7/51/153, Ntfs:55/98 | System-log events that alert, as `Source:ID` or an ID |
@@ -1720,12 +1860,18 @@ rollcall/              the add-on (its internal ID is ping_monitor)
     ├── snmp.py        SNMP client and device readers
     ├── syslogrx.py, syslogreadings.py   syslog receiver and readings
     ├── ilo.py         HPE iLO health over RIBCL
+    ├── vmware.py      ESXi, vCenter and Aria, read only
+    ├── opnsense.py    OPNsense through its API, read only
+    ├── netvendor.py   Cisco and Juniper over SNMP
+    ├── offline.py, whatsnew.py   offline data bundles; the What's new pop-up
     ├── vulns.py       known vulnerabilities: Microsoft, OSV.dev and CISA data
     ├── dbhealth.py    Manage > Database: sizes, integrity check, compacting
     ├── hints.py       hints for errors: the built-in table, and Claude (optional)
     ├── certcheck.py, sipcheck.py, hadevice.py, msi.py
-    ├── agent/PingMonitorAgent.ps1       the Windows agent
-    ├── agent/pingmonitor-agent.py       the Linux agent
+    ├── agent/RollcallAgent.ps1          the Windows agent
+    ├── agent/rollcall-agent.py          the Linux agent
+    ├── agent/rollcall-agent.sh          the OpenWrt agent
+    ├── agent/rollcall-agent-freebsd.sh  the pfSense, OPNsense and FreeBSD agent
     └── web/index.html dashboard (served through ingress)
 ```
 
@@ -1734,7 +1880,7 @@ rollcall/              the add-on (its internal ID is ping_monitor)
 Rollcall was called Ping Monitor until 1.6.0. Only the visible name changed, so nothing already set up breaks:
 
 - The add-on's ID is still `ping_monitor`, so entities keep their `sensor.ping_monitor_*` names, and automations and cards carry on working.
-- The agents keep their file names (`PingMonitorAgent.ps1`, `pingmonitor-agent.py`), folders (`C:\ProgramData\PingMonitor`, `/var/lib/pingmonitor`), scheduled task, systemd timer and port (8100). Installed agents carry on reporting and updating; there's no need to redeploy them.
+- The agents kept their old file names, folders and tasks until 1.99.0 (Windows agent 1.0.60, Linux agent 1.0.25), which renamed them: `RollcallAgent.ps1` in `C:\ProgramData\Rollcall` with the task **Rollcall Agent**, and `rollcall-agent.py` with `/var/lib/rollcall` and the unit `rollcall-agent`. Installed agents move themselves safely when they update (see [Setting it up](#setting-it-up)); there's no need to redeploy them. The port (8100) is unchanged.
 
 ---
 
@@ -1764,7 +1910,7 @@ Home Assistant's DNS treats `.local` as mDNS, so Active Directory names like `se
 Check that SNMP is on, the community (or v3 user) is right, and the device allows Home Assistant's address. Older kit may only speak v1: if `snmpwalk -v1` answers but `-v2c` doesn't, choose v1. The SNMP tab shows how long each part of the last poll took and how many requests it needed. A slow or overloaded switch adapts by asking for fewer rows at a time.
 
 **A server's agent doesn't appear under Waiting for approval.**
-Check the server can reach Home Assistant on port 8100 at the address in **Agents** (`Test-NetConnection <address> -Port 8100`), and look at `C:\ProgramData\PingMonitor\agent.log` (Windows) or `/var/lib/pingmonitor/agent.log` (Linux). `-ShowReport` / `--report` shows what it would send.
+Check the server can reach Home Assistant on port 8100 at the address in **Agents** (`Test-NetConnection <address> -Port 8100`), and look at `C:\ProgramData\Rollcall\agent.log` (Windows) or `/var/lib/rollcall/agent.log` (Linux); agents not yet moved to the new name log to `C:\ProgramData\PingMonitor\agent.log` or `/var/lib/pingmonitor/agent.log`. `-ShowReport` / `--report` shows what it would send.
 
 **An agent run is slow.**
 **Agent run** in Details breaks a run down by step. The Agent check turns amber above `agent_slow_seconds`.
