@@ -3124,6 +3124,8 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       <td>${esc(x.state)}${x.watched ? "" : ` <small class="muted">(not watched)</small>`}</td><td>${x.restarts || 0}</td><td>${bad || findIgnore("service", x.name) ? ignBtn("service", x.name, "container " + x.name) : ""}</td></tr>`;
   })) || `<p class="empty-note">No containers.</p>`);
   flush("roles");
+  if (c.proxmox) html += proxmoxSection(c.proxmox);
+  if (c.pbs) html += pbsSection(c.pbs);
   if (c.immich) {
     const im = c.immich, stt = im.stats || {}, sto = im.storage || {};
     html += sect("Immich", `<div class="kv">
@@ -4733,6 +4735,49 @@ document.getElementById("detBody").addEventListener("click", async e => {
   if (!r.ok) { b.disabled = false; return alert((await r.json().catch(() => ({}))).error || "That didn't work (" + r.status + ")"); }
   await openDetails(detKey, ["security", "Passwords left in files"]);
 });
+// Proxmox VE (Linux agent 1.0.24 on a Proxmox host): cluster, guests, storage, ZFS, replication, HA, Ceph. Read only.
+const gbOf = b => b >= 1099511627776 ? (b / 1099511627776).toFixed(1) + " TB" : (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1) + " GB";
+const fullBar = (used, total) => { const p = total ? 100 * used / total : 0;
+  return total ? `<span class="${p >= 90 ? "old" : ""}">${p.toFixed(0)}%</span> <small class="muted">${gbOf(used)} of ${gbOf(total)}</small>` : "—"; };
+function proxmoxSection(pv) {
+  let out = "";
+  const cl = pv.cluster, subs = pv.subscription || {};
+  out += sect("Proxmox VE", `<div class="kv"><div><span>Node</span>${esc(pv.node)}</div><div><span>Version</span>${esc(pv.version || "—")}</div>
+    ${cl ? `<div><span>Cluster</span>${esc(cl.name)} · ${cl.quorate ? `<span class="okc">quorate</span>` : `<b class="failtxt">no quorum</b>`}</div>` : `<div><span>Cluster</span>Standalone</div>`}
+    <div><span>Subscription</span>${esc(subs.status === "active" ? (subs.level || "active") : subs.status || "—")}</div></div>`
+    + ((pv.nodes || []).length > 1 ? `<p style="margin:8px 0 0">${pv.nodes.map(n => `<span class="chip" style="display:inline-flex"><span class="dot ${n.online ? "green" : "red"}"></span> ${esc(n.name)}${n.local ? " (this one)" : ""}</span>`).join(" ")}</p>` : ""));
+  const g = pv.guests || [];
+  if (g.length) out += sect(`Virtual machines and containers (${g.length})`, tbl(["ID", "Name", "Type", "Node", "State", "Up", "CPU", "Memory"], g.map(x => {
+    const on = x.status === "running";
+    return `<tr><td class="num">${esc(String(x.vmid))}</td><td><b>${esc(x.name)}</b>${x.ha ? `<br><small class="muted">HA ${esc(x.ha)}</small>` : ""}</td><td>${esc(x.kind)}</td><td>${esc(x.node || "")}</td>
+      <td>${on ? `<span class="okc">running</span>` : esc(x.status || "")}</td><td>${on && x.uptime_s ? esc(fmtUp(x.uptime_s)) : ""}</td>
+      <td>${on ? x.cpu_pct + "%" : ""}${x.cpus ? `<br><small class="muted">${x.cpus} CPU${x.cpus === 1 ? "" : "s"}</small>` : ""}</td>
+      <td>${x.maxmem_mb ? (on ? `${(x.mem_mb / 1024).toFixed(1)} of ` : "") + `${(x.maxmem_mb / 1024).toFixed(1)} GB` : ""}</td></tr>`;
+  })));
+  if ((pv.storage || []).length) out += sect("Storage", tbl(["Storage", "Type", "State", "Used", "Content"], pv.storage.map(x =>
+    `<tr><td><b>${esc(x.name)}</b>${x.shared ? ` <small class="muted">shared</small>` : ""}</td><td>${esc(x.type || "")}</td>
+     <td>${x.enabled === false ? `<span class="muted">disabled</span>` : x.active ? `<span class="okc">active</span>` : `<b class="old">not active</b>`}</td>
+     <td>${fullBar(x.used || 0, x.total || 0)}</td><td><small class="muted">${esc((x.content || "").replace(/,/g, ", "))}</small></td></tr>`)));
+  if ((pv.zfs || []).length) out += sect("ZFS pools", tbl(["Pool", "Health", "Used"], pv.zfs.map(z =>
+    `<tr><td><b>${esc(z.name)}</b></td><td>${z.health === "ONLINE" ? `<span class="okc">ONLINE</span>` : `<b class="${z.health === "DEGRADED" ? "old" : "failtxt"}">${esc(z.health || "?")}</b>`}</td><td>${fullBar(z.alloc || 0, z.size || 0)}</td></tr>`)));
+  if ((pv.replication || []).length) out += sect("Replication", tbl(["Job", "Guest", "Target", "Last sync", "State"], pv.replication.map(r =>
+    `<tr><td>${esc(r.id)}</td><td>${esc(String(r.guest ?? ""))}</td><td>${esc(r.target || "")}</td><td>${r.last_sync ? ago(r.last_sync, Date.now() / 1000) : "never"}</td>
+     <td>${r.fail_count ? `<b class="old">failing (${r.fail_count}x)</b>${r.error ? `<br><small class="muted">${esc(r.error)}</small>` : ""}` : `<span class="okc">OK</span>`}</td></tr>`)));
+  if ((pv.ha || []).length) out += sect("High availability", tbl(["Resource", "State", "Node"], pv.ha.map(h =>
+    `<tr><td>${esc(h.sid)}</td><td>${/error|fence|recovery/i.test(h.state || "") ? `<b class="failtxt">${esc(h.state)}</b>` : esc(h.state || "")}</td><td>${esc(h.node || "")}</td></tr>`)));
+  if (pv.ceph) out += sect("Ceph", `<p>${pv.ceph.health === "HEALTH_OK" ? `<span class="okc">HEALTH_OK</span>` : `<b class="${pv.ceph.health === "HEALTH_ERR" ? "failtxt" : "old"}">${esc(pv.ceph.health)}</b>`}</p>`
+    + (pv.ceph.checks.length ? `<ul class="bklog">${pv.ceph.checks.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""));
+  if ((pv.backup_schedules || []).length) out += sect("Backup jobs (vzdump)", tbl(["Job", "Schedule", "Storage", ""], pv.backup_schedules.map(j =>
+    `<tr><td>${esc(j.comment || j.id)}</td><td>${esc(j.schedule)}</td><td>${esc(j.storage || "")}</td><td>${j.enabled ? "" : `<small class="muted">disabled</small>`}</td></tr>`))
+    + `<p class="hint">Each run's result is on the <b>Backups</b> tab. Rollcall only reads Proxmox (<code>pvesh get</code>); it never changes anything.</p>`);
+  return out;
+}
+function pbsSection(pb) {
+  return sect("Proxmox Backup Server", `<div class="kv"><div><span>Version</span>${esc(pb.version || "—")}</div></div>`
+    + ((pb.datastores || []).length ? tbl(["Datastore", "Used", ""], pb.datastores.map(d =>
+      `<tr><td><b>${esc(d.name)}</b></td><td>${fullBar(d.used || 0, d.total || 0)}</td><td>${d.error ? `<b class="failtxt">${esc(d.error)}</b>` : ""}</td></tr>`)) : "")
+    + `<p class="hint">Verify, prune, garbage collection and sync results are on the <b>Backups</b> tab.</p>`);
+}
 // System file check (Windows agent 1.0.59): the weekly read-only sfc /verifyonly, its result and its settings
 function sfcSection(sf, cf, chk, ver) {
   const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -4982,7 +5027,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], proxmox: ["roles", "Proxmox VE"], pbs: ["roles", "Proxmox Backup Server"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

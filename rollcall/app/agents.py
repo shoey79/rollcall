@@ -341,6 +341,10 @@ def normalize_report(r) -> dict:
         d["signature_version"] = str(d.get("signature_version") or "")[:40] or None
         age = d.get("signature_age_days")
         d["signature_age_days"] = int(age) if isinstance(age, (int, float)) and not isinstance(age, bool) else None
+    if "proxmox" in c:  # Linux agent 1.0.24+ on a Proxmox VE host
+        c["proxmox"] = clean_proxmox(c["proxmox"])
+    if "pbs" in c:
+        c["pbs"] = clean_pbs(c["pbs"])
     if "sfc" in c:  # Windows agent 1.0.59+: the weekly read-only system file check
         c["sfc"] = clean_sfc(c["sfc"])
     if "rds" in c:
@@ -780,6 +784,96 @@ def secrets_state(status: dict, findings: list, ign: "Ignore", ack_at: float = 0
 
 def fmt_speed(mbps: int) -> str:
     return f"{mbps / 1000:g} Gb/s" if mbps >= 1000 else f"{mbps} Mb/s"
+
+
+def _num(v, default=0):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else default
+
+
+def _rows(v, keys, n):
+    """A list of dicts with only these keys (strings cut to 200), at most n."""
+    out = []
+    for x in _as_list(v)[:n]:
+        if isinstance(x, dict):
+            out.append({k: (str(x[k])[:200] if isinstance(x.get(k), str) else x.get(k)) for k in keys if k in x})
+    return out
+
+
+def clean_proxmox(raw) -> dict:
+    d = _as_dict(raw)
+    cl = d.get("cluster") if isinstance(d.get("cluster"), dict) else None
+    return {"node": str(d.get("node") or "")[:80], "version": str(d.get("version") or "")[:40] or None,
+            "cluster": {"name": str(cl.get("name") or "")[:80], "quorate": cl.get("quorate") is True, "votes": _num(cl.get("votes"))} if cl else None,
+            "nodes": _rows(d.get("nodes"), ("name", "online", "local"), 64),
+            "guests": _rows(d.get("guests"), ("vmid", "name", "kind", "node", "status", "uptime_s", "cpu_pct", "cpus", "mem_mb", "maxmem_mb", "ha"), 300),
+            "storage": _rows(d.get("storage"), ("name", "type", "active", "enabled", "shared", "total", "used", "content"), 60),
+            "zfs": _rows(d.get("zfs"), ("name", "health", "size", "alloc"), 20),
+            "backup_schedules": _rows(d.get("backup_schedules"), ("id", "schedule", "enabled", "storage", "comment"), 40),
+            "replication": _rows(d.get("replication"), ("id", "guest", "target", "last_sync", "fail_count", "error"), 100),
+            "ha": _rows(d.get("ha"), ("sid", "state", "node", "status"), 100),
+            "subscription": _rows([d.get("subscription")], ("status", "level"), 1)[0] if isinstance(d.get("subscription"), dict) else None,
+            "ceph": {"health": str((d.get("ceph") or {}).get("health") or "")[:20], "checks": [str(x)[:200] for x in _as_list((d.get("ceph") or {}).get("checks"))][:20]}
+            if isinstance(d.get("ceph"), dict) else None}
+
+
+def clean_pbs(raw) -> dict:
+    d = _as_dict(raw)
+    return {"version": str(d.get("version") or "")[:40] or None, "datastores": _rows(d.get("datastores"), ("name", "total", "used", "error"), 40)}
+
+
+def _pct(used, total):
+    return 100 * _num(used) / _num(total) if _num(total) > 0 else 0
+
+
+def proxmox_check(pv: dict, opts: dict) -> dict:
+    """Proxmox VE: the cluster (quorum, nodes), storage, ZFS, replication, HA and Ceph. Backups are judged on the
+    Backups check, like Veeam's."""
+    crit, warn = [], []
+    cl = pv.get("cluster")
+    if cl and not cl.get("quorate"):
+        crit.append(f"cluster {cl.get('name') or ''} has lost quorum".replace("  ", " "))
+    off = [n["name"] for n in pv.get("nodes") or [] if n.get("online") is False]
+    if off:
+        (crit if cl and len(off) * 2 >= len(pv.get("nodes") or []) else warn).append("node(s) offline: " + ", ".join(map(str, off)))
+    full_at = 90  # like a disk with 10% free
+    for st in pv.get("storage") or []:
+        if st.get("enabled") is not False and st.get("active") is False:
+            warn.append(f"storage {st.get('name')} isn't active")
+        elif _pct(st.get("used"), st.get("total")) >= full_at:
+            (crit if _pct(st.get("used"), st.get("total")) >= 97 else warn).append(f"storage {st.get('name')} {_pct(st.get('used'), st.get('total')):.0f}% full")
+    for z in pv.get("zfs") or []:
+        h = str(z.get("health") or "").upper()
+        if h and h != "ONLINE":
+            (warn if h == "DEGRADED" else crit).append(f"ZFS pool {z.get('name')} {h}")
+    for r in pv.get("replication") or []:
+        if _num(r.get("fail_count")):
+            warn.append(f"replication {r.get('id')} failing ({r.get('fail_count')}x){': ' + str(r['error'])[:80] if r.get('error') else ''}")
+    for h in pv.get("ha") or []:
+        if str(h.get("state") or "").lower() in ("error", "fence", "recovery"):
+            crit.append(f"HA {h.get('sid')} {h.get('state')}")
+    ceph = (pv.get("ceph") or {}).get("health")
+    if ceph == "HEALTH_ERR":
+        crit.append("Ceph HEALTH_ERR")
+    elif ceph == "HEALTH_WARN":
+        warn.append("Ceph HEALTH_WARN" + (": " + pv["ceph"]["checks"][0] if pv["ceph"].get("checks") else ""))
+    guests = pv.get("guests") or []
+    running = sum(1 for g in guests if g.get("status") == "running")
+    if crit or warn:
+        return _check("proxmox", "Proxmox VE", CRIT if crit else WARN, "; ".join(crit + warn), confirm=bool(crit))
+    where = f"cluster {cl['name']}, {len(pv.get('nodes') or [])} nodes, " if cl else ""
+    return _check("proxmox", "Proxmox VE", OK, f"{where}{running} of {len(guests)} guests running")
+
+
+def pbs_check(pb: dict) -> dict:
+    bad = []
+    for ds in pb.get("datastores") or []:
+        if ds.get("error"):
+            bad.append((CRIT, f"datastore {ds.get('name')}: {ds['error']}"))
+        elif _pct(ds.get("used"), ds.get("total")) >= 90:
+            bad.append((CRIT if _pct(ds.get("used"), ds.get("total")) >= 97 else WARN, f"datastore {ds.get('name')} {_pct(ds.get('used'), ds.get('total')):.0f}% full"))
+    if bad:
+        return _check("pbs", "Proxmox Backup Server", CRIT if any(b[0] == CRIT for b in bad) else WARN, "; ".join(b[1] for b in bad))
+    return _check("pbs", "Proxmox Backup Server", OK, f"{len(pb.get('datastores') or [])} datastore(s), space OK")
 
 
 SFC_STATES = ("ok", "violations", "failed", "running", "never")
@@ -1911,6 +2005,10 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
                              ("Critical state: " + ", ".join(f"{v['name']} ({v['state']})" for v in bad)) if bad
                              else f"{running} of {len(vms)} VMs running"))
 
+    if isinstance(rc.get("proxmox"), dict):
+        checks.append(proxmox_check(rc["proxmox"], opts))
+    if isinstance(rc.get("pbs"), dict):
+        checks.append(pbs_check(rc["pbs"]))
     sc = sfc_check(rc.get("sfc"))  # off for a device in its details, not by Ignore
     if sc:
         checks.append(sc)

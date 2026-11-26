@@ -50,7 +50,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-AGENT_VERSION = "1.0.23"
+AGENT_VERSION = "1.0.24"
 SERVER = "__PM_SERVER__"
 ENROL_KEY = "__PM_ENROL_KEY__"
 # The public half of Rollcall's own signing key, built in when the script is downloaded: agent updates and the
@@ -872,6 +872,170 @@ def immich(conts, conf, state=None):
 # --------------------------------------------------------------------------
 # Report
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Proxmox VE and Proxmox Backup Server (1.0.24): read only. Everything comes from `pvesh get` (PVE) and
+# `proxmox-backup-manager` / `proxmox-backup-debug api get` (PBS), never set, create or delete.
+# --------------------------------------------------------------------------
+def pvesh(path, *args, timeout=20):
+    rc, out, err = run(["pvesh", "get", path, "--output-format", "json"] + list(args), timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(limit(err.strip() or "pvesh exit code %d" % rc, 200))
+    return json.loads(out or "null")
+
+
+def _pve_task_result(status):
+    s = str(status or "")
+    if s == "OK":
+        return "Success", None
+    if s.startswith("WARNINGS"):
+        return "Warning", s
+    return "Failed", limit(s, 200) or "failed"
+
+
+def pve_backup_jobs(node, tasks, names):
+    """vzdump tasks as Backups jobs: one per scheduled job run on this node (all its guests), or per guest for a
+    backup of one guest. Result from Proxmox's own task status (OK / WARNINGS: n / the error)."""
+    groups = {}
+    for t in tasks or []:
+        if t.get("type") != "vzdump" or not t.get("endtime"):
+            continue
+        groups.setdefault(str(t.get("id") or ""), []).append(t)
+    jobs = []
+    for gid, ts in groups.items():
+        ts.sort(key=lambda t: t.get("starttime") or 0)
+        last = ts[-1]
+        res, detail = _pve_task_result(last.get("status"))
+        ok = [t for t in ts if str(t.get("status")) == "OK" or str(t.get("status") or "").startswith("WARNINGS")]
+        label = "All guests on %s" % node if not gid else "Guest %s%s" % (gid, (" " + names[gid]) if names.get(gid) else "")
+        jobs.append({"source": "Proxmox VE", "id": "pve:%s:%s" % (node, gid or "all"), "name": label, "type": "vzdump",
+                     "result": res, "finished": utc(last["endtime"]), "last_success": utc(ok[-1]["endtime"]) if ok else None,
+                     "runs": [utc(t["starttime"]) for t in ts if t.get("starttime")][-12:], "detail": detail})
+    return jobs
+
+
+def proxmox_ve(state):
+    node = socket.gethostname().split(".")[0]
+    out = {"node": node}
+    rc, ver, _ = run(["pveversion"], timeout=10)
+    if rc == 0:
+        out["version"] = limit(ver.strip().split("/")[1] if "/" in ver else ver.strip(), 40)
+    try:
+        st = pvesh("/cluster/status")
+        cl = next((x for x in st if x.get("type") == "cluster"), None)
+        out["cluster"] = {"name": cl.get("name"), "quorate": bool(cl.get("quorate")), "votes": cl.get("nodes")} if cl else None
+        out["nodes"] = [{"name": x.get("name"), "online": bool(x.get("online")), "local": bool(x.get("local"))}
+                        for x in st if x.get("type") == "node"][:64]
+    except Exception as err:  # noqa: BLE001
+        collector_error("proxmox cluster", err)
+    names = {}
+    try:
+        guests = []
+        for g in pvesh("/cluster/resources", "--type", "vm") or []:
+            if g.get("template"):
+                continue
+            names[str(g.get("vmid"))] = str(g.get("name") or "")
+            guests.append({"vmid": g.get("vmid"), "name": limit(g.get("name") or "", 80), "kind": "CT" if g.get("type") == "lxc" else "VM",
+                           "node": g.get("node"), "status": g.get("status"), "uptime_s": g.get("uptime") or 0,
+                           "cpu_pct": round(100 * (g.get("cpu") or 0), 1), "cpus": g.get("maxcpu"),
+                           "mem_mb": int((g.get("mem") or 0) / 1048576), "maxmem_mb": int((g.get("maxmem") or 0) / 1048576),
+                           "ha": (g.get("hastate") or None)})
+        out["guests"] = sorted(guests, key=lambda g: (g["node"] != node, g["vmid"] or 0))[:300]
+    except Exception as err:  # noqa: BLE001
+        collector_error("proxmox guests", err)
+    try:
+        out["storage"] = [{"name": s.get("storage"), "type": s.get("type"), "active": bool(s.get("active")), "enabled": s.get("enabled", 1) != 0,
+                           "shared": bool(s.get("shared")), "total": s.get("total") or 0, "used": s.get("used") or 0, "content": limit(s.get("content") or "", 80)}
+                          for s in pvesh("/nodes/%s/storage" % node) or []][:60]
+    except Exception as err:  # noqa: BLE001
+        collector_error("proxmox storage", err)
+    try:
+        out["zfs"] = [{"name": z.get("name"), "health": z.get("health"), "size": z.get("size") or 0, "alloc": z.get("alloc") or 0}
+                      for z in pvesh("/nodes/%s/disks/zfs" % node) or []][:20]
+    except Exception:  # noqa: BLE001 - no ZFS on this node
+        pass
+    try:
+        tasks = pvesh("/nodes/%s/tasks" % node, "--typefilter", "vzdump", "--limit", "200", "--source", "all")
+        out["backup_jobs"] = pve_backup_jobs(node, tasks, names)
+        jobs = pvesh("/cluster/backup") or []
+        out["backup_schedules"] = [{"id": limit(j.get("id") or "", 60), "schedule": limit(j.get("schedule") or j.get("starttime") or "", 60),
+                                    "enabled": j.get("enabled", 1) != 0, "storage": j.get("storage"), "comment": limit(j.get("comment") or "", 120)}
+                                   for j in jobs][:40]
+    except Exception as err:  # noqa: BLE001
+        collector_error("proxmox backups", err)
+    try:
+        out["replication"] = [{"id": r.get("id"), "guest": r.get("guest"), "target": r.get("target"), "last_sync": r.get("last_sync"),
+                               "fail_count": r.get("fail_count") or 0, "error": limit(r.get("error") or "", 200) or None}
+                              for r in pvesh("/nodes/%s/replication" % node) or []][:100]
+    except Exception:  # noqa: BLE001 - not every version or setup has it
+        pass
+    try:
+        ha = pvesh("/cluster/ha/status/current") or []
+        out["ha"] = [{"sid": h.get("sid"), "state": h.get("state"), "node": h.get("node"), "status": limit(h.get("status") or "", 120)}
+                     for h in ha if h.get("type") == "service"][:100]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        sub = pvesh("/nodes/%s/subscription" % node) or {}
+        out["subscription"] = {"status": sub.get("status"), "level": sub.get("level")}
+    except Exception:  # noqa: BLE001
+        pass
+    if shutil.which("ceph") and os.path.exists("/etc/pve/ceph.conf"):
+        rc, cs, _ = run(["ceph", "status", "--format", "json"], timeout=15)
+        if rc == 0:
+            try:
+                h = json.loads(cs).get("health") or {}
+                out["ceph"] = {"health": h.get("status"), "checks": [limit(((v or {}).get("summary") or {}).get("message") or k, 200)
+                                                                     for k, v in (h.get("checks") or {}).items()][:20]}
+            except ValueError:
+                pass
+    return out
+
+
+def pbs_cli(args, timeout=20):
+    rc, out, err = run(args + ["--output-format", "json"], timeout=timeout)
+    if rc != 0:
+        raise RuntimeError(limit(err.strip() or "exit code %d" % rc, 200))
+    return json.loads(out or "null")
+
+
+PBS_KINDS = {"garbage_collection": "Garbage collection", "verificationjob": "Verify", "verify": "Verify", "prune": "Prune",
+             "prunejob": "Prune", "syncjob": "Sync", "sync": "Sync"}
+
+
+def proxmox_backup_server(state):
+    out = {}
+    rc, ver, _ = run(["proxmox-backup-manager", "versions"], timeout=10)
+    if rc == 0:
+        m = re.search(r"proxmox-backup-server\s+([0-9][^\s]*)", ver)
+        out["version"] = m.group(1) if m else None
+    try:
+        usage = pbs_cli(["proxmox-backup-debug", "api", "get", "/status/datastore-usage"])
+        out["datastores"] = [{"name": d.get("store"), "total": d.get("total") or 0, "used": d.get("used") or 0,
+                              "error": limit(d.get("error") or "", 200) or None} for d in usage or []][:40]
+    except Exception as err:  # noqa: BLE001
+        collector_error("pbs datastores", err)
+    try:
+        tasks = pbs_cli(["proxmox-backup-manager", "task", "list", "--all", "--limit", "500"])
+        groups = {}
+        for t in tasks or []:
+            kind = PBS_KINDS.get(t.get("worker_type"))
+            if not kind or not t.get("endtime"):
+                continue
+            groups.setdefault((kind, str(t.get("worker_id") or "")), []).append(t)
+        jobs = []
+        for (kind, wid), ts in groups.items():
+            ts.sort(key=lambda t: t.get("starttime") or 0)
+            res, detail = _pve_task_result(ts[-1].get("status"))
+            ok = [t for t in ts if str(t.get("status")) == "OK" or str(t.get("status") or "").startswith("WARNINGS")]
+            jobs.append({"source": "Proxmox Backup Server", "id": "pbs:%s:%s" % (kind, wid), "name": "%s %s" % (kind, wid) if wid else kind,
+                         "type": kind, "result": res, "finished": utc(ts[-1]["endtime"]), "last_success": utc(ok[-1]["endtime"]) if ok else None,
+                         "runs": [utc(t["starttime"]) for t in ts if t.get("starttime")][-12:], "detail": detail})
+        out["backup_jobs"] = jobs[:80]
+    except Exception as err:  # noqa: BLE001
+        collector_error("pbs tasks", err)
+    return out
+
+
 def build_report(state, conf):
     started = time.monotonic()
     TIMINGS.clear()
@@ -926,6 +1090,10 @@ def build_report(state, conf):
             roles.append("File server (Samba)")
         if u["name"] in ("nfs-server.service",):
             roles.append("NFS server")
+    if shutil.which("pvesh") and os.path.isdir("/etc/pve"):
+        roles.append("Proxmox VE")
+    if shutil.which("proxmox-backup-manager"):
+        roles.append("Proxmox Backup Server")
     r["roles"] = roles
     r["events"] = {"counts": {}, "recent": []}
     with step("journal"):
@@ -970,6 +1138,19 @@ def build_report(state, conf):
         im = immich(conts, conf, state)
         if im:
             r["checks"]["immich"] = im
+    bjobs = []
+    if "Proxmox VE" in roles:
+        with step("proxmox ve"):
+            pve = proxmox_ve(state)
+            bjobs += pve.pop("backup_jobs", [])
+            r["checks"]["proxmox"] = pve
+    if "Proxmox Backup Server" in roles:
+        with step("proxmox backup server"):
+            pbs = proxmox_backup_server(state)
+            bjobs += pbs.pop("backup_jobs", [])
+            r["checks"]["pbs"] = pbs
+    if bjobs:  # vzdump and PBS jobs on the Backups tab and check, like Veeam's
+        r["checks"]["backups"] = {"jobs": bjobs}
     r["errors"] = list(ERRORS)
     try:
         import resource
