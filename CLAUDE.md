@@ -28,7 +28,9 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- Overview hint jumps away (owner reported 26 Nov): on a device's Overview, opening "What would be sent" under Ask Claude
+  in a Needs attention item switches to the tab the check belongs to, so you have to click back to Overview. Clicks on
+  anything inside the item's hint (details/summary, buttons, the preview) must not trigger the item's jump to its tab.
 
 ## Requested features (not started)
 
