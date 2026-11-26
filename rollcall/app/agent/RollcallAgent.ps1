@@ -3672,7 +3672,10 @@ function Invoke-AgentUpdate($State, $Offer) {
     if (-not $Offer -or -not $Offer.version -or -not (Test-NewerVersion ([string]$Offer.version) $AgentVersion)) { return }
     if (-not $UpdateKey -or $UpdateKey -like '__PM_*') { throw "This copy has no update key built in (download it again from Rollcall), so it can't check updates" }
     $dest = Join-Path $DataPath $ScriptName
-    if (-not (Test-Path $dest)) { return }  # only an installed agent updates itself
+    # An agent installed with -DataPath somewhere else runs under the name it was installed with (the old one, if it
+    # was installed before 1.0.60): update that, or it would never update again
+    if ($PSCommandPath -and (Split-Path $PSCommandPath -Parent) -eq $DataPath -and (Split-Path $PSCommandPath -Leaf) -in $OldScriptName, $NewScriptName) { $dest = $PSCommandPath }
+    if (-not (Test-Path $dest)) { Write-AgentLog "WARN An update is waiting, but $dest isn't here to update (run the agent from its installed copy)"; return }  # only an installed agent updates itself
     $active = if ($script:ActiveServer) { $script:ActiveServer } else { @(Get-ServerList)[0] }
     $uri = $active + '/agent/update?os=windows&sig=rsa&server=' + [uri]::EscapeDataString((@($Server -split '[,;\s]+' | Where-Object { $_ } | ForEach-Object { $_.Trim().TrimEnd('/') }) -join ','))
     if ($IgnoreCertificate) { $uri += '&ignore_cert=1' }
