@@ -40,7 +40,8 @@ Remove each line once it's released.
   (an option like `vuln_skip_os`) and per device in its Vulnerabilities tab. Excluded ones: no amber/red and no
   notifications from the Vulnerabilities check, known-exploited ones included (owner's decision); no badge or count on
   the Vulnerabilities tab itself. Opening the tab still lists everything found, with a note that the OS is excluded as
-  end of life. The Updates check and everything else unchanged. Docs and changelog.
+  end of life. The Updates check and everything else unchanged. Devices on any OS not excluded (e.g. Windows 11)
+  keep the badge, colours and notifications exactly as now. Docs and changelog.
 
 ## Built, waiting for release
 
