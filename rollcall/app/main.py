@@ -63,6 +63,7 @@ import ilo as ilolib
 import iprange
 import jellyfin as jflib
 import vmware as vmlib
+import opnsense as opnlib
 import plex as pxlib
 import starlink as sllib
 import firetv as ftlib
@@ -344,6 +345,7 @@ PRESET_TABLE: list[tuple[str, str, str, list[tuple[str, str]]]] = [
     ("printer", "Printer", _NET, [("Printer", "tcp:9100")]),
     ("omada", "TP-Link Omada controller", _NET, [("Omada", "https:8043/")]),
     ("mikrotik", "MikroTik (Winbox)", _NET, [("Winbox", "tcp:8291")]),
+    ("opnsense-api", "OPNsense health (API key, no agent)", _NET, [("OPNsense", "opnsense:device")]),
     ("openfire", "Openfire / XMPP chat", _NET, [("XMPP", "tcp:5222"), ("Openfire admin", "http:9090/")]),
     ("snmp", "SNMP", _NET, [("SNMP", "snmp:device")]),
     ("cert", "Certificate expiry", _NET, [("Cert 443", "cert:443")]),
@@ -413,6 +415,8 @@ PRESET_NOTES = {
     "hpilo": "HPE iLO 3 or iLO 4: drives, fans, temperatures and power supplies (needs an iLO login)",
     "vsphere-api": "ESXi host or vCenter, read only: hardware sensors, hosts, maintenance mode, datastores, VMs, alarms, "
                    "clusters, and vCenter's appliance health, services, backup and updates (needs a read-only account)",
+    "opnsense-api": "OPNsense without an agent, read with an API key: gateways, CARP, IPsec, OpenVPN, the state table, "
+                    "memory, temperatures and updates (read only)",
     "aria-ops": "Aria Operations: node online, version and active critical alerts (needs a read-only account)",
     "aria-auto": "Aria Automation: its health page, version and that the account can log in",
     "aria-logs": "Aria Operations for Logs: version and that the account can log in",
@@ -471,6 +475,8 @@ def preset_summary(name: str) -> str:
             return "health and tasks, with an API key"
         if kind == "vmware":
             return f"{vmlib.PRODUCTS.get(rest, 'VMware')}, read only"
+        if spec == "opnsense:device":
+            return "its API, read only"
         if spec == "plex:device":
             return "what's playing, with a Plex token"
         if spec == "starlink:device":
@@ -616,6 +622,8 @@ def parse_check(entry: str, label: str | None = None) -> list[dict]:
         return [{"label": label or "iLO", "kind": "ilo", "port": 443, "url": None, "desc": "ilo"}]
     if low == "jellyfin:device":
         return [{"label": label or "Jellyfin", "kind": "jellyfin", "port": None, "url": None, "desc": "jellyfin api"}]
+    if low == "opnsense:device":
+        return [{"label": label or "OPNsense", "kind": "opnsense", "port": None, "url": None, "desc": "opnsense api"}]
     if m := re.match(r"^vmware:(vsphere|aria_ops|aria_auto|aria_logs)$", low):
         return [{"label": label or vmlib.PRODUCTS[m.group(1)], "kind": "vmware", "port": 443, "url": None,
                  "desc": "vmware " + m.group(1), "entity": m.group(1)}]
@@ -942,6 +950,15 @@ def validate_entry(raw: dict) -> dict:
             if len(pw) > 63 or not pw.isprintable():
                 raise ValueError("The iLO password must be up to 63 ordinary characters")
             entry["ilo_pass"] = pw
+    if "opnsense_url" in raw:
+        url = str(raw.get("opnsense_url") or "").strip()
+        entry["opnsense_url"] = opnlib.clean_url(url) if url else ""
+        for k, what in (("opnsense_key", "API key"), ("opnsense_secret", "API secret")):
+            v = str(raw.get(k) or "").strip()
+            if v:
+                if not opnlib.KEY_RE.match(v):
+                    raise ValueError(f"That doesn't look like an OPNsense {what} (letters, numbers, + / and =)")
+                entry[k] = v
     if "vmware_url" in raw:
         url = str(raw.get("vmware_url") or "").strip()
         entry["vmware_url"] = vmlib.clean_url(url) if url else ""
@@ -1796,6 +1813,10 @@ class Host:
     jf_url: str = ""                   # Jellyfin's address ("" = http://<host>:8096)
     jf_key: str = ""                   # Jellyfin API key: only ever sent to jf_url, never shown again
     jf_data: dict | None = None        # its latest reading
+    op_url: str = ""                   # OPNsense's address ("" = https://<host>)
+    op_key: str = ""                   # its API key and secret: only ever sent to op_url, never shown again
+    op_secret: str = ""
+    op_data: dict | None = None        # its latest reading
     vm_url: str = ""                   # ESXi / vCenter / Aria address ("" = https://<host>)
     vm_user: str = ""                  # its read-only account
     vm_pass: str = ""                  # only ever sent to vm_url (or https://<host>), never shown again
@@ -2024,6 +2045,8 @@ class Monitor:
                 **({"ilo_user": h.ilo_user, "ilo_pass": h.ilo_pass} if h.ilo_user or h.ilo_pass else {}),
                 **({"ilo_acks": h.ilo_acks} if h.ilo_acks else {}),
                 **({"ilo_ignore": h.ilo_ignore} if h.ilo_ignore else {}),
+                **({"opnsense_url": h.op_url} if h.op_url else {}),
+                **({"opnsense_key": h.op_key, "opnsense_secret": h.op_secret} if h.op_key or h.op_secret else {}),
                 **({"vmware_url": h.vm_url} if h.vm_url else {}),
                 **({"vmware_user": h.vm_user, "vmware_pass": h.vm_pass} if h.vm_user or h.vm_pass else {}),
                 **({"vmware_ignore": h.vm_ignore} if h.vm_ignore else {}),
@@ -2069,6 +2092,8 @@ class Monitor:
         h.ilo_acks = ({str(k)[:100]: v for k, v in entry["ilo_acks"].items() if v in ("warn", "crit")}
                       if isinstance(entry.get("ilo_acks"), dict) else {})
         h.ilo_ignore = [str(x)[:100] for x in entry.get("ilo_ignore") or [] if str(x).strip()][:200]
+        h.op_url = str(entry.get("opnsense_url") or "")[:300]
+        h.op_key, h.op_secret = str(entry.get("opnsense_key") or "")[:128], str(entry.get("opnsense_secret") or "")[:128]
         h.vm_url = str(entry.get("vmware_url") or "")[:300]
         h.vm_user, h.vm_pass = str(entry.get("vmware_user") or "")[:128], str(entry.get("vmware_pass") or "")[:256]
         h.vm_ignore = [str(x)[:200] for x in entry.get("vmware_ignore") or [] if str(x).strip()][:200]
@@ -2109,6 +2134,7 @@ class Monitor:
     async def update_host(self, h: Host, entry: dict) -> None:
         old_jf_base = h.jf_url or jflib.default_url(h.host)
         old_vm_base = h.vm_url or vmlib.default_url(h.host)
+        old_op_base = h.op_url or opnlib.default_url(h.host)
         old_px_base = h.px_url or pxlib.default_url(h.host)
         if entry["host"] != h.host:
             h.host, h.ip, h.failures = entry["host"], None, 0
@@ -2125,6 +2151,17 @@ class Monitor:
             if (entry["ilo_user"], pw) != (h.ilo_user, h.ilo_pass):
                 h.ilo_user, h.ilo_pass = entry["ilo_user"], pw
                 h.ilo_polled = h.ilo_result = None  # read it again with the new login
+        if h.op_key or "opnsense_url" in entry:
+            new_url = entry.get("opnsense_url", h.op_url)
+            new_base = new_url or opnlib.default_url(entry["host"])
+            if entry.get("opnsense_key"):
+                h.op_key = entry["opnsense_key"]
+            if entry.get("opnsense_secret"):
+                h.op_secret = entry["opnsense_secret"]
+            if not entry.get("opnsense_key") and h.op_key and not opnlib.same_server(old_op_base, new_base):
+                h.op_key = h.op_secret = ""  # only ever sent to the firewall it was given for
+                log.info("%s: OPNsense address changed, so its API key was cleared", h.name)
+            h.op_url, h.op_data = new_url, None
         if h.vm_pass or "vmware_url" in entry:
             new_url = entry.get("vmware_url", h.vm_url)
             new_base = new_url or vmlib.default_url(entry["host"])
@@ -2826,6 +2863,8 @@ class Monitor:
                 return await self.jellyfin_check(h)
             if s.kind == "vmware":
                 return await self.vmware_check(h, s, now)
+            if s.kind == "opnsense":
+                return await self.opnsense_check(h, now)
             if s.kind == "plex":
                 return await self.plex_check(h)
             if s.kind == "starlink":
@@ -3122,6 +3161,31 @@ class Monitor:
         # Something new has failed: read it again at the next check, and only then does it go red
         h.ilo_recheck = not h.ilo_result[0] and len(h.ilo_result) == 3 and not was_red
         return h.ilo_result
+
+    async def opnsense_check(self, h: Host, now: float) -> tuple:
+        """OPNsense through its API (opnsense.py), judged as the FreeBSD agent's firewall report is."""
+        if not h.op_key or not h.op_secret:
+            h.op_data = None
+            return False, None, "enter an OPNsense API key and secret under Edit", "warn"
+        try:
+            d = await opnlib.poll(h.op_url or opnlib.default_url(h.host), h.op_key, h.op_secret, health_tls_context(),
+                                  timeout=max(self.svc_timeout, 15))
+        except opnlib.OpnsenseError as err:
+            h.op_data = {"_error": str(err), "read": now}
+            return (False, None, str(err), "warn") if err.login else (False, None, f"can't read it: {err}")
+        fw = agentlib.clean_firewall(d)
+        h.op_data = {"fw": fw, "extra": d.get("extra") or {}, "name": d.get("name") or "", "read": now,
+                     "sections": d.get("read_sections") or []}
+        c = agentlib.firewall_check(fw)
+        t = (d.get("extra") or {}).get("temps")
+        tc = agentlib.temps_check(t) if t else None
+        worst = max((x for x in (c, tc) if x), key=lambda x: {"ok": 0, "warn": 1, "crit": 2}[x["level"]])
+        detail = "; ".join(x["detail"] for x in (c, tc) if x and (x["level"] != "ok" or x is c))
+        if worst["level"] == "crit":
+            return False, None, detail
+        if worst["level"] == "warn":
+            return False, None, detail, "warn"
+        return True, d.get("ms"), detail
 
     VMW_EVERY = 300          # read VMware at most every 5 minutes, however often the device is checked
     VMW_LOGIN_RETRY = 1800   # a refused login is tried again after 30 minutes, not locking the account out
@@ -4569,6 +4633,7 @@ class Monitor:
     # What each kind of check looks at, so the AI knows what an error is about (e.g. a bare "1.5% (above 1)")
     CHECK_WHAT = {
         "starlink": "a Starlink satellite dish's status (outages, obstructions, alerts), read from the dish or the starlink.com account",
+        "opnsense": "an OPNsense firewall read through its API (gateways, CARP, IPsec, OpenVPN, state table, updates)",
         "vmware": "a VMware ESXi host, vCenter Server or Aria appliance, read with a read-only account (hosts, hardware sensors, "
                   "datastores, alarms, appliance health and backups)",
         "jellyfin": "a Jellyfin media server's health, tasks and streams", "plex": "a Plex media server's status and streams",
@@ -5194,7 +5259,7 @@ class Monitor:
                 h.checks = [pat.sub(address, c) if isinstance(c, str) else c for c in h.checks]
             elif isinstance(h.checks, str):
                 h.checks = pat.sub(address, h.checks)
-            for f in ("jf_url", "px_url", "vm_url"):
+            for f in ("jf_url", "px_url", "vm_url", "op_url"):
                 if getattr(h, f, None):
                     setattr(h, f, pat.sub(address, getattr(h, f)))
             h.host, h.ip, h.failures = address, None, 0
@@ -5880,6 +5945,7 @@ class Monitor:
                 "ha_device": h.ha_device, "ha_device_name": h.ha_device_name, "ha_more": h.ha_more,
                 "ilo": any(s.kind == "ilo" for s in h.services), "ilo_user": h.ilo_user, "ilo_pass_set": bool(h.ilo_pass),
                 "jellyfin_url": h.jf_url, "jellyfin_key_set": bool(h.jf_key), "jellyfin": h.jf_data,
+                "opnsense_url": h.op_url, "opnsense_key_set": bool(h.op_key), "opnsense": h.op_data,
                 "vmware_url": h.vm_url, "vmware_user": h.vm_user, "vmware_pass_set": bool(h.vm_pass),
                 "vmware": h.vm_data, "vmware_items": h.vm_items, "vmware_ignore": h.vm_ignore,
                 "plex_url": h.px_url, "plex_token_set": bool(h.px_key), "plex": h.px_data,
@@ -7213,7 +7279,8 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         for url_k, key_k, saved, old, default, what in (
                 ("jellyfin_url", "jellyfin_key", h.jf_key, h.jf_url, jflib.default_url, "Jellyfin API key"),
                 ("plex_url", "plex_token", h.px_key, h.px_url, pxlib.default_url, "Plex token"),
-                ("vmware_url", "vmware_pass", h.vm_pass, h.vm_url, vmlib.default_url, "VMware password")):
+                ("vmware_url", "vmware_pass", h.vm_pass, h.vm_url, vmlib.default_url, "VMware password"),
+                ("opnsense_url", "opnsense_key", h.op_key, h.op_url, opnlib.default_url, "OPNsense API key")):
             if url_k not in entry or entry.get(key_k) or not saved:
                 continue
             new_base, old_base = entry[url_k] or default(entry["host"]), old or default(h.host)
