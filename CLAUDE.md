@@ -41,6 +41,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- End-of-life OS ticks (owner asked 26 Nov): Settings ticks per reported release with device counts and end dates; LTSC/LTSB/IoT
-  no longer matched by "Windows 10" (that silenced supported LTSC machines in 1.100.0-1.101.0).
-- Manage menu (owner asked 26 Nov): grouped under Devices / Activity / Data headers, Settings at the bottom.
+(none)
