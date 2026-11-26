@@ -39,6 +39,11 @@ Remove each line once it's released.
   the agent reads version.php and plugin/theme headers on disk (Windows/IIS and Linux), never wp-config.php or the
   database, so no passwords are read or sent. The owner's is on Windows with IIS (find sites from IIS's own site list); Linux
   can follow. Leave on the list until asked.
+- Nessus-style vulnerability scanning (owner asked 26 Nov, "something big, not for now"): to scope with the owner first.
+  Today's checks are agent-only (Windows build vs MSRC, Linux packages via OSV, CISA KEV). Gaps vs Nessus: third-party
+  Windows apps from the software inventory, devices without an agent (firmware Rollcall already reads, service versions
+  on open ports), and configuration weaknesses. Don't clone Nessus's plugin library; consider importing Greenbone/OpenVAS
+  or Nessus results instead. Active scanning can upset fragile devices (old iDRACs, printers): opt-in, per device.
 
 ## Built, waiting for release
 
