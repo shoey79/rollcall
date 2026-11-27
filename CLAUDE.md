@@ -41,4 +41,7 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Leftover program entries (owner reported 27 Nov: Chrome 120 flagged, only 158 on disk; an entry in another
+  signed-in user's hive for a deleted per-user Chrome). Agent 1.0.62 checks each entry's program file (gone, file
+  version, profile name); thirdparty skips gone entries and uses file versions for one-copy programs; older agents:
+  a user entry older than the machine's copy is a leftover.
