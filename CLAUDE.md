@@ -53,6 +53,13 @@ Remove each line once it's released.
   up to two folders down) and sends the same shape as the Windows agent (wordpress.py, WordPress tab and Wordfence already
   OS-agnostic). Files only: version.php and plugin/theme headers, never wp-config.php or the database. Docker-hosted
   WordPress (files in container volumes) as a later step. Leave on the list until asked.
+- Sophos Firewall email and attack tables (owner asked 27 Nov): Sophos syslog already reaches Rollcall. Pick out
+  log_type="Anti-Spam" (log_component SMTP: sender, recipient, subject, action e.g. QUARANTINE, reason, quarantine_reason,
+  src_ip/src_country) and log_type="IDP" (signature_id, message, classification, rule_priority, fw_rule_name, src_ip,
+  src_country, dst_ip, dst_port, log_subtype Detect/Drop), plus WAF if present, into tables on the firewall's Logs tab:
+  "Email" (quarantined/rejected mail, newest first, filter, counts per day) and "Attacks" (IPS hits grouped by signature
+  and source, with the rule/server they targeted). Display only to start; alerting to be agreed. Use stand-ins in tests
+  and docs (the owner's sample lines hold his real domain, firewall name, serial and addresses).
 - Sophos firewall mail and attack tables (owner asked 27 Nov): Sophos XG/XGS syslog (key="value" pairs) already reaches
   Rollcall. On the firewall's Logs tab, add tables built from it:
   - Mail: log_type Anti-Spam / Anti-Virus with log_component SMTP: time, sender, recipient, subject, reason
