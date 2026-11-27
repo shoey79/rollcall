@@ -41,4 +41,7 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Orphaned MSI entries (owner reported 27 Nov: Chrome 120 still flagged after 1.105.1; two machine MSI entries, the old
+  one orphaned by an upgrade under a new product code, hidden by Programs and Features). Newest entry wins for one-copy
+  programs unless the older one's file was found; agent 1.0.63 checks MSI entries against Windows Installer
+  (orphan = Left over); file versions with commas (VLC 3,0,21,0) read properly.
