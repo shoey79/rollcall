@@ -28,25 +28,11 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-- Overview hint jumps away (owner reported 26 Nov): on a device's Overview, opening "What would be sent" under Ask Claude
-  in a Needs attention item switches to the tab the check belongs to, so you have to click back to Overview. Clicks on
-  anything inside the item's hint (details/summary, buttons, the preview) must not trigger the item's jump to its tab.
-- System files Run now looks ignored (owner reported 26 Nov): after Run now, Security > System files still says "Not run yet"
-  and the button is live again; the only sign is a sentence tacked onto the end of the grey hint. While run_now is pending,
-  say so in the status line ("Asked to run: starts at the agent's next report, within 5 minutes") and show the button as
-  "Asked" (disabled) until the run starts; then "Checking now" as today.
+(none)
 
 ## Requested features (not started)
 
-- WordPress (owner asked 26 Nov): a server with several WordPress sites, each with its own plugins. Find every install,
-  report its version and its plugins and themes (with versions), flag updates and known-vulnerable plugins. Proposed:
-  the agent reads version.php and plugin/theme headers on disk (Windows/IIS and Linux), never wp-config.php or the
-  database, so no passwords are read or sent. The owner's is on Windows with IIS (find sites from IIS's own site list); Linux
-  can follow. Leave on the list until asked.
-- Third-party software vulnerabilities (owner asked 26 Nov; replaces the Nessus-style idea, which he dropped): known CVEs in
-  software the agents report (Find software's inventory) that the Windows (MSRC) and Linux (OSV distro) data don't cover,
-  e.g. browsers, Java, 7-Zip, Adobe Reader, Notepad++. Shown and alerted in the Vulnerabilities tab like the rest.
-  Matching product names and versions to CVEs is the hard part: scope sources and matching with the owner first.
+(none)
 
 ## Built, waiting for release
 
@@ -55,4 +41,8 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Overview hint jump and System files Run now feedback (owner reported 26 Nov): queued fixes, built.
+- WordPress (owner asked 26 Nov): Windows agent 1.0.61 finds installs from IIS vdirs, reads version.php and plugin/theme
+  headers only; WordPress tab, check (updates, closed plugins), wordpress.org per slug, Wordfence feed with optional key.
+- Third-party software vulnerabilities (owner asked 26 Nov; chose the curated list): thirdparty.py CATALOG of ~50
+  programs mapped to NVD CPEs, plus vuln_software_extra lines; NVD CVE API per product, daily incremental.
