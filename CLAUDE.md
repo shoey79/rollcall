@@ -41,10 +41,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Acknowledge on Vulnerabilities (owner reported 27 Nov): the ack stored only the OS's CVEs, so a program's (Chrome)
-  counted as new at once and it never cleared. Now stores every CVE the check counts.
-- End of life quietens only the OS's own vulnerabilities; "their programs too" (vuln_skip_os_programs, device
-  vuln_skip_programs) and per-program Don't alert (vuln_quiet), listed under Ignored.
-- Vulnerabilities tab under headings: Operating system, Programs (grouped), WordPress (by site).
-- Wildcard ignores (service:GoogleUpdaterService*) and "Ignore all versions"; Security filters heading when empty.
-- Sophos Email and Attacks views on the Logs tab (sophoslog.py, fw_events table, editors only, history_days).
+(none)
