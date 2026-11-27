@@ -70,6 +70,7 @@ Rollcall opens on the **Overview**:
   - **Nothing**: all the tiles together.
 
   Each section shows how many are down, need attention, paused or up. Click its heading to collapse it. Your choices are remembered in this browser.
+- **Manage** (top right) holds everything else, grouped: **Devices** (Add device, Discover devices, Agents, Find software), **Activity** (Messages, Log), **Data** (Export / import, Offline data, Database), then **Settings**, and **Reset all uptime** on its own at the bottom. The admin-only ones (Messages, Export / import, Offline data) are hidden from editors.
 - **Syslog from unknown devices** appears when something sends syslog that isn't set up in Rollcall (see [Syslog](#syslog)).
 
 ### Tabs
@@ -99,7 +100,7 @@ The ✎ on the open tab edits it, deletes it or moves it left or right. **A–Z*
 
 ### Details
 
-![Details of a Windows server with the agent: its checks and system information](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/details.png)
+![Details of a Windows server with the agent: its notes, its checks and system information](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/details.png)
 
 **Details** on a row, or the device's name, opens everything Rollcall knows about that device, in tabs:
 
@@ -1382,11 +1383,13 @@ It copies itself to `/usr/local/etc/rollcall/` (with its token) and adds a cron 
 
 ## Known vulnerabilities
 
+![A web server's Vulnerabilities tab: a WordPress plugin and two Windows programs with known vulnerabilities](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/vulnerabilities.png)
+
 Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CVEs) in what's installed, from public data the add-on downloads once a day. Only vulnerabilities that an update fixes count, so each one has something to do about it.
 
 - **Amber:** a vulnerability scoring `vuln_min_score` or more out of 10 (its CVSS base score; 9 by default, which is "critical"). Amber isn't notified, like other amber checks.
 - **Red, and notified:** any vulnerability, whatever its score (so it's listed even below `vuln_min_score`), on CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, or that Microsoft says is being exploited, whatever its score.
-- The **Software** tab in Details lists each one, worst first: the CVE (linked to cve.org), its score, what it's in, the installed version and the version or Windows build that fixes it. Vulnerable packages are marked in the list, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
+- The **Vulnerabilities** tab in Details lists each one, worst first: the CVE (linked to cve.org, or to Wordfence for WordPress entries without a CVE), its score, what it's in, the installed version and the version or Windows build that fixes it, and says what else was checked. Vulnerable programs and packages are marked on the **Software** tab, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
 - **Acknowledge** keeps it green while the list stays the same; a new vulnerability alerts again. It clears by itself once the update is installed.
 - **End-of-life systems kept on purpose** (e.g. Windows 10 without extended security updates): in Settings, **End-of-life operating systems**, tick their releases, or tick **Treat this device as end of life** in one device's Vulnerabilities tab. Their vulnerabilities are still listed there, with a note saying why, but never turn the device amber or red or notify, known-exploited ones included.
   - The ticks are the releases your agents report, each with how many devices run it and when its standard security updates end (paid extensions such as ESU or Ubuntu Pro aren't counted; Windows 11 shows no date, as its support depends on the feature update). Releases that are out of support are marked.
@@ -1415,6 +1418,8 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`; for other programs `services.nvd.nist.gov`; for WordPress `api.wordpress.org` and `www.wordfence.com`. If one can't be reached, the Vulnerabilities tab says so, and the data already downloaded is used until it can. Offline, other programs and WordPress aren't checked (the offline bundle doesn't carry their data yet).
 
 ## WordPress sites
+
+![A WordPress tab: two sites on one IIS server, with an update waiting, a plugin closed on wordpress.org and known vulnerabilities](https://raw.githubusercontent.com/shoey79/rollcall/main/docs/images/wordpress.png)
 
 On a Windows server running IIS (agent 1.0.61 or later), the agent finds every WordPress install from IIS's own list of sites and virtual directories, including installs one or two folders below a site's root, and a **WordPress** tab shows each one: its WordPress version, and each plugin's and theme's name and version (must-use plugins and child themes marked).
 

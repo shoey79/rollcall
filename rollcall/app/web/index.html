@@ -656,7 +656,7 @@ h1 .logo{width:26px;height:26px;vertical-align:-5px;margin-right:9px;border-radi
 
 <dialog id="agDlg" class="wide">
   <form method="dialog">
-    <div class="dlg-head"><h2>Agents</h2><div class="sub">One agent for Windows and one for Linux. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents send reports; they never take instructions, apart from updates and messages that you turn on.</div></div>
+    <div class="dlg-head"><h2>Agents</h2><div class="sub">Agents for Windows, Linux, OpenWrt routers and pfSense, OPNsense and FreeBSD firewalls. Each works out what the server runs and reports disk space, storage health, services, logs, security and updates. Agents send reports; they never take instructions, apart from updates and messages that you turn on.</div></div>
     <div class="dlg-body" id="agBody"></div>
     <div class="dlg-foot"><div></div><div><button class="primary">Close</button></div></div>
   </form>
@@ -1683,7 +1683,7 @@ function renderHome() {
   html += `<div class="panel"><h2>Alerts${list.length ? ` (${list.length})` : ""}<small>${list.length ? "Click one to see the details" : ""}</small></h2>` +
     (list.length ? list.map((a, i) => {
       const jump = a.check && a.check.agent && a.h.agent;
-      const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + ((JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
+      const target = a.check && a.check.kind === "snmp" ? "Details" : a.check && a.check.kind === "syslog" ? "Logs" : jump ? (JUMP[checkKey(a.check)] ? "Details: " + (TAB_LABEL[JUMP[checkKey(a.check)][0]] || (JUMP[checkKey(a.check)][0] || "").replace(/^./, c => c.toUpperCase())) : "Details") : "Show in list";
       const ack = ackFor(a), hk = a.check && hintable(a.h, a.check) ? hintId(a.h.key, a.check.key) : "";
       const wrap = ack || hk;
       return `${wrap ? `<div class="alertwrap sev${a.sev}">` : ""}<button type="button" class="alert sev${a.sev}" data-alert="${i}">
@@ -3498,7 +3498,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       flush("vulns");  // a tab of its own
       // Known vulnerabilities: what an update (or a newer Windows build) fixes, worst first
       const inf = vu.info || {}, errs = Object.entries(inf.errors || {});
-      const srcs = [linux ? (vu.linux_source === "online" ? "OSV.dev (asked online)" : "OSV.dev data downloaded daily") : `Microsoft's security updates (${inf.msrc_months || 0} months)`,
+      const srcs = [linux ? (vu.linux_source === "online" ? "OSV.dev (asked online)" : "OSV.dev data downloaded daily") : `Microsoft's security updates (${inf.msrc_months || 0} month${inf.msrc_months === 1 ? "" : "s"})`,
         `CISA's known-exploited list (${(inf.kev || 0).toLocaleString()} CVEs)`];
       // Offline: the data is whatever was imported, so say how old it is
       const offAt = inf.offline ? Math.max(inf.msrc_at || 0, inf.kev_at || 0, inf.osv_at || 0) : 0;
@@ -5384,6 +5384,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 });
 
 // Which tab (and section) each agent check lives in, for jumping from the Checks cards.
+const TAB_LABEL = {vulns: "Vulnerabilities", wordpress: "WordPress"};  // tab names the Overview's links show where the key alone reads oddly
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
