@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.105.0 - 2026-11-27
+
+- **Sophos Firewall: email and attacks on the Logs tab.** A Sophos Firewall (XG or XGS) sending its logs to Rollcall now gets **Email** and **Attacks** views beside **Messages**, built from the lines it was already sending. **Email** lists what its email protection quarantined, rejected or let through (sender, recipient, subject, reason, action, size, and where it came from); **Attacks** lists what intrusion prevention and web server protection caught (signature, classification, priority, rule, source and destination, Detect or Drop). Each has a search box, counts per day and the usual suspects at the top. They're kept for `history_days`, apart from the firewall's chatty traffic log so it can't crowd them out, and only admins and editors see them, as senders and subjects are personal data. Display only: nothing new alerts.
+
+- **End of life means the operating system, not everything on it.** Ticking Windows 10 as end of life (or **Treat this device as end of life**) silenced the whole device, so an old Firefox or a WordPress plugin with a known hole went quiet with it. It now quietens only the operating system's own vulnerabilities; programs and WordPress keep alerting, since they can usually still be updated. For when they can't:
+  - **End-of-life systems: their programs too** in Settings, and **…and its programs too** on one device, quieten its programs as well.
+  - **Don't alert** on one program on one device (an application stuck on an old version, say) quietens just that one. It's marked **Not alerted**, listed under **Ignored on this server**, and **Alert again** undoes it.
+  - The check's detail says how many weren't alerted and why.
+
+- **Vulnerabilities, sorted into headings.** The tab was one list with Windows CVEs wedged between WinRAR and Chrome. It now has **Operating system** (one line per CVE, with the build and KB that fixes it), **Programs** (one line per program: installed, fixed in, how many CVEs, the worst score, whether one is exploited; click the count for the CVEs) and **WordPress** (by site), each saying whether it alerts and what was checked. Still one tab.
+
+- **Ignore all versions of a service.** Services with their version in the name (GoogleUpdaterService159.0.8140.0 and friends) came back under a new name after every update, so **Ignore** lasted about as long as the version. Ignores now take `*` (`service:GoogleUpdaterService*`), **Ignore all versions** next to **Ignore** sets that up, and matches show as **Ignored (all versions)**. Works in `agent_ignore` too.
+
+- **Security filters get their own heading.** With none set, the note about them ("Expected changes, such as a managed account being recreated…") sat under **Passwords left in files**, looking for all the world as if it belonged there. It now has a **Security filters** heading of its own.
+
+- **Acknowledge on Vulnerabilities now sticks.** It remembered only Windows' own vulnerabilities, so a program's (Chrome's, say) looked brand new the moment it was acknowledged and the check stayed amber, however many times you pressed it. It now remembers everything the check counts, and only something genuinely new brings it back. If you pressed it before updating, press it once more.
+
 ## 1.104.1 - 2026-11-27
 
 - **No more tracebacks for computers that are off.** When a ping ran out of time at the very moment it finished, Rollcall tried to stop a process that had already gone, tripped over the empty space, and logged "Check failed for PC01" with a page of traceback. It's now simply no reply, as it should have been all along.
