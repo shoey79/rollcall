@@ -61,4 +61,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Acknowledge on Vulnerabilities (owner reported 27 Nov): the ack stored only the OS's CVEs, so a program's (Chrome)
+  counted as new at once and it never cleared. Now stores every CVE the check counts.
