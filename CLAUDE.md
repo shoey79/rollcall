@@ -32,6 +32,9 @@ Remove each line once it's released.
   end of life") silences everything, including third-party programs (e.g. an old Firefox) and WordPress. It should only
   silence the operating system's own vulnerabilities (Windows build / Linux distro packages); other programs and
   WordPress keep alerting. Vulnerabilities tab banner and check detail to say which part is excluded.
+  Owner's addition: a second tick for "its programs too", for when programs can't be updated on an old OS. In Settings,
+  each ticked release gets "and its programs"; on a device, "Treat as end of life" gets the same two choices; plus
+  "Don't alert" on one program on one device (e.g. an app that can't be updated), shown as such and listed under Ignored.
 
 ## Requested features (not started)
 
