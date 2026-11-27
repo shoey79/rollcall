@@ -36,12 +36,6 @@ Remove each line once it's released.
   up to two folders down) and sends the same shape as the Windows agent (wordpress.py, WordPress tab and Wordfence already
   OS-agnostic). Files only: version.php and plugin/theme headers, never wp-config.php or the database. Docker-hosted
   WordPress (files in container volumes) as a later step. Leave on the list until asked.
-- Settings tidy-up (owner asked 27 Nov): map it out with the owner before building. Agent settings are spread over three
-  tabs (Agents with 33 settings, Agent log alerts, Agent port). Sketch shown: Checking; Alerts (phone/HA, email);
-  Agents (connection, updates, disks and resources, logs and events, security features, messages); Vulnerabilities and
-  software (score, end-of-life OSes, other programs, WordPress/Wordfence, winget, offline); Device limits (certs, UPS,
-  printers); AI hints; Dashboard and access. Titled sections with a line each inside tabs; search stays; option keys
-  unchanged so nothing breaks.
 
 ## Built, waiting for release
 
@@ -50,4 +44,7 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Settings tidy-up (owner asked 27 Nov): seven tabs (Checking, Alerts, Agents, Vulnerabilities and software, Device
+  limits, AI hints, Dashboard and access), each in titled sections (settingslib.SECTIONS); option keys unchanged.
+- Password scan folder list in Settings (owner asked 27 Nov, follows #19): secret_ignore_folders, Rollcall-side, with *
+  wildcards and *\ for any depth; findings shown as "Ignored (Settings)".
