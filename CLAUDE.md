@@ -44,4 +44,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Ping timeout traceback (owner reported 27 Nov): when ping ran out of time just as it finished, proc.kill() raised
+  ProcessLookupError and the check logged "Check failed" with a traceback (computers that were off). Now no reply.
