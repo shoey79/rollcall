@@ -210,6 +210,7 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+p.asked{margin:0 0 10px;padding:8px 10px;border-radius:6px;background:color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent)}
 .notesbox{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
 .notesbox .ntext{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;margin:4px 0 0}
 .notesbox textarea{width:100%;min-height:120px;box-sizing:border-box;font:inherit;font-size:13.5px;resize:vertical}
@@ -4790,7 +4791,7 @@ function renderOverview(h, sn, lg, ha) {
   body.scrollTop = top;
 }
 document.getElementById("detBody").addEventListener("click", e => {
-  const j = e.target.closest("[data-ovjump]");
+  const j = !inItemControl(e, "[data-ovjump]") && e.target.closest("[data-ovjump]");
   if (!j || detMode !== "overview" || !detKey) return;
   if (j.dataset.ovjump === "snmp") openSnmp(detKey); else if (j.dataset.ovjump === "logs") openLogs(detKey);
   else if (j.dataset.ovjump === "starlink") openStarlink(detKey);
@@ -5095,8 +5096,15 @@ function sfcSection(sf, cf, chk, ver) {
   const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const t = iso => iso ? new Date(iso).toLocaleString([], {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
   const old = ver && cmpVer("1.0.59", ver) > 0;
-  let inner = "";
+  // Run now asked for and not started yet (the agent picks it up at its next report)
+  const since = cf.run_now ? Date.now() / 1000 - cf.run_now : 1e9, running = sf && sf.state === "running";
+  const pending = !old && cf.run_now && !running && !(sf && sf.started && Date.parse(sf.started) / 1000 >= cf.run_now - 60) && since < 86400;
+  const hm = ts => new Date(ts * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  let inner = pending ? (since < 900
+    ? `<p class="asked">⏳ <b>Asked to run</b> at ${hm(cf.run_now)}: it starts at the agent's next report, within 5 minutes, then takes 10 to 30 minutes.</p>`
+    : `<p class="asked">⏳ <b>Asked to run</b> at ${hm(cf.run_now)}, but it hasn't started: the agent hasn't picked it up. Is the device on and its agent reporting?</p>`) : "";
   if (old) inner += `<p class="empty-note">Needs Windows agent 1.0.59 or later (this one is ${esc(ver)}); it updates itself.</p>`;
+  else if ((!sf || sf.state === "never") && pending) {}
   else if (!sf || sf.state === "never") inner += `<p class="empty-note">${cf.on ? `Not run yet. It runs next ${DAYS[cf.day]} at ${String(cf.hour).padStart(2, "0")}:00, or use <b>Run now</b>.` : "Off for this device."}</p>`;
   else {
     const dm = sf.dism, DM = {healthy: "No corruption", repairable: "Damaged, repairable", not_repairable: "Damaged, can't be repaired", failed: "Couldn't run"};
@@ -5115,8 +5123,8 @@ function sfcSection(sf, cf, chk, ver) {
       <option value="default"${cf.mode === "default" ? " selected" : ""}>As the add-on option says (${esc({off: "off", all: "all Windows devices", servers: "servers", workstations: "workstations"}[cf.default] || cf.default)})</option>
       <option value="on"${cf.mode === "on" ? " selected" : ""}>Weekly</option><option value="off"${cf.mode === "off" ? " selected" : ""}>Off</option></select></label>
       <label class="row-inline"><input type="checkbox" class="sfcdism"${cf.dism ? " checked" : ""}> Also check the component store (DISM)</label>
-      <button type="button" class="mini" data-sfcsave>Save</button> <button type="button" class="mini primary" data-sfcrun${sf && sf.state === "running" ? " disabled" : ""}>Run now</button></div>`;
-  return sect("System files", inner + `<p class="hint">A read-only <code>sfc /verifyonly</code>, in the background at low priority: it never changes anything. Amber when files don't match what Windows expects.${cf.run_now && (!sf || sf.state !== "running") && Date.now() / 1000 - cf.run_now < 900 ? " Run now was asked for: it starts at the agent's next report (within 5 minutes)." : ""}</p>`);
+      <button type="button" class="mini" data-sfcsave>Save</button> ${running || (pending && since < 900) ? `<button type="button" class="mini primary" data-sfcrun disabled>${running ? "Running" : "Asked"}</button>` : `<button type="button" class="mini primary" data-sfcrun>Run now</button>`}</div>`;
+  return sect("System files", inner + `<p class="hint">A read-only <code>sfc /verifyonly</code>, in the background at low priority: it never changes anything. Amber when files don't match what Windows expects.</p>`);
 }
 document.getElementById("detBody").addEventListener("click", async e => {
   const b = e.target.closest("[data-sfcsave], [data-sfcrun]"); if (!b || detMode === "snmp") return;
@@ -5379,8 +5387,12 @@ document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dtab]");
   if (t) showDetTab(t.dataset.dtab);
 });
+// A Needs attention item jumps to its check's tab, except for clicks on what's inside its hint (Ask Claude, "What
+// would be sent", the text in it) or on any other control in it.
+const ITEM_CONTROLS = ".hintbox, details, summary, pre, button, a[href], input, textarea, select, label";
+const inItemControl = (e, sel = "[data-jump]") => { const c = e.target.closest(ITEM_CONTROLS), j = e.target.closest(sel); return !!(c && j && j.contains(c)); };
 document.getElementById("detBody").addEventListener("keydown", e => {
-  const j = e.target.closest("[data-jump]");
+  const j = !inItemControl(e) && e.target.closest("[data-jump]");
   if (j && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showDetTab(...JUMP[j.dataset.jump]); }
 });
 document.getElementById("detBody").addEventListener("click", async e => {
@@ -5394,7 +5406,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
     e.stopPropagation(); ac.disabled = true;
     return detPost("/agent/ack", {kind: "check", check: ac.dataset.ackcheck, ...(ac.dataset.undo ? {undo: true} : {})});
   }
-  const j = e.target.closest("[data-jump]");
+  const j = !inItemControl(e) && e.target.closest("[data-jump]");
   if (j) return showDetTab(...JUMP[j.dataset.jump]);
   const b = e.target.closest("button");
   if (!b) return;
