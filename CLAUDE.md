@@ -44,7 +44,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Settings tidy-up (owner asked 27 Nov): seven tabs (Checking, Alerts, Agents, Vulnerabilities and software, Device
-  limits, AI hints, Dashboard and access), each in titled sections (settingslib.SECTIONS); option keys unchanged.
-- Password scan folder list in Settings (owner asked 27 Nov, follows #19): secret_ignore_folders, Rollcall-side, with *
-  wildcards and *\ for any depth; findings shown as "Ignored (Settings)".
+(none)
