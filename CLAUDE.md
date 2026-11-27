@@ -44,4 +44,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Docs review (owner asked 27 Nov): new screenshots (dashboard, details, add, agents, wordpress, vulnerabilities),
+  Manage menu in DOCS, README feature list; alert links use tab names; agents intro mentions all four agents.
