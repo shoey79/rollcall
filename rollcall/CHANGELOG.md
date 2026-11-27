@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.105.2 - 2026-11-27
+
+- **Chrome 120, take two.** 1.105.1 cleared a leftover Chrome in someone's profile, but there was a second hiding place: two of Chrome's business installer (MSI) entries for everyone, the one for 158 and an orphan for 120 that the upgrade left behind under its old product code. Programs and Features hides an orphan like that; Rollcall didn't, and neither entry names chrome.exe for the file check to catch it. Now:
+  - For programs with one copy per machine (browsers, 7-Zip, Notepad++, VLC) only the newest entry is checked, unless the agent found an older copy's file. This works as soon as Rollcall updates.
+  - Windows agent 1.0.63 checks installer entries against Windows Installer, as Programs and Features does, and marks the orphans **Left over** for any program.
+
+- **VLC is version 3.0.21, not 3.** VLC writes its file's version with commas (3,0,21,0), and 1.105.1 read only the first number.
+
 ## 1.105.1 - 2026-11-27
 
 - **Chrome no longer cries wolf about a copy that isn't there.** Some machines showed Chrome 120 (from December 2023) as exploitable while Program Files held 158. The agent reads every signed-in user's list of programs, not just the one Programs and Features shows you, and one of them still had an entry for a per-user Chrome that had long since been deleted without being uninstalled. Rollcall took the registry's word for it. Now:
