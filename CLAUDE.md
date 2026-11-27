@@ -44,7 +44,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Ping timeout traceback (owner reported 27 Nov): when ping ran out of time just as it finished, proc.kill() raised
-  ProcessLookupError and the check logged "Check failed" with a traceback (computers that were off). Now no reply.
-- Vulnerability matching speed (owner reported 27 Nov: "held up for 16 s" in thirdparty._parts after updating):
-  thirdparty.Data.hits caches per product version; main caches tp/wp findings per device until programs or data change.
+(none)
