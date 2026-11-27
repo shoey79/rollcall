@@ -65,6 +65,8 @@ import jellyfin as jflib
 import vmware as vmlib
 import opnsense as opnlib
 import oslife
+import wordpress as wplib
+import thirdparty as tplib
 import plex as pxlib
 import starlink as sllib
 import firetv as ftlib
@@ -255,6 +257,10 @@ DEFAULTS = {
     "vuln_min_score": 9,
     "vuln_linux_source": "local",
     "vuln_skip_os": [],
+    "vuln_third_party": True,
+    "vuln_software_extra": [],
+    "wordpress_checks": True,
+    "wordfence_api_key": "",
     "agent_secret_scan": "off",
     "agent_sfc": "off", "agent_sfc_day": "sunday", "agent_sfc_hour": 3, "agent_sfc_dism": False,
     "name_line": "auto",
@@ -1942,6 +1948,19 @@ class Monitor:
         except Exception as err:  # noqa: BLE001 - a damaged cache is downloaded again
             log.warning("Couldn't read the saved vulnerability data (%s); it will be downloaded again", err)
         self._vf: dict = {}          # agent id -> (what it was worked out from, findings)
+        self._wp: dict = {}          # agent id -> its WordPress sites as last sent (wordpress.py)
+        self.want_wp: set = set()    # agents whose WordPress list Rollcall is missing
+        self.wpdata = wplib.Data(VULN_DIR / "wordpress", log)
+        self.tpdata = tplib.Data(VULN_DIR / "nvd", log)   # other programs' CVEs from the NVD (thirdparty.py)
+        self._tp: dict = {}
+        try:
+            self.tpdata.load()
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't read the saved NVD data (%s); it will be fetched again", err)
+        try:
+            self.wpdata.load()
+        except Exception as err:  # noqa: BLE001
+            log.warning("Couldn't read the saved WordPress data (%s); it will be fetched again", err)
         self.opts = opts
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
@@ -2664,6 +2683,17 @@ class Monitor:
             self.store.prune(now - int(self.opts["history_days"]) * DAY)
             self.logs.prune(now - int(self.opts["history_days"]) * DAY)
             notes.append("older history has been removed")
+        for keys, attr, loop in (({"wordpress_checks", "wordfence_api_key"}, "_wp_task", self.wp_loop),
+                                 ({"vuln_third_party", "vuln_software_extra", "vuln_checks"}, "_tp_task", self.tp_loop)):
+            if keys & changed.keys():
+                self._tp.clear()
+                task = getattr(self, attr, None)
+                if task:  # fetch what the new settings need now
+                    task.cancel()
+                    setattr(self, attr, asyncio.create_task(loop(first_wait=1)))
+                for h in list(self.hosts.values()):
+                    if h.agent_id and h.agent_report:
+                        asyncio.create_task(self.reevaluate(h))
         if "vuln_skip_os" in changed and not ({"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys()):
             for h in list(self.hosts.values()):  # only whether each one alerts changes: judge them again
                 if h.agent_id and h.agent_report:
@@ -3968,6 +3998,11 @@ class Monitor:
             self._store_apps(agent, apps, ahash, now)
         elif ahash and self.software(agent["id"]).get("hash") != ahash:
             self.want_apps.add(agent["id"])  # Rollcall hasn't got this list: the reply asks for it
+        wps, wph = report.pop("wordpress", None), str(report.pop("wp_hash", "") or "")[:64]
+        if wps is not None:
+            self._store_wordpress(agent, wps, wph, now)
+        elif wph and self.wordpress(agent["id"]).get("hash") != wph:
+            self.want_wp.add(agent["id"])
         h = await self._link(agent, create=True)
         self.agents.save()
         if not h:
@@ -4120,6 +4155,96 @@ class Monitor:
     # -- installed software ----------------------------------------------
     def _sw_path(self, agent_id: str) -> Path:
         return SOFTWARE_DIR / (re.sub(r"[^A-Za-z0-9_-]", "", str(agent_id))[:64] + ".json")
+
+    def wordpress(self, agent_id: str | None) -> dict:
+        """An agent's WordPress sites as last sent: {hash, updated, sites} ({} if none). Cached in memory."""
+        if not agent_id:
+            return {}
+        if agent_id not in self._wp:
+            try:
+                self._wp[agent_id] = json.loads(self._sw_path(agent_id).with_suffix(".wordpress.json").read_text())
+            except (OSError, ValueError):
+                self._wp[agent_id] = {}
+        return self._wp[agent_id]
+
+    def _store_wordpress(self, agent: dict, sites, whash: str, now: float) -> None:
+        clean = wplib.clean(sites)
+        old = self.wordpress(agent["id"])
+        wp = {"hash": whash, "updated": int(now), "sites": clean}
+        self._wp[agent["id"]] = wp
+        self.want_wp.discard(agent["id"])
+        try:
+            SOFTWARE_DIR.mkdir(parents=True, exist_ok=True)
+            p = self._sw_path(agent["id"]).with_suffix(".wordpress.json")
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(wp, separators=(",", ":")))
+            tmp.replace(p)
+        except OSError as err:
+            log.warning("Couldn't save the WordPress list for %s: %s", agent.get("hostname"), err)
+        if [(w["site"], w["path"]) for w in clean] != [(w["site"], w["path"]) for w in old.get("sites") or []]:
+            log.info("%s: %d WordPress site%s", agent.get("hostname"), len(clean), "" if len(clean) == 1 else "s")
+        if wplib.wanted(clean) - set(self.wpdata.info) and self.opts.get("wordpress_checks", True):
+            task = getattr(self, "_wp_task", None)
+            if task:  # new plugins: ask wordpress.org about them now rather than within the hour
+                task.cancel()
+                self._wp_task = asyncio.create_task(self.wp_loop(first_wait=5))
+
+    def wordpress_check(self, h: Host) -> dict | None:
+        """The WordPress agent check: amber when updates are waiting or a plugin has been closed on wordpress.org."""
+        if not self.opts.get("wordpress_checks", True) or not h.agent_id:
+            return None
+        sites = self.wordpress(h.agent_id).get("sites")
+        if not sites:
+            return None
+        upd = wplib.updates(sites, self.wpdata)
+        if not self.wpdata.core.get("at") and not self.offline():
+            return {"key": "wordpress", "label": "WordPress", "level": agentlib.OK,
+                    "detail": f"{len(sites)} site{'s' if len(sites) != 1 else ''}; checking wordpress.org for updates"}
+        level, detail = wplib.check(sites, upd)
+        return {"key": "wordpress", "label": "WordPress", "detail": detail, "level": agentlib.WARN if level == "warn" else agentlib.OK}
+
+    def wordpress_view(self, h: Host) -> dict | None:
+        """For the WordPress tab."""
+        wp = self.wordpress(h.agent_id) if h.agent_id else {}
+        if not wp.get("sites"):
+            return None
+        upd = wplib.updates(wp["sites"], self.wpdata)
+        vul = {}
+        if self.opts.get("vuln_checks", True):
+            for f in self.wp_findings(h):
+                vul.setdefault(f["what"], []).append({k: f[k] for k in ("cve", "score", "exploited", "fixed", "title", "ref")})
+        return {"sites": wp["sites"], "updates": upd, "updated": wp.get("updated"), "vulns": vul,
+                "on": bool(self.opts.get("wordpress_checks", True)), "offline": self.offline(),
+                "wordfence": bool(self.opts.get("wordfence_api_key")), "data": self.wpdata.status()}
+
+    def wp_findings(self, h: Host) -> list:
+        sites = self.wordpress(h.agent_id).get("sites") if h.agent_id else None
+        if not sites or not self.wpdata.wf or not self.opts.get("wordpress_checks", True):
+            return []
+        return wplib.findings(sites, self.wpdata.wf, self.vulnfeeds.kev)
+
+    async def wp_loop(self, first_wait: float = 60) -> None:
+        """Ask wordpress.org about the plugins and themes in use (daily) and fetch the Wordfence feed (when there's a
+        key), then judge the devices with WordPress sites again if anything changed."""
+        await asyncio.sleep(first_wait)
+        while True:
+            try:
+                slugs = set()
+                hosts = [h for h in list(self.hosts.values()) if h.agent_id and self.wordpress(h.agent_id).get("sites")]
+                for h in hosts:
+                    slugs |= wplib.wanted(self.wordpress(h.agent_id)["sites"])
+                if hosts and self.opts.get("wordpress_checks", True) and not self.offline():
+                    async with ClientSession(timeout=ClientTimeout(total=1800, sock_connect=30, sock_read=300)) as session:
+                        changed = await self.wpdata.refresh(session, time.time(), slugs, str(self.opts.get("wordfence_api_key") or ""))
+                    if changed:
+                        self._vf.clear()
+                        for h in hosts:
+                            await self.reevaluate(h)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                log.warning("WordPress: update failed (%s); trying again in an hour", err)
+            await asyncio.sleep(3600)
 
     def software(self, agent_id: str | None) -> dict:
         """An agent's last software list: {hash, updated, apps, changes} ({} if none yet). Cached in memory."""
@@ -4296,6 +4421,76 @@ class Monitor:
         self._vf[h.agent_id] = (key, out)
         return out
 
+    def extra_findings(self, h: Host) -> list:
+        """Vulnerabilities beyond the operating system's: WordPress sites (Wordfence) and third-party programs (NVD)."""
+        if not self.opts.get("vuln_checks", True) or not h.agent_id:
+            return []
+        ms = float(self.opts.get("vuln_min_score", 9))  # as for Windows and Linux: at or above the score, or exploited
+        return [f for f in self.wp_findings(h) + self.tp_findings(h) if f["exploited"] or (f["score"] or 0) >= ms]
+
+    def extra_sources(self, h: Host) -> list:
+        """What else was checked on this device, for the Vulnerabilities tab."""
+        out = []
+        sites = self.wordpress(h.agent_id).get("sites") if h.agent_id else None
+        if sites and self.opts.get("wordpress_checks", True):
+            out.append({"what": "wordpress", "sites": len(sites), "checked": bool(self.wpdata.wf),
+                        "why_not": None if self.wpdata.wf else ("Set a Wordfence API key in Settings to check WordPress plugins and themes"
+                                                                if not self.opts.get("wordfence_api_key") else
+                                                                (self.wpdata.meta.get("errors") or {}).get("Wordfence") or "Waiting for the Wordfence data to download")})
+        tp = self.tp_view(h)
+        if tp:
+            out.append({"what": "programs", **tp})
+        return out
+
+    def _tp_matched(self, h: Host) -> list:
+        """Programs on this Windows device that are on the list to check: [(index, label, NVD products, version)]."""
+        if not h.agent_id or not self.opts.get("vuln_third_party", True) or (h.agent_report or {}).get("os_family") == "linux":
+            return []
+        sw = self.software(h.agent_id)
+        extra = tuple(self.opts.get("vuln_software_extra") or [])
+        key = (sw.get("hash"), sw.get("updated"), extra)
+        hit = self._tp.get(h.agent_id)
+        if not hit or hit[0] != key:
+            hit = (key, tplib.matches(sw.get("apps") or [], tplib.parse_extra(extra)))
+            self._tp[h.agent_id] = hit
+        return hit[1]
+
+    def tp_findings(self, h: Host) -> list:
+        m = self._tp_matched(h)
+        return tplib.findings(m, self.tpdata, self.vulnfeeds.kev) if m else []
+
+    def tp_view(self, h: Host) -> dict | None:
+        m = self._tp_matched(h)
+        if not m:
+            return None
+        have = lambda cpes: any((self.tpdata.products.get(p) or {}).get("at") for p in cpes)  # noqa: E731
+        labels = lambda ok: sorted({lab for _i, lab, cpes, _v in m if have(cpes) == ok}, key=str.lower)  # noqa: E731
+        return {"checked": labels(True), "pending": labels(False), "offline": self.offline()}
+
+    async def tp_loop(self, first_wait: float = 90) -> None:
+        """Fetch the NVD's CVEs for the listed programs in use (daily), then judge those devices again if they changed."""
+        await asyncio.sleep(first_wait)
+        while True:
+            try:
+                wanted, hosts = set(), []
+                for h in list(self.hosts.values()):
+                    m = self._tp_matched(h) if self.opts.get("vuln_checks", True) else []
+                    if m:
+                        hosts.append(h)
+                        for _i, _l, cpes, _v in m:
+                            wanted |= set(cpes)
+                if wanted and not self.offline():
+                    async with ClientSession(timeout=ClientTimeout(total=600, sock_connect=30, sock_read=300)) as session:
+                        changed = await self.tpdata.refresh(session, time.time(), wanted)
+                    if changed:
+                        for h in hosts:
+                            await self.reevaluate(h)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                log.warning("Vulnerabilities: NVD update failed (%s); trying again in an hour", err)
+            await asyncio.sleep(3600)
+
     @staticmethod
     def _vuln_server(h: Host) -> bool:
         """Windows Server, rather than desktop Windows: they can share a build number but are updated separately."""
@@ -4333,9 +4528,10 @@ class Monitor:
             return None
         if r.get("agent_kind") == "sh":
             return None  # OpenWrt: no installed-package list or vulnerability data for it
-        found = self.vuln_findings(h)
-        if found is None:
+        found, extra = self.vuln_findings(h), self.extra_findings(h)
+        if found is None and not extra:
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": self._vuln_why_not(h), "ids": []}
+        found = (found or []) + extra
         skip = self.vuln_skipped(h)
         if skip:  # end of life, kept on purpose: listed in its tab, never alerted (known-exploited ones too)
             n = len({x["cve"] for x in found})
@@ -4384,8 +4580,14 @@ class Monitor:
 
     def vulns_by_app(self, h: Host) -> dict:
         """{index into the software list: [{"cve", "score", "exploited", "fixed"}]} for Linux packages."""
+        if (h.agent_report or {}).get("os_family") != "linux":  # Windows: the listed programs' CVEs (thirdparty.py)
+            out: dict = {}
+            for f in self.extra_findings(h):
+                if f.get("app") is not None:
+                    out.setdefault(f["app"], []).append({k: f[k] for k in ("cve", "score", "exploited", "fixed")})
+            return out
         found = self.vuln_findings(h) or []
-        if not found or (h.agent_report or {}).get("os_family") != "linux":
+        if not found:
             return {}
         by_src: dict = {}
         for x in found:
@@ -4404,7 +4606,9 @@ class Monitor:
         if not self.opts.get("vuln_checks", True) or not h.agent_id:
             return None
         found = self.vuln_findings(h)
-        return {"found": sorted(found or [], key=lambda f: (not f["exploited"], -(f["score"] or 0), f["cve"]))[:500],
+        both = (found or []) + self.extra_findings(h)
+        return {"found": sorted(both, key=lambda f: (not f["exploited"], -(f["score"] or 0), f["cve"]))[:500],
+                "also": self.extra_sources(h),
                 "checked": found is not None, "why_not": None if found is not None else self._vuln_why_not(h),
                 "min_score": int(self.opts.get("vuln_min_score", 9)), "linux_source": str(self.opts.get("vuln_linux_source") or "local"),
                 "excluded": self.vuln_skipped(h), "excluded_here": bool((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip")),
@@ -5545,6 +5749,9 @@ class Monitor:
         vc = self.vuln_check(h)
         if vc:
             checks.append(vc)
+        wc = self.wordpress_check(h)
+        if wc:
+            checks.append(wc)
         new_list = []
         for c in checks:
             key = f"agent_{c['key']}"
@@ -5904,6 +6111,7 @@ class Monitor:
         return {"key": h.key, "name": h.name, "agent": self._agent_summary(h), "report": r, "history": hist,
                 "settings": settings, "software": {k: sw.get(k) for k in ("updated", "apps", "first", "updates_from", "winget")} | {"changes": (sw.get("changes") or [])[-100:]} if sw else None,
                 "vulns": self.vulns_view(h) if include_security else None,
+                "wordpress": self.wordpress_view(h),
                 "received": h.agent_seen, "security_visible": include_security, "secrets": secrets_out,
                 "checks": [{"key": s.key.removeprefix("agent_"), "label": s.label, "status": s.status,
                             "detail": s.detail if include_security or s.key not in SECURITY_KEYS else SECURITY_HIDDEN,
@@ -8200,7 +8408,7 @@ def make_backup(version: str | None) -> bytes:
         try:
             raw = json.loads(OPTIONS_PATH.read_text())
             raw.pop("hosts", None)
-            for k in ("smtp_password", "m365_client_secret", "claude_api_key", "openai_api_key", "gemini_api_key"):  # passwords and keys stay on this install
+            for k in ("smtp_password", "m365_client_secret", "claude_api_key", "openai_api_key", "gemini_api_key", "wordfence_api_key"):  # passwords and keys stay on this install
                 raw.pop(k, None)
             z.writestr("options.json", json.dumps(raw, indent=2))
         except (OSError, ValueError):
@@ -8512,6 +8720,8 @@ def build_agent_app(monitor: Monitor) -> web.Application:
             log.warning("Couldn't sign the agent addresses: %s", err)
         if agent["id"] in monitor.want_apps:
             resp["send_apps"] = True
+        if agent["id"] in monitor.want_wp:
+            resp["send_wordpress"] = True
         resp["secret_scan"] = monitor.secret_scan_config(agent)
         if agent.get("os_family") in (None, "windows") and agent.get("agent_kind") != "sh":
             resp["sfc"] = monitor.sfc_config(agent)  # Windows agent 1.0.59 on
@@ -8857,6 +9067,8 @@ async def main() -> None:
         await monitor.attach_agents(AgentStore(AGENTS_PATH, AGENT_REPORTS))
         monitor._winget_task = asyncio.create_task(monitor.winget_loop())
         monitor._vulns_task = asyncio.create_task(monitor.vulns_loop())
+        monitor._wp_task = asyncio.create_task(monitor.wp_loop())
+        monitor._tp_task = asyncio.create_task(monitor.tp_loop())
         access = Access(opts, ha)
         monitor.whats_new = wnlib.WhatsNew(WHATS_NEW_PATH, CHANGELOG_PATH, os.environ.get("PM_VERSION"), not new_install)
         if access.enabled:

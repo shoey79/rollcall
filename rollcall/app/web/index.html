@@ -210,6 +210,7 @@ dialog.wide{width:min(980px,calc(100vw - 24px))}
 .st-top input[type=search]{max-width:260px}
 .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin:12px 0}
 .st-grid .wide{grid-column:1/-1}
+#detBody td a[href]{color:var(--accent)}
 p.asked{margin:0 0 10px;padding:8px 10px;border-radius:6px;background:color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent)}
 .notesbox{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
 .notesbox .ntext{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;margin:4px 0 0}
@@ -3453,6 +3454,32 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const fg = Object.entries(st.backup_forgot || {});
     if (fg.length) html += `<p class="hint">Forgotten (hidden until they run again): ${fg.map(([k, f]) => `${esc(f.name || k)}${data && data.can_edit ? ` <button type="button" class="mini" data-bkback="${esc(k)}">Bring back</button>` : ""}`).join(" · ")}</p>`;
   }
+  if (d.wordpress) {
+    flush("wordpress");
+    // WordPress sites the agent found (IIS's sites, read from their files): versions, updates, known vulnerabilities
+    const wp = d.wordpress, up = wp.updates || {sites: []}, vmap = wp.vulns || {}, dat = wp.data || {};
+    const vbadge = key => { const v = vmap[key]; return v ? ` <span class="vuln${v.some(x => x.exploited) ? " expl" : ""}" title="${esc(v.map(x => x.cve + (x.score ? " " + x.score.toFixed(1) : "") + (x.title ? ": " + x.title : "")).join("\n"))}">${v.length} known vulnerabilit${v.length === 1 ? "y" : "ies"}</span>` : ""; };
+    wp.sites.forEach((w, i) => {
+      const u = up.sites[i] || {items: {}}, label = (w.site || "?") + (w.path && w.path !== "/" ? w.path : "");
+      const row = (kind, x) => {
+        const e = u.items[kind + ":" + x.slug.toLowerCase()] || {};
+        const st = [e.latest ? `<span class="newer">Update: ${esc(e.latest)}</span>` : "",
+          e.closed ? `<b class="old" title="${esc(e.reason || "")}">Closed on wordpress.org${typeof e.closed === "string" ? " " + esc(e.closed) : ""}${e.reason ? " (" + esc(e.reason) + ")" : ""}</b>` : "",
+          e.missing ? `<small class="muted">Not on wordpress.org: updates not checked</small>` : "",
+          x.mu ? `<small class="muted">Must-use plugin</small>` : "", x.parent ? `<small class="muted">Child of ${esc(x.parent)}</small>` : ""].filter(Boolean).join("<br>");
+        return `<tr><td><b>${esc(x.name)}</b><br><small class="muted">${esc(x.slug)}</small></td><td>${esc(x.version || "?")}${vbadge(`${x.name} (${kind}) on ${label}`)}</td><td>${st || (dat.core_at && !wp.offline ? `<span class="okc">✓ Up to date</span>` : "")}</td></tr>`;
+      };
+      html += sect(`WordPress: ${esc(label)}`, `<div class="kv"><div><span>WordPress</span>${esc(w.version)}${u.core ? ` <span class="newer">Update: ${esc(u.core)}</span>` : dat.core_latest ? ` <span class="okc">✓ latest</span>` : ""}${vbadge(`WordPress on ${label}`)}</div>
+          <div><span>Folder</span><code>${esc(w.dir || "")}</code></div></div>`
+        + (w.plugins.length ? tbl([`Plugins (${w.plugins.length})`, "Version", ""], w.plugins.map(x => row("plugin", x))) : `<p class="empty-note">No plugins.</p>`)
+        + (w.themes.length ? tbl([`Themes (${w.themes.length})`, "Version", ""], w.themes.map(x => row("theme", x))) : ""));
+    });
+    const errs = Object.entries(dat.errors || {});
+    html += `<p class="hint">Found from IIS's sites and read from their files: <code>wp-config.php</code> and the database are never opened, so every plugin present is listed, switched on or not (one that's switched off can often still be reached from the web). Looked for hourly.
+      ${wp.offline ? "📴 Offline: updates and vulnerabilities aren't checked." : `Updates from wordpress.org (asked only about the plugin and theme names, daily)${dat.core_latest ? `; the newest WordPress is ${esc(dat.core_latest)}` : ""}.`}
+      ${wp.wordfence ? `Known vulnerabilities from Wordfence Intelligence${dat.wf_at ? ` (${(dat.wf_entries || 0).toLocaleString()} entries, updated daily)` : " (downloading)"}; they're also on the Vulnerabilities tab.` : `Set a free Wordfence API key in Settings (Agents) to check for known vulnerabilities too.`}
+      ${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`;
+  }
   flush("software");
   {
     // Installed software: what changed lately, then the full list with a filter box.
@@ -3466,17 +3493,20 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       // Offline: the data is whatever was imported, so say how old it is
       const offAt = inf.offline ? Math.max(inf.msrc_at || 0, inf.kev_at || 0, inf.osv_at || 0) : 0;
       const offNote = inf.offline ? `<p class="hint">📴 Offline: Rollcall doesn't download this data. ${offAt ? `It's from ${new Date(offAt * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})} (${Math.floor((Date.now() / 1000 - offAt) / 86400)} days old)` : "None has been imported yet"}; import newer data under <b>Manage, Offline data</b>.</p>` : "";
-      const cveLink = c => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
+      const cveLink = (c, ref) => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>`
+        : ref && /^https:\/\//.test(ref) ? `<a href="${esc(ref)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
       // End of life, kept on purpose: everything is still listed, but nothing alerts (Settings, or this device alone)
       const eol = vu.excluded ? `<div class="mergebox"><p style="margin:0">🗄️ <b>Not alerted:</b> ${esc(vu.excluded.charAt(0).toUpperCase() + vu.excluded.slice(1))}. These vulnerabilities are listed below for reference, but don't turn the device amber or red or send notifications, known-exploited ones included.${vu.excluded_here ? "" : " Change the list in Settings (End-of-life operating systems)."}</p></div>` : "";
       const eolSw = `<label class="schedopt edit-only" style="margin:4px 0 10px"><input type="checkbox" data-vulnskip${vu.excluded_here ? " checked" : ""}> <span>Treat this device as end of life: list its vulnerabilities, but don't alert on them</span></label>`;
-      const body = eol + eolSw + offNote + (!vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
+      const body = eol + eolSw + offNote + (!vu.checked && !vu.found.length ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
         : !vu.found.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : ""}.</p>`
         : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], vu.found.map(f =>
-            `<tr><td>${cveLink(f.cve)}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
-             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`)));
+            `<tr><td>${cveLink(f.cve, f.ref)}${f.title ? `<br><small class="muted">${esc(f.title)}</small>` : ""}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
+             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref && !/^https:\/\//.test(f.ref) ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`)));
+      const also = (vu.also || []).map(a => a.what === "wordpress" ? (a.checked ? `WordPress sites from Wordfence Intelligence` : `WordPress sites aren't: ${esc(a.why_not)}`)
+        : a.what === "programs" ? (a.checked.length ? `${a.checked.length} other program${a.checked.length === 1 ? "" : "s"} from the National Vulnerability Database (${a.checked.map(x => esc(x)).join(", ")})` : "") : "").filter(Boolean);
       html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
-        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${linux ? "" : " Other programs aren't checked yet."}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
+        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${also.length ? " Also checked: " + also.join("; ") + "." : ""}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
     }
     flush("software");
     if (!sw || !sw.apps) html += sect("Installed software", `<p class="empty-note">${r.agent_version ? `Not reported yet. It needs ${linux ? "Linux agent 1.0.14" : "Windows agent 1.0.33"} or later, and arrives with the next report after the agent updates.` : ""}</p>`);
@@ -3532,7 +3562,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   html += ignHtml;  // below the run: what's ignored is reference, the run is what's looked at
   flush(null);
   // Tabs, with a badge for checks needing attention that belong to each.
-  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", domain: "Domain", software: "Software", vulns: "Vulnerabilities", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
+  const names = {overview: "Overview", storage: "Storage", network: "Network", backups: "Backups", services: "Services", roles: linux ? "Apps" : "Roles", domain: "Domain", wordpress: "WordPress", software: "Software", vulns: "Vulnerabilities", events: linux ? "Journal" : "Events", security: "Security", agent: "Agent"};
   const bad = {};
   for (const x of d.checks || []) if (x.status !== "green" && JUMP[x.key]) bad[JUMP[x.key][0]] = (bad[JUMP[x.key][0]] || 0) + 1;
   if (T.sectop) { T.security = T.sectop + (T.security || ""); delete T.sectop; }
@@ -5347,7 +5377,7 @@ document.getElementById("detBody").addEventListener("click", async e => {
 const JUMP = {agent: ["agent", "Agent run"], resources: ["overview", "System"], nics: ["network", "Network adapters"], disk: ["storage", "Disks"], storage: ["storage", "Storage health"], hardware: ["storage", "Hardware"],
   services: ["services"], iis: ["services", "IIS"], updates: ["overview", "System"], ad: ["roles", "Active Directory"], dhcp: ["roles", "DHCP"],
   hyperv: ["roles", "Hyper-V"], printers: ["roles", "Shared printers"], immich: ["roles", "Immich"], defender: ["security", "Microsoft Defender"],
-  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], firewall: ["roles", "Gateways"], temps: ["roles"], proxmox: ["roles", "Proxmox VE"], pbs: ["roles", "Proxmox Backup Server"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"]};
+  security: ["security"], integrity: ["security"], secrets: ["security", "Passwords left in files"], events: ["events"], backups: ["backups"], laps: ["domain", "LAPS"], sfc: ["security", "System files"], firewall: ["roles", "Gateways"], temps: ["roles"], proxmox: ["roles", "Proxmox VE"], pbs: ["roles", "Proxmox Backup Server"], bitlocker: ["security", "BitLocker"], certs: ["security", "Certificates"], tasks: ["services", "Scheduled tasks"], sql: ["roles", "SQL Server"], gpo: ["domain", "Group Policy"], sysvol: ["roles", "SYSVOL replication"], dfsr: ["roles", "DFS Replication"], time: ["domain", "Time"], wan: ["roles", "Internet (WAN)"], exchange: ["roles", "Exchange"], domain: ["domain", "Domain security"], vulns: ["vulns", "Known vulnerabilities"], wordpress: ["wordpress"]};
 let detTab = "overview";
 function showDetTab(tab, sectionTitle) {
   const body = document.getElementById("detBody");

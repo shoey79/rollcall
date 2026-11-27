@@ -218,6 +218,8 @@ def _mon(tmp_path, apps=None, opts=None):
                               vulnfeeds=vulns.Feeds(tmp_path, logging.getLogger("t")), _vf={},
                               agent_settings={"hosts": {}})
     m.software = lambda aid: {"hash": "h1", "updated": 1, "apps": apps or []}
+    m.extra_findings = lambda h: []      # WordPress and other programs: tested in test_wordpress and test_thirdparty
+    m.extra_sources = lambda h: []
     for name in ("vuln_findings", "vuln_check", "_vuln_why_not", "_vuln_key", "vulns_by_app", "vulns_view", "_vuln_wanted", "vuln_skipped"):
         setattr(m, name, types.MethodType(getattr(M, name), m))
     m._vuln_server = M._vuln_server

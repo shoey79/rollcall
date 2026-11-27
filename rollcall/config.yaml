@@ -91,6 +91,10 @@ options:
   vuln_min_score: 9
   vuln_linux_source: local
   vuln_skip_os: []
+  vuln_third_party: true
+  vuln_software_extra: []
+  wordpress_checks: true
+  wordfence_api_key: ""
   agent_secret_scan: "off"
   agent_sfc: "off"
   agent_sfc_day: sunday
@@ -200,6 +204,11 @@ schema:
   vuln_linux_source: list(local|online|off)
   vuln_skip_os:
     - str
+  vuln_third_party: bool
+  vuln_software_extra:
+    - str
+  wordpress_checks: bool
+  wordfence_api_key: password?
   agent_secret_scan: list(off|servers|workstations|all)
   agent_sfc: list(off|servers|workstations|all)
   agent_sfc_day: list(monday|tuesday|wednesday|thursday|friday|saturday|sunday)

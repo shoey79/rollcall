@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.60'
+$AgentVersion = '1.0.61'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -187,6 +187,8 @@ function Read-State {
             if ($raw.sfc_conf) { try { $state.sfc_conf = @{ on = [bool]$raw.sfc_conf.on; day = [int]$raw.sfc_conf.day; hour = [int]$raw.sfc_conf.hour; dism = [bool]$raw.sfc_conf.dism; run_now = [int64]$raw.sfc_conf.run_now } } catch { } }
             if ($raw.vbo) { $state.vbo = [string]$raw.vbo }
             if ($raw.apps_sent) { $state.apps_sent = [string]$raw.apps_sent }
+            if ($raw.wp_sent) { $state.wp_sent = [string]$raw.wp_sent }
+            if ($raw.wp_cache) { $state.wp_cache = [string]$raw.wp_cache; try { $state.wp_at = [int64]$raw.wp_at } catch { } }
             if ($raw.secrets_sent) { $state.secrets_sent = [string]$raw.secrets_sent }
             if ($raw.secret_scan) { $state.secret_scan = @{ on = [bool]$raw.secret_scan.on; paths = @($raw.secret_scan.paths | Where-Object { $_ } | ForEach-Object { [string]$_ }); hours = [int]$raw.secret_scan.hours } }
             if ($raw.vbo_checked) { try { $state.vbo_checked = [int64]$raw.vbo_checked } catch { } }
@@ -1030,6 +1032,124 @@ function Get-AppsHash($Apps) {
     $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope, $_.code }) -join "`n")
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))) -replace '-', '').Substring(0, 32).ToLower() } finally { $sha.Dispose() }
+}
+
+function Read-FileHead([string]$Path, [int]$Bytes = 8192) {
+    # The start of a file (where WordPress keeps plugin and theme headers), without reading the rest
+    $fs = $null
+    try {
+        $fs = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $buf = New-Object byte[] ([Math]::Min([int64]$Bytes, $fs.Length))
+        $n = $fs.Read($buf, 0, $buf.Length)
+        return [Text.Encoding]::UTF8.GetString($buf, 0, $n)
+    } catch { return '' } finally { if ($fs) { $fs.Dispose() } }
+}
+
+function Get-WpHeader([string]$Text, [string]$Field) {
+    if ($Text -match ('(?mi)^[ \t/*#@]*' + [regex]::Escape($Field) + ':[ \t]*(.+?)[ \t]*(\*/)?\r?$')) { return (Limit-Text $Matches[1] 120) }
+    return ''
+}
+
+function Get-WordPressInstall([string]$Dir) {
+    # One install, read from its files: the version from wp-includes\version.php, and each plugin's and theme's
+    # name and version from the header at the top of its main file. wp-config.php (the database password) and the
+    # database are never opened, so which plugins are switched on isn't known: every one present is listed.
+    $vf = Join-Path $Dir 'wp-includes\version.php'
+    $text = Read-FileHead $vf 16384
+    if ($text -notmatch "\`$wp_version\s*=\s*'([^']+)'") { return $null }
+    $wp = [ordered]@{ dir = $Dir; version = $Matches[1]; plugins = @(); themes = @() }
+    $content = Join-Path $Dir 'wp-content'
+    $plugins = New-Object System.Collections.ArrayList
+    $pdir = Join-Path $content 'plugins'
+    if (Test-Path -LiteralPath $pdir) {
+        foreach ($d in @(Get-ChildItem -LiteralPath $pdir -Directory -ErrorAction SilentlyContinue | Select-Object -First 300)) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -Filter '*.php' -File -ErrorAction SilentlyContinue | Select-Object -First 40)) {
+                $h = Read-FileHead $f.FullName
+                $name = Get-WpHeader $h 'Plugin Name'
+                if ($name) { [void]$plugins.Add([ordered]@{ slug = $d.Name; name = $name; version = (Get-WpHeader $h 'Version') }); break }
+            }
+        }
+        foreach ($f in @(Get-ChildItem -LiteralPath $pdir -Filter '*.php' -File -ErrorAction SilentlyContinue | Select-Object -First 40)) {
+            $h = Read-FileHead $f.FullName
+            $name = Get-WpHeader $h 'Plugin Name'
+            if ($name) { [void]$plugins.Add([ordered]@{ slug = $f.BaseName; name = $name; version = (Get-WpHeader $h 'Version') }) }
+        }
+    }
+    $mdir = Join-Path $content 'mu-plugins'
+    if (Test-Path -LiteralPath $mdir) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $mdir -Filter '*.php' -File -ErrorAction SilentlyContinue | Select-Object -First 40)) {
+            $h = Read-FileHead $f.FullName
+            $name = Get-WpHeader $h 'Plugin Name'
+            if ($name) { [void]$plugins.Add([ordered]@{ slug = $f.BaseName; name = $name; version = (Get-WpHeader $h 'Version'); mu = $true }) }
+        }
+    }
+    $wp.plugins = @($plugins)
+    $tdir = Join-Path $content 'themes'
+    if (Test-Path -LiteralPath $tdir) {
+        $wp.themes = @(foreach ($d in @(Get-ChildItem -LiteralPath $tdir -Directory -ErrorAction SilentlyContinue | Select-Object -First 100)) {
+            $h = Read-FileHead (Join-Path $d.FullName 'style.css')
+            $name = Get-WpHeader $h 'Theme Name'
+            if ($name) {
+                $t = [ordered]@{ slug = $d.Name; name = $name; version = (Get-WpHeader $h 'Version') }
+                $parent = Get-WpHeader $h 'Template'
+                if ($parent) { $t.parent = $parent }
+                $t
+            }
+        })
+    }
+    return $wp
+}
+
+function Get-WordPressSites($State) {
+    # WordPress sites on this IIS server, found from IIS's own list of sites and their folders (each site's and
+    # virtual directory's folder, and the folders up to two levels below it). Looked for hourly; in between the
+    # last result is reused.
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($State.wp_cache -and $State.wp_at -and ($now - [int64]$State.wp_at) -lt 3600 -and ($now - [int64]$State.wp_at) -ge 0) {
+        try { return @(([string]$State.wp_cache | ConvertFrom-Json) | Where-Object { $_ }) } catch { }
+    }
+    $xml = Invoke-AppCmd @('list', 'vdir', '/xml')
+    $found = New-Object System.Collections.ArrayList
+    $seen = @{}
+    if ($xml) {
+        foreach ($v in @(([xml]$xml).appcmd.VDIR | Where-Object { $_ })) {
+            $root = [Environment]::ExpandEnvironmentVariables([string]$v.physicalPath).TrimEnd('\')
+            if (-not $root -or $root.StartsWith('\\') -or -not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+            $full = [string]$v.'VDIR.NAME'                       # "Default Web Site/blog/"
+            $i = $full.IndexOf('/')
+            $site = if ($i -ge 0) { $full.Substring(0, $i) } else { $full }
+            $url = if ($i -ge 0) { '/' + $full.Substring($i + 1).Trim('/') } else { '/' }
+            $dirs = @($root)
+            $level1 = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(wp-admin|wp-includes|wp-content|aspnet_client|\.)' } | Select-Object -First 200)
+            $dirs += @($level1 | ForEach-Object { $_.FullName })
+            foreach ($l in $level1) {
+                $dirs += @(Get-ChildItem -LiteralPath $l.FullName -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^(wp-admin|wp-includes|wp-content|\.)' } | Select-Object -First 50 | ForEach-Object { $_.FullName })
+            }
+            foreach ($d in $dirs) {
+                if ($found.Count -ge 50) { break }
+                $key = $d.ToLower()
+                if ($seen.ContainsKey($key) -or -not (Test-Path -LiteralPath (Join-Path $d 'wp-includes\version.php'))) { continue }
+                $seen[$key] = $true
+                $wp = Get-WordPressInstall $d
+                if ($wp) {
+                    $sub = $d.Substring($root.Length).Replace('\', '/').Trim('/')
+                    $wp.site = $site
+                    $wp.path = ($url.TrimEnd('/') + '/' + $sub).TrimEnd('/')
+                    if (-not $wp.path) { $wp.path = '/' }
+                    [void]$found.Add($wp)
+                }
+            }
+        }
+    }
+    $list = @($found)
+    $State.wp_at = $now
+    $State.wp_cache = (ConvertTo-Json -InputObject $list -Depth 5 -Compress)
+    return $list
+}
+
+function Get-TextHash([string]$Text) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text))) -replace '-', '').Substring(0, 32).ToLower() } finally { $sha.Dispose() }
 }
 
 function Get-NetworkReport {
@@ -3260,6 +3380,13 @@ function Get-Report($State, [string[]]$ExtraWatch) {
     $report.security = Measure-Step 'security log' { Get-SecurityReport $State $since }
     try { $report.security.admins = @(Measure-Step 'administrators' { Get-LocalAdmins }) } catch { Add-CollectorError 'administrators' $_ }
     $report.checks = Get-RoleChecks $discovery.roles $since $State
+    if ($discovery.roles -contains 'IIS') {
+        try {
+            $wps = @(Measure-Step 'wordpress' { Get-WordPressSites $State })
+            $report.wp_hash = Get-TextHash (ConvertTo-Json -InputObject $wps -Depth 5 -Compress)
+            if ($State.wp_sent -ne $report.wp_hash) { $report.wordpress = $wps }  # only when something changed, or Rollcall asked
+        } catch { Add-CollectorError 'wordpress' $_ }
+    }
     try {
         $bjobs = @()
         $vbr = Measure-Step 'veeam b&r' { Get-VeeamJobs $State }
@@ -3954,6 +4081,8 @@ function Invoke-AgentRun([switch]$ReportOnly) {
     if ($res.body -and $res.body.watch_services) { $state.watch = @($res.body.watch_services) } else { $state.watch = @() }
     if ($report.Contains('apps')) { $state.apps_sent = $report.apps_hash }
     if ($res.body -and $res.body.send_apps) { $state.apps_sent = $null }  # Rollcall hasn't got this list: send it next time
+    if ($report.Contains('wordpress')) { $state.wp_sent = $report.wp_hash }
+    if ($res.body -and $res.body.send_wordpress) { $state.wp_sent = $null }
     if ($report.secrets -and $report.secrets.Contains('findings')) { $state.secrets_sent = $report.secrets.hash }
     if ($res.body -and $res.body.send_secrets) { $state.secrets_sent = $null }
     $sc = if ($res.body) { $res.body.secret_scan } else { $null }

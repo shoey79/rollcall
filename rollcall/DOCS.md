@@ -30,7 +30,7 @@ You get a dashboard in the Home Assistant sidebar, a sensor for every device and
 4. [Watching devices](#watching-devices): SNMP (Cisco and Juniper too), syslog, HPE iLO, VMware, OPNsense, Jellyfin, Plex, Starlink, linked Home Assistant devices (Pi-hole, myenergi), upstream devices
 5. [Windows agent](#windows-agent)
 6. [Linux agent](#linux-agent) (with Proxmox), [OpenWrt agent](#openwrt-agent) and [pfSense, OPNsense and FreeBSD agent](#pfsense-opnsense-and-freebsd-agent)
-7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows and Linux, and [offline use](#offline-use)
+7. [Known vulnerabilities](#known-vulnerabilities): CVE alerts for Windows, Linux, other Windows programs and WordPress, [WordPress sites](#wordpress-sites), and [offline use](#offline-use)
 8. [Agent addresses and updates](#agent-addresses-and-updates): HTTPS, updates, messages to users' screens
 9. [Alerts and quiet times](#alerts-and-quiet-times): notifications, email, acknowledging, pausing, schedules
 10. [Administration](#administration): settings, what's new, who can change things, the database, export and import, hints for errors, security
@@ -833,7 +833,8 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 | **Resources** | Memory at `agent_memory_warn` (90%) used or more; the CPU at `agent_cpu_warn` (90%) or more in the last `agent_cpu_reports` (3) reports; on a router, the 15-minute load above its number of CPU cores | Memory at `agent_memory_crit` (95%) used or more (two reports in a row) |
 | **Services** | Another automatic-start service isn't running | A service for one of the server's roles has stopped (two reports in a row). Automatic (Delayed Start) services, which Windows starts a couple of minutes after it starts, don't count as stopped until it's been up 5 minutes; Details marks them *delayed start* |
 | **Updates** | Reboot pending, or no update installed for `agent_patch_days` (60; `0` turns this off). The details say what asked for the restart (Windows Update, component servicing, Configuration Manager, files waiting to be replaced) and what was installed since the last one | |
-| **Vulnerabilities** | A known vulnerability in Windows scoring `vuln_min_score` (9) or more that a later Windows update fixes (see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
+| **Vulnerabilities** | A known vulnerability scoring `vuln_min_score` (9) or more: in Windows, fixed by a later Windows update; in one of the programs Rollcall checks; or in a WordPress site's core, plugins or themes (see [Known vulnerabilities](#known-vulnerabilities)) | One that's known to be exploited |
+| **WordPress** | WordPress, plugin or theme updates waiting, or a plugin closed on wordpress.org (see [WordPress sites](#wordpress-sites)) | |
 | **IIS** | | An app pool or site stopped (two reports) |
 | **Storage** | A disk predicting failure, or a RAID volume rebuilding | A failed disk, a degraded mirror, RAID-5 or Storage Space, a missing dynamic disk, or an unhealthy disk (two reports) |
 | **Hardware** (Dell OMSA) | Non-Critical chassis health | Critical chassis health |
@@ -1096,7 +1097,7 @@ The Security tab (admins only, agent 1.0.17 or later) lists every direct member 
 An optional weekly `sfc /verifyonly` (agent 1.0.59 or later): Windows' own check that its system files are as they should be. It's read only, the `/verifyonly` form, which never repairs or changes anything.
 
 - **Turning it on:** `agent_sfc` chooses which devices run it (`off`, `servers`, `workstations` or `all`; off by default). Each device can also be turned on or off in its details, under **System files**, whatever the setting.
-- **When:** weekly, on `agent_sfc_day` at `agent_sfc_hour`, in each device's own time. A device that's off then runs it the next time it's on. **Run now** in its details starts one at the agent's next report.
+- **When:** weekly, on `agent_sfc_day` at `agent_sfc_hour`, in each device's own time. A device that's off then runs it the next time it's on. **Run now** in its details starts one at the agent's next report; until then the section says it's been asked for and the button shows **Asked**.
 - **It takes 10 to 30 minutes of CPU and disk**, so it runs in the background at low priority, separately from the agent's 5-minute run, which carries on as usual.
 - **The result** is read from Windows' own log of the check (`CBS.log`), not sfc's screen output, which is unreliable. **System files** goes amber when files don't match what Windows expects, naming them, with what to run to repair them (`DISM /Online /Cleanup-Image /RestoreHealth`, then `sfc /scannow`). It's never red: nothing is down because of it. It says so when it couldn't run (another update or repair in progress, or a restart pending).
 - **DISM too:** with `agent_sfc_dism` on, `DISM /Online /Cleanup-Image /ScanHealth` (also read only) follows it, which checks the component store that Windows repairs system files from.
@@ -1393,7 +1394,7 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 - Like other security details, the list is only shown to Home Assistant admins and editors; others see the check's colour.
 - Turn it off with `vuln_checks`. Its alerts are emailed under **Security**.
 
-**Windows** (any agent version): Microsoft publishes, for each CVE, the Windows build that fixes it, e.g. `10.0.17763.6414`. Rollcall downloads the last 12 months of Microsoft's security update data (the MSRC API, `api.msrc.microsoft.com`) and compares each device's build, which the agent already reports with its update revision. Desktop Windows and Windows Server are compared separately: some share a build number (Windows 11 24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 are both 17763) but are updated separately, with their own revisions. A device further behind than 12 months is flagged by the **Updates** check anyway; a Windows version Microsoft hasn't updated in that time is shown as probably out of support. Only Windows itself is checked: other programs (including Office, SQL Server and Exchange) aren't yet. Devices that get hotpatch updates are compared with the monthly updates, so they may show fixes as missing until their next baseline update.
+**Windows** (any agent version): Microsoft publishes, for each CVE, the Windows build that fixes it, e.g. `10.0.17763.6414`. Rollcall downloads the last 12 months of Microsoft's security update data (the MSRC API, `api.msrc.microsoft.com`) and compares each device's build, which the agent already reports with its update revision. Desktop Windows and Windows Server are compared separately: some share a build number (Windows 11 24H2 and Server 2025 are both 26100; Windows 10 1809 and Server 2019 are both 17763) but are updated separately, with their own revisions. A device further behind than 12 months is flagged by the **Updates** check anyway; a Windows version Microsoft hasn't updated in that time is shown as probably out of support. Office, SQL Server and Exchange aren't checked yet. Devices that get hotpatch updates are compared with the monthly updates, so they may show fixes as missing until their next baseline update.
 
 **Linux** (Linux agent 1.0.20 or later, which sends each package's source package and the distro's release): Debian, Ubuntu (not the Pro or FIPS streams), AlmaLinux and Rocky Linux, using [OSV.dev](https://osv.dev)'s data. A package counts when a newer version fixes a vulnerability, not for issues the distro hasn't fixed. Where several versions of a package are installed (e.g. an old kernel left beside the running one), the newest counts. Scores come from the CVSS 3 vector in OSV's record; a vulnerability without one counts only if it's known to be exploited. `vuln_linux_source` chooses where the matching is done:
 
@@ -1401,7 +1402,27 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 - `online`: the add-on sends OSV.dev's API (`api.osv.dev`) one combined list of the package names and versions across all your Linux devices, once a day and when a list changes, and fetches the details of what applies. No device names, addresses or which device has which package are sent. Downloads are small.
 - `off`: Linux devices aren't checked.
 
-The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`. If one can't be reached, the Vulnerabilities tab says so, and the data already downloaded is used until it can.
+**Other Windows programs** (`vuln_third_party`, on by default): programs Windows itself doesn't update, from the agent's software list, checked against the US [National Vulnerability Database](https://nvd.nist.gov). Matching a program's Windows name to the NVD's name for it is where tools like this go wrong, so only programs on Rollcall's own list are checked: Chrome, Edge, Firefox (and ESR), Thunderbird, 7-Zip, WinRAR, WinZip, Notepad++, VLC, PuTTY, WinSCP, FileZilla, KeePass, Wireshark, TeamViewer, AnyDesk, ScreenConnect, TightVNC, UltraVNC, Zoom, Adobe Acrobat and Reader, Foxit, LibreOffice, GIMP, Greenshot, Git, Python, Node.js, Visual Studio Code, PowerShell 7, .NET and ASP.NET Core, VMware Tools, VirtualBox, Docker Desktop, OpenVPN, Cisco Secure Client, GlobalProtect, FortiClient, Veeam Backup & Replication, Openfire, Tomcat, MySQL, MariaDB, PostgreSQL and Dell's Command Update and SupportAssist.
+
+- **Adding your own:** `vuln_software_extra` (**More programs to check for vulnerabilities** in Settings), one per line as `program name = vendor:product`, where `vendor:product` is the product's name in the NVD (its CPE, e.g. `igniterealtime:openfire`; search for it at [nvd.nist.gov/products/cpe/search](https://nvd.nist.gov/products/cpe/search)). The program name is matched as whole words at the start of the name Windows shows.
+- **What's sent:** only the NVD product names in use (`services.nvd.nist.gov`), never device names, versions or addresses. Each product is fetched once, then daily only what's changed; the NVD limits requests without a key, so the first fetch of many products takes a few minutes.
+- **What counts:** the versions the NVD's own analysis says are affected. CVEs the NVD hasn't analysed yet can't be matched, so a brand-new one may take a while to show; Java isn't on the list because its version numbers don't line up.
+- The Software tab marks the affected programs, and the Vulnerabilities tab lists which programs were checked.
+
+**WordPress** (with a Wordfence API key): a WordPress site's core, plugins and themes against [Wordfence Intelligence](https://www.wordfence.com/threat-intel/), a free vulnerability feed (register for a key at wordfence.com and put it in `wordfence_api_key`). See [WordPress sites](#wordpress-sites). All of a site's vulnerabilities show on its WordPress tab; the Vulnerabilities tab and check take the ones at or above `vuln_min_score`, like everything else.
+
+The add-on needs to reach `api.msrc.microsoft.com`, `www.cisa.gov`, and `storage.googleapis.com` or `api.osv.dev`; for other programs `services.nvd.nist.gov`; for WordPress `api.wordpress.org` and `www.wordfence.com`. If one can't be reached, the Vulnerabilities tab says so, and the data already downloaded is used until it can. Offline, other programs and WordPress aren't checked (the offline bundle doesn't carry their data yet).
+
+## WordPress sites
+
+On a Windows server running IIS (agent 1.0.61 or later), the agent finds every WordPress install from IIS's own list of sites and virtual directories, including installs one or two folders below a site's root, and a **WordPress** tab shows each one: its WordPress version, and each plugin's and theme's name and version (must-use plugins and child themes marked).
+
+- **Read from files only:** `wp-includes\version.php` for the version, and the header at the top of each plugin and theme. `wp-config.php` (with the database password) and the database are never opened. So which plugins are switched on isn't known: every plugin present is listed, which is the safer view, as a switched-off plugin can often still be reached from the web.
+- **Updates:** wordpress.org's public API says what's newest, asked daily about the plugin and theme names only, never site names or addresses. Plugins and themes that aren't on wordpress.org (paid ones, your own) are marked as not checked.
+- **Closed plugins:** a plugin wordpress.org has closed (often for a security problem) is marked, with the date and reason.
+- **The WordPress check** goes amber when updates are waiting or a plugin is closed. It's never red.
+- **Known vulnerabilities** with a Wordfence API key; see [Known vulnerabilities](#known-vulnerabilities).
+- Sites are looked for hourly, and the list is only sent when something changes. Turn it all off with `wordpress_checks`.
 
 ## Offline use
 
@@ -1745,6 +1766,10 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
 | `offline` | false | For a network without the internet: download nothing, and use imported data instead (see [Offline use](#offline-use)) |
 | `vuln_skip_os` | `[]` | End-of-life operating systems whose vulnerabilities are listed but never alert (see [Known vulnerabilities](#known-vulnerabilities)) |
+| `vuln_third_party` | `true` | Also check the programs on Rollcall's list against the NVD |
+| `vuln_software_extra` | `[]` | More programs to check, as `program name = vendor:product` |
+| `wordpress_checks` | `true` | WordPress sites on IIS servers: versions, updates and closed plugins (see [WordPress sites](#wordpress-sites)) |
+| `wordfence_api_key` | | A Wordfence Intelligence API key, for WordPress vulnerabilities |
 | `vuln_checks` | true | The **Vulnerabilities** check on devices with an agent (see [Known vulnerabilities](#known-vulnerabilities)) |
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
