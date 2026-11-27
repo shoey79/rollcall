@@ -138,3 +138,28 @@ def test_monitor_alerts_and_software_badges(tmp_path, monkeypatch):
     m_.opts["vuln_third_party"] = False
     m_._tp.clear()
     assert m_.vuln_check(h)["level"] == main.agentlib.OK and m_.vulns_by_app(h) == {}
+
+
+def test_acknowledge_takes_in_programs(tmp_path, monkeypatch):
+    """Acknowledging the Vulnerabilities check stored only the operating system's CVEs, so a program's vulnerability
+    (e.g. Chrome's) counted as new straight away and the check never cleared (owner reported, 27 Nov)."""
+    import asyncio as aio
+    monkeypatch.setattr(tp, "SPACING", 0)
+    m_, _ = monitor(tmp_path, monkeypatch, [{"id": "pc", "name": "PC01", "host": "10.0.1.20", "checks": []}])
+    h = m_.hosts["pc"]
+    h.agent_id, h.agent_report = "a1", {"os_family": "windows", "os": "Microsoft Windows 11 Pro"}
+    m_.software = lambda aid: {"hash": "x", "updated": 1, "apps": APPS}
+    m_.vuln_findings = lambda h: []
+    m_.vulnfeeds.kev = set()
+    wanted = {p for _i, _l, cpes, _v in m_._tp_matched(h) for p in cpes}
+    aio.run(m_.tpdata.refresh(NvdSession({}), time.time(), wanted))
+    h.agent_checks = [main.Service(key="agent_vulns", label="Vulnerabilities", kind="agent", port=None, url=None, desc="")]
+    h.agent_checks[0].status = main.AMBER
+    h.agent_checks[0].detail = "2 CVEs"
+
+    async def reevaluate(_h):
+        pass
+    m_.reevaluate = reevaluate
+    aio.run(m_.acknowledge_check(h, "vulns", "admin"))
+    ids = set(m_.agent_settings["hosts"]["pc"]["check_acks"]["vulns"]["ids"])
+    assert set(m_.vuln_check(h)["ids"]) <= ids and "CVE-2026-9201" in ids

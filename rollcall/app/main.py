@@ -5386,7 +5386,9 @@ class Monitor:
                 raise ValueError("that check has nothing to acknowledge")
             acks[check] = {"status": sv.status, "at": time.time(), "by": who or "", "detail": sv.detail[:300]}
             if check == "vulns":  # a vulnerability that isn't in this list alerts again
-                acks[check]["ids"] = sorted({f["cve"] for f in self.vuln_findings(h) or []})
+                # everything the check counts: Windows or Linux, other programs and WordPress (it was only the
+                # operating system's, so acknowledging a program's vulnerability never stuck)
+                acks[check]["ids"] = sorted({f["cve"] for f in (self.vuln_findings(h) or []) + self.extra_findings(h)})
         self._save_agent_settings()
         log.info("%s: %s %s%s", h.name, "un-acknowledged" if undo else "acknowledged", check, f" by {who}" if who else "")
         await self.reevaluate(h)
