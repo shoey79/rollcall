@@ -1217,6 +1217,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **The check is amber at most** (*Passwords in files*) and never sends a notification.
 - **Fix:** move the password into a password manager or the program's protected store, then remove it from the file. The finding clears after the next scan.
 - **Ignore:** use **Ignore** on a row for a finding you've accepted (e.g. a test password). It stays ignored until that file, setting or kind of finding changes.
+- **Ignore folder:** ignores everything found in that file's folder and the folders below it, including files that turn up later, such as a new log file every day. It shows in **Ignored on this server** as `D:\Logs\App\*` and, like any ignore there, can be applied to all servers or undone with **Stop ignoring**.
 - **Ignore all:** accepts everything found so far on that device, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
 - **Turning it off** for a device removes its check and Rollcall's findings straight away. The agent deletes its own scan files on its next run.
 - To try it on a folder without sending anything:

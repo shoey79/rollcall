@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.103.1 - 2026-11-27
+
+- **Ignore a whole folder of password findings** ([#19](https://github.com/shoey79/rollcall/issues/19), thanks to [tomvining](https://github.com/tomvining) for the request). Daily log files arrive under a new name every day, and the password scan greeted each one as a fresh discovery. **Ignore folder** next to **Ignore** quietens everything in that folder and below it, including tomorrow's file. It's all on Rollcall's side, so no agent update is needed, and like other ignores it can be applied to every server.
+
 ## 1.103.0 - 2026-11-27
 
 - **WordPress sites.** On IIS servers, the agent now finds every WordPress install from IIS's own site list and a new **WordPress** tab shows each one: its WordPress version and every plugin and theme with theirs. It goes amber when updates are waiting, and calls out plugins wordpress.org has closed (usually for a security problem). Everything is read from the files: `wp-config.php` and the database are never opened, so no passwords are read or sent, and only plugin and theme names go to wordpress.org. Add a free Wordfence API key in Settings and their known vulnerabilities are checked too. Needs Windows agent 1.0.61, which updates itself.
