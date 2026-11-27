@@ -1962,6 +1962,8 @@ class Monitor:
         self.wpdata = wplib.Data(VULN_DIR / "wordpress", log)
         self.tpdata = tplib.Data(VULN_DIR / "nvd", log)   # other programs' CVEs from the NVD (thirdparty.py)
         self._tp: dict = {}
+        self._tpf: dict = {}
+        self._wpf: dict = {}         # agent id -> (what they were worked out from, its programs' findings)
         try:
             self.tpdata.load()
         except Exception as err:  # noqa: BLE001
@@ -4234,7 +4236,13 @@ class Monitor:
         sites = self.wordpress(h.agent_id).get("sites") if h.agent_id else None
         if not sites or not self.wpdata.wf or not self.opts.get("wordpress_checks", True):
             return []
-        return wplib.findings(sites, self.wpdata.wf, self.vulnfeeds.kev)
+        wp = self.wordpress(h.agent_id)
+        key = (wp.get("hash"), wp.get("updated"), self.wpdata.version, len(self.vulnfeeds.kev), self.vulnfeeds.version)
+        hit = self._wpf.get(h.agent_id)
+        if not hit or hit[0] != key:
+            hit = (key, wplib.findings(sites, self.wpdata.wf, self.vulnfeeds.kev))
+            self._wpf[h.agent_id] = hit
+        return hit[1]
 
     async def wp_loop(self, first_wait: float = 60) -> None:
         """Ask wordpress.org about the plugins and themes in use (daily) and fetch the Wordfence feed (when there's a
@@ -4470,7 +4478,14 @@ class Monitor:
 
     def tp_findings(self, h: Host) -> list:
         m = self._tp_matched(h)
-        return tplib.findings(m, self.tpdata, self.vulnfeeds.kev) if m else []
+        if not m:
+            return []
+        key = (self._tp[h.agent_id][0], self.tpdata.version, len(self.vulnfeeds.kev), self.vulnfeeds.version)
+        hit = self._tpf.get(h.agent_id)
+        if not hit or hit[0] != key:  # worked out again only when its programs or the data change
+            hit = (key, tplib.findings(m, self.tpdata, self.vulnfeeds.kev))
+            self._tpf[h.agent_id] = hit
+        return hit[1]
 
     def tp_view(self, h: Host) -> dict | None:
         m = self._tp_matched(h)

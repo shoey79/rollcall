@@ -112,7 +112,10 @@ def _parts(v: str) -> list[int]:
 def ver_cmp(installed: str, bound: str) -> int:
     """Compare an installed version with one of the NVD's. Windows often adds parts the NVD doesn't use (8.0.11.34221
     for .NET 8.0.11), so the installed version is compared only as far as the NVD's goes; missing parts count as 0."""
-    a, b = _parts(installed), _parts(bound)
+    return _cmp(_parts(installed), _parts(bound))
+
+
+def _cmp(a: list[int], b: list[int]) -> int:
     if not b:
         return 0
     if len(a) > len(b):
@@ -124,18 +127,23 @@ def ver_cmp(installed: str, bound: str) -> int:
 
 def affected(version: str, r: list) -> bool:
     """r = [start incl, start excl, end incl, end excl, exact] (None where absent), as kept from the NVD."""
+    return _affected(_parts(version), [_parts(x) if x else None for x in r])
+
+
+def _affected(v: list[int], r: list) -> bool:
+    """affected(), with the versions already split into numbers (thousands of comparisons per device)."""
     si, se, ei, ee, ex = r
-    if ex:
-        return ver_cmp(version, ex) == 0
-    if si and ver_cmp(version, si) < 0:
+    if ex is not None:
+        return _cmp(v, ex) == 0
+    if si is not None and _cmp(v, si) < 0:
         return False
-    if se and ver_cmp(version, se) <= 0:
+    if se is not None and _cmp(v, se) <= 0:
         return False
-    if ei and ver_cmp(version, ei) > 0:
+    if ei is not None and _cmp(v, ei) > 0:
         return False
-    if ee and ver_cmp(version, ee) >= 0:
+    if ee is not None and _cmp(v, ee) >= 0:
         return False
-    return bool(si or se or ei or ee)
+    return any(x is not None for x in r)
 
 
 def installed_version(app: dict, from_name) -> str:
@@ -208,15 +216,12 @@ def findings(matched: list[tuple], data: "Data", kev: set) -> list[dict]:
     out, seen = [], set()
     for i, label, cpes, ver in matched:
         for prod in cpes:
-            for cid, (score, ranges, summary) in (data.products.get(prod) or {}).get("cves", {}).items():
-                hit = [r for r in ranges if affected(ver, r)]
-                if not hit or (i, cid) in seen:
+            for cid, score, _ranges, summary, fixed in data.hits(prod, ver):
+                if (i, cid) in seen:
                     continue
                 seen.add((i, cid))
-                ends = [r[3] for r in hit if r[3]]
-                fixed = min(ends, key=_parts) if ends else (f"after {max((r[2] for r in hit if r[2]), key=_parts)}" if any(r[2] for r in hit) else "")
                 out.append({"cve": cid, "score": score, "exploited": cid in kev, "what": label, "installed": ver,
-                            "fixed": fixed or "see the CVE", "source": "nvd", "title": summary, "app": i})
+                            "fixed": fixed, "source": "nvd", "title": summary, "app": i})
     return out
 
 
@@ -228,6 +233,33 @@ class Data:
         self.products: dict = {}    # "vendor:product" -> {"cves": {id: [score, ranges, summary]}, "at", "full_at", "n"}
         self.meta: dict = {}
         self.version = 0
+        self._split: dict = {}      # (product, data version) -> its CVEs with their versions split into numbers
+        self._hits: dict = {}       # (product, installed version, data version) -> what affects it
+
+    def hits(self, prod: str, ver: str) -> list[tuple]:
+        """[(cve, score, ranges, summary, the version that fixes it)] for one product at one installed version.
+        Worked out once per product and version: many devices run the same Chrome."""
+        key = (prod, ver, self.version)
+        if key in self._hits:
+            return self._hits[key]
+        sk = (prod, self.version)
+        if sk not in self._split:
+            if len(self._split) > 400:
+                self._split.clear()
+            self._split[sk] = [(cid, score, ranges, summary, [[_parts(x) if x else None for x in r] for r in ranges])
+                               for cid, (score, ranges, summary) in ((self.products.get(prod) or {}).get("cves") or {}).items()]
+        v = _parts(ver)
+        out = []
+        for cid, score, ranges, summary, split in self._split[sk]:
+            hit = [r for r, sp in zip(ranges, split) if _affected(v, sp)]
+            if hit:
+                ends = [r[3] for r in hit if r[3]]
+                fixed = min(ends, key=_parts) if ends else (f"after {max((r[2] for r in hit if r[2]), key=_parts)}" if any(r[2] for r in hit) else "")
+                out.append((cid, score, ranges, summary, fixed or "see the CVE"))
+        if len(self._hits) > 5000:
+            self._hits.clear()
+        self._hits[key] = out
+        return out
 
     def _file(self, prod: str) -> Path:
         return self.dir / (re.sub(r"[^a-z0-9_.-]", "_", prod.lower()) + ".json")
