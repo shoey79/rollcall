@@ -36,6 +36,11 @@ Remove each line once it's released.
   up to two folders down) and sends the same shape as the Windows agent (wordpress.py, WordPress tab and Wordfence already
   OS-agnostic). Files only: version.php and plugin/theme headers, never wp-config.php or the database. Docker-hosted
   WordPress (files in container volumes) as a later step. Leave on the list until asked.
+- Password scan exclusions ([#19](https://github.com/shoey79/rollcall/issues/19), tomvining, 27 Nov; replied that it's
+  planned): daily log files alert every day because Ignore is per file. (1) "Skip these folders" per device next to
+  Extra folders, plus a setting for all devices; full paths and simple wildcards (*\Logs); agent doesn't read them
+  (Windows and Linux agents). (2) "Ignore this folder" on a finding, server-side, no agent update. Changelog: link #19
+  and thank tomvining. Comment on #19 when released.
 
 ## Built, waiting for release
 
