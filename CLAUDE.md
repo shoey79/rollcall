@@ -53,6 +53,15 @@ Remove each line once it's released.
   up to two folders down) and sends the same shape as the Windows agent (wordpress.py, WordPress tab and Wordfence already
   OS-agnostic). Files only: version.php and plugin/theme headers, never wp-config.php or the database. Docker-hosted
   WordPress (files in container volumes) as a later step. Leave on the list until asked.
+- Sophos firewall mail and attack tables (owner asked 27 Nov): Sophos XG/XGS syslog (key="value" pairs) already reaches
+  Rollcall. On the firewall's Logs tab, add tables built from it:
+  - Mail: log_type Anti-Spam / Anti-Virus with log_component SMTP: time, sender, recipient, subject, reason
+    (log_subtype / quarantine_reason), action (e.g. QUARANTINE), size, source host, IP and country.
+  - Attacks: log_type IDP (and Web Server Protection / WAF): time, message (signature), classification, priority,
+    firewall rule, source IP and country, destination IP and port, victim.
+  Filter, counts per day, top senders/sources. Mail details are personal data: admins and editors only, kept for
+  history_days. Owner's sample lines are real: never copy them; tests use made-up values (contoso.local, 192.168.1.x,
+  203.0.113.x / 198.51.100.x for outside addresses, sender@example.com). Leave on the list until asked.
 
 ## Built, waiting for release
 
