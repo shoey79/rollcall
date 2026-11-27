@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.103.0 - 2026-11-27
+
+- **WordPress sites.** On IIS servers, the agent now finds every WordPress install from IIS's own site list and a new **WordPress** tab shows each one: its WordPress version and every plugin and theme with theirs. It goes amber when updates are waiting, and calls out plugins wordpress.org has closed (usually for a security problem). Everything is read from the files: `wp-config.php` and the database are never opened, so no passwords are read or sent, and only plugin and theme names go to wordpress.org. Add a free Wordfence API key in Settings and their known vulnerabilities are checked too. Needs Windows agent 1.0.61, which updates itself.
+
+- **Vulnerabilities in other programs.** Chrome, Firefox, 7-Zip, Notepad++, Adobe Reader, PuTTY, VLC, TeamViewer, AnyDesk, .NET, Python, Veeam and about 40 more are now checked against the National Vulnerability Database, which Microsoft's data never covered. Only programs on Rollcall's own vetted list are matched, so "Google Chrome Remote Desktop Host" doesn't get blamed for Chrome's sins; you can add your own as `program name = vendor:product`. Findings show in the Vulnerabilities tab and on the Software tab, and only product names are sent to the NVD.
+
+- **Run now in System files says it's been asked.** It used to look as though nothing had happened (the only sign was a sentence at the end of the small print). The section now says when it was asked for and that it starts at the agent's next report, and the button shows **Asked** until it does.
+
+- **Hints don't whisk you off the Overview.** Opening "What would be sent" under **Ask Claude** in a Needs attention item no longer jumps to the check's tab; only clicking the item itself does.
+
 ## 1.102.0 - 2026-11-26
 
 - **End-of-life operating systems are ticks now, not typing.** Settings lists the releases your agents actually report, each with how many devices run it and when its security updates end, so the ones past it stand out. Tick the ones you're keeping on purpose; anything no agent reports yet can still be typed under **Others**. Your existing lines carry over as ticks where they match.
