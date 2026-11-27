@@ -44,6 +44,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Ignore folder for password findings ([#19](https://github.com/shoey79/rollcall/issues/19), tomvining): owner chose the
-  Rollcall-side ignore only (no agent folder skipping). Ignore entries ending \* or /* cover the folder and below.
-  Changelog thanks tomvining; comment on #19 when released.
+(none)
