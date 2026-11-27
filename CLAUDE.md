@@ -28,7 +28,10 @@ docs, changelogs, commit messages or test data:
 Small changes the owner has asked for, to include with the next bigger release (not on their own).
 Remove each line once it's released.
 
-(none)
+- End-of-life exclusion too broad (owner reported 27 Nov): ticking Windows 10 in vuln_skip_os (or "Treat this device as
+  end of life") silences everything, including third-party programs (e.g. an old Firefox) and WordPress. It should only
+  silence the operating system's own vulnerabilities (Windows build / Linux distro packages); other programs and
+  WordPress keep alerting. Vulnerabilities tab banner and check detail to say which part is excluded.
 
 ## Requested features (not started)
 
