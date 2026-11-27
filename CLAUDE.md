@@ -35,6 +35,10 @@ Remove each line once it's released.
   Owner's addition: a second tick for "its programs too", for when programs can't be updated on an old OS. In Settings,
   each ticked release gets "and its programs"; on a device, "Treat as end of life" gets the same two choices; plus
   "Don't alert" on one program on one device (e.g. an app that can't be updated), shown as such and listed under Ignored.
+- Vulnerabilities tab split (owner asked 27 Nov): it's one mixed list today (Windows CVEs between WinRAR and Chrome).
+  Separate sections: Operating system (Windows build or distro packages; one line per CVE, with the fixing KB/build),
+  Programs (grouped by program: name, installed, fixed in, CVE count, worst score, exploited; expand for the CVEs) and
+  WordPress (by site). Each section has its own end-of-life/not-alerted state (goes with the exclusion fix above).
 
 ## Requested features (not started)
 
