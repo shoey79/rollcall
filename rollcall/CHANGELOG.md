@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.104.1 - 2026-11-27
+
+- **No more tracebacks for computers that are off.** When a ping ran out of time at the very moment it finished, Rollcall tried to stop a process that had already gone, tripped over the empty space, and logged "Check failed for PC01" with a page of traceback. It's now simply no reply, as it should have been all along.
+
+- **No more pause after updating.** Checking every device's programs against the vulnerability data was done afresh on every check, comparing each installed version against thousands of CVEs one by one, so with a lot of Windows devices Rollcall could stop answering for a while (16 seconds, in one estate) after an update. Each product version is now worked out once and each device's result kept until its programs or the data change, which is the sort of thing that seems obvious once it's been pointed out by a log message.
+
 ## 1.104.0 - 2026-11-27
 
 - **Settings, tidied.** Ten tabs became seven, and the 33 settings that had piled up under **Agents** now sit in titled sections with a line on what each is for: **Checking**, **Alerts** (phone and email together), **Agents** (joining, the agent port, disks and resources, services, updates and roles, event logs, LAPS/BitLocker/system files, passwords, messages), **Vulnerabilities and software**, **Device limits**, **AI hints**, and **Dashboard and access**. The search box still looks everywhere, and every setting keeps its name, so the Configuration tab and existing installs carry on as they were. Finding something no longer requires archaeology.
