@@ -220,6 +220,15 @@ def test_leftover_and_stale_entries():
     old = [chrome(scope="user"), chrome(scope="machine", version="158.0.8127.89")]
     assert lab(old) == [(1, "158.0.8127.89")]
     assert lab([chrome(scope="user")]) == [(0, "120.0.6099.71")]
+    # Two installer (MSI) entries for everyone, neither naming chrome.exe: an upgrade under a new product code left
+    # the old one behind. The newest counts; an older one the agent found the file of still counts.
+    assert lab([chrome(scope="machine", code="{OLD}"), chrome(scope="machine", version="158.0.8127.89", code="{NEW}")]) == [(1, "158.0.8127.89")]
+    assert lab([chrome(scope="user", user="user1", file=r"C:\Users\user1\AppData\Local\Google\Chrome\Application\chrome.exe",
+                       file_ver="131.0.6778.70", version="131.0.6778.70"),
+                chrome(scope="machine", version="158.0.8127.89")]) == [(0, "131.0.6778.70"), (1, "158.0.8127.89")]
+    # VLC writes its file version with commas
+    vlc = [{"name": "VLC media player", "version": "3.0.21", "scope": "machine", "file": r"C:\Program Files\VideoLAN\VLC\vlc.exe", "file_ver": "3,0,21,0"}]
+    assert [v for _i, _l, _c, v in tp.matches(vlc)] == ["3.0.21.0"]
     # Programs that can sit side by side keep each copy
     py = [{"name": "Python 3.8.10 (64-bit)", "version": "3.8.10", "scope": "user"}, {"name": "Python 3.12.1 (64-bit)", "version": "3.12.1", "scope": "machine"}]
     assert len(tp.matches(py)) == 2

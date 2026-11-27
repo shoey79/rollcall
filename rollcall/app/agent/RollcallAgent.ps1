@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.62'
+$AgentVersion = '1.0.63'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -991,6 +991,16 @@ function Get-SignedInUsers {
     return $out.ToArray()
 }
 
+function Get-PackedGuid([string]$Guid) {
+    # How Windows Installer files a product code in the registry: {12345678-ABCD-EF01-2345-6789ABCDEF01} becomes
+    # 87654321DCBA10FE32547698BADCFE10 (the first three parts reversed, then each byte's two digits swapped)
+    $h = $Guid -replace '[{}-]', ''
+    if ($h -notmatch '^[0-9A-Fa-f]{32}$') { return $null }
+    $r = (-join $h.Substring(0, 8)[7..0]) + (-join $h.Substring(8, 4)[3..0]) + (-join $h.Substring(12, 4)[3..0])
+    for ($i = 16; $i -lt 32; $i += 2) { $r += "$($h[$i + 1])$($h[$i])" }
+    $r.ToUpperInvariant()
+}
+
 function Get-InstalledApps {
     # Installed programs as "Apps & features" lists them: the Uninstall keys for the machine (64- and 32-bit)
     # and for each signed-in user. Not Win32_Product, which is slow and can make MSI packages repair themselves.
@@ -1041,6 +1051,14 @@ function Get-InstalledApps {
                     } else { $app.gone = $true }
                 } elseif ($loc -match '^[A-Za-z]:\\' -and -not (Test-Path -LiteralPath $loc)) {
                     $app.file = Limit-Text $loc 260; $app.gone = $true
+                }
+                if ($app.file_ver) { $app.file_ver = ($app.file_ver -replace '\s*,\s*', '.') }  # VLC writes 3,0,21,0
+                # An MSI entry Windows Installer no longer knows: left behind by an upgrade that came in under a new
+                # product code (Chrome's business installer does this). Programs and Features hides these too.
+                if (-not $app.gone -and $k.WindowsInstaller -eq 1 -and $src.scope -eq 'machine') {
+                    $packed = Get-PackedGuid ([string]$k.PSChildName)
+                    if ($packed -and -not (Test-Path -LiteralPath "HKLM:\SOFTWARE\Classes\Installer\Products\$packed") -and
+                        -not (Test-Path -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\*\Products\$packed")) { $app.gone = $true; $app.orphan = $true }
                 }
             } catch { }
             $out.Add($app)

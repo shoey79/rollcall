@@ -4307,8 +4307,9 @@ class Monitor:
                           # version, or gone: an entry left behind when the program was removed)
                           **({"user": str(a["user"])[:60]} if a.get("user") else {}),
                           **({"file": str(a["file"])[:260]} if a.get("file") else {}),
-                          **({"file_ver": str(a["file_ver"])[:60]} if a.get("file_ver") else {}),
-                          **({"gone": True} if a.get("gone") is True else {})})
+                          **({"file_ver": re.sub(r"\s*,\s*", ".", str(a["file_ver"]))[:60]} if a.get("file_ver") else {}),  # VLC: 3,0,21,0
+                          **({"gone": True} if a.get("gone") is True else {}),
+                          **({"orphan": True} if a.get("orphan") is True else {})})
             if len(clean) >= 5000:
                 break
         old = self.software(agent["id"])

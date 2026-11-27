@@ -171,9 +171,9 @@ def _vkey(v: str) -> list:
 def matches(apps: list[dict], extra: list | None = None) -> list[tuple]:
     """(index into the software list, label, NVD products, version) for each program on the list.
 
-    Entries whose program file has gone (the agent says so) are left out. For the one-copy programs above, the
-    version is the file's own where the agent read it; from older agents, which don't, a user's entry older than
-    the machine's copy of the same program is taken to be a leftover too."""
+    Entries whose program has gone (the agent says so) are left out. For the one-copy programs above, the version
+    is the file's own where the agent read it, and an entry older than the newest one is taken to be a leftover
+    too, unless the agent found its file."""
     out = []
     entries = _COMPILED + list(extra or [])
     for i, a in enumerate(apps or []):
@@ -185,16 +185,17 @@ def matches(apps: list[dict], extra: list | None = None) -> list[tuple]:
                 v = installed_version(a, vn)
                 own = _OWN_FILE.get(label)
                 if own and a.get("file_ver") and own.search(str(a.get("file") or "")):
-                    v = installed_version({"version": a["file_ver"]}, None) or v
+                    v = installed_version({"version": re.sub(r"\s*,\s*", ".", str(a["file_ver"]))}, None) or v
                 if v:
                     out.append((i, label, cpes, v))
                 break
-    machine: dict = {}
+    # One copy per machine: an older entry for the same program is a leftover (an upgrade under a new MSI product
+    # code leaves the old one behind, and Programs and Features hides it), unless the agent found its file
+    newest: dict = {}
     for i, label, _c, v in out:
-        if label in _OWN_FILE and (apps[i].get("scope") or "machine") == "machine":
-            machine[label] = max(machine.get(label, []), _vkey(v))
-    return [m for m in out if not (m[1] in machine and apps[m[0]].get("scope") == "user" and "file_ver" not in apps[m[0]]
-                                   and _vkey(m[3]) < machine[m[1]])]
+        if label in _OWN_FILE:
+            newest[label] = max(newest.get(label, []), _vkey(v))
+    return [m for m in out if not (m[1] in newest and "file_ver" not in apps[m[0]] and _vkey(m[3]) < newest[m[1]])]
 
 
 # -- the NVD's answers ------------------------------------------------------------------------------------
