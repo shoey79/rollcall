@@ -43,6 +43,9 @@ Remove each line once it's released.
   GoogleUpdaterInternalService...) come back as a new name after each update, so Ignore never sticks. Service ignores to
   accept * wildcards (service:GoogleUpdater*), and Ignore on a service whose name ends in a version offers "all versions"
   (stores the name without the version plus *). Show matches as Ignored (all versions). Same for agent_ignore entries.
+- Security tab: with no security filters, secFiltersSection() returns a bare hint ("Expected changes, such as a managed
+  account being recreated...") that lands under Passwords left in files, as if it belonged there (owner spotted 27 Nov).
+  Give it its own "Security filters" heading even when empty, or put it with the security events it's about.
 
 ## Requested features (not started)
 
