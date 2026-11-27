@@ -163,3 +163,40 @@ def test_acknowledge_takes_in_programs(tmp_path, monkeypatch):
     aio.run(m_.acknowledge_check(h, "vulns", "admin"))
     ids = set(m_.agent_settings["hosts"]["pc"]["check_acks"]["vulns"]["ids"])
     assert set(m_.vuln_check(h)["ids"]) <= ids and "CVE-2026-9201" in ids
+
+
+def test_end_of_life_quietens_the_os_not_its_programs(tmp_path, monkeypatch):
+    """Ticking an end-of-life release quietens the operating system's own vulnerabilities; programs keep alerting unless
+    their release is ticked under "their programs too", the device's programs are excluded, or one is quietened."""
+    import asyncio as aio
+    monkeypatch.setattr(tp, "SPACING", 0)
+    m_, _ = monitor(tmp_path, monkeypatch, [{"id": "pc", "name": "PC01", "host": "10.0.1.20", "checks": []}])
+    h = m_.hosts["pc"]
+    h.agent_id, h.agent_report = "a1", {"os_family": "windows", "os": "Microsoft Windows 10 Pro (10.0.19045.1)"}
+    m_.software = lambda aid: {"hash": "x", "updated": 1, "apps": APPS}
+    win = [{"cve": "CVE-2026-0001", "score": 9.8, "exploited": True, "what": "Windows", "installed": "10.0.19045.1", "fixed": "10.0.19045.9"}]
+    m_.vuln_findings = lambda h: list(win)
+    m_.vulnfeeds.kev = set()
+    aio.run(m_.tpdata.refresh(NvdSession({}), time.time(), {p for _i, _l, c, _v in m_._tp_matched(h) for p in c}))
+
+    async def reevaluate(_h):
+        pass
+    m_.reevaluate = reevaluate
+    assert m_.vuln_check(h)["level"] == main.agentlib.CRIT                          # exploited Windows CVE
+    m_.opts["vuln_skip_os"] = ["Windows 10"]
+    c = m_.vuln_check(h)
+    assert c["level"] == main.agentlib.WARN and set(c["ids"]) == {"CVE-2026-9201", "CVE-2026-9301"}   # programs still alert
+    assert "1 more not alerted: Windows 10 is excluded as end of life" in c["detail"]
+    m_.opts["vuln_skip_os_programs"] = ["Windows 10"]
+    c = m_.vuln_check(h)
+    assert c["level"] == main.agentlib.OK and c["excluded"] and "programs too" in c["detail"]
+    m_.opts["vuln_skip_os_programs"] = []
+    aio.run(m_.set_vuln_quiet(h, ".NET", True, "admin"))
+    c = m_.vuln_check(h)
+    assert c["ids"] == ["CVE-2026-9301"] and "quietened by hand" in c["detail"]
+    v = m_.vulns_view(h)
+    assert v["quiet"] == [".NET"] and v["excluded"] and not v["programs_excluded"]
+    aio.run(m_.set_vuln_quiet(h, ".NET", False, "admin"))
+    m_.opts["vuln_skip_os"] = []
+    aio.run(m_.set_vuln_skip(h, True, "admin", programs=True))                     # the device on its own, programs too
+    assert m_.vuln_check(h)["level"] == main.agentlib.OK and m_.vulns_view(h)["programs_excluded_here"]

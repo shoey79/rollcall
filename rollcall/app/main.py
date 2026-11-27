@@ -49,6 +49,7 @@ import agenttls
 import wingetidx
 import snmp as snmplib
 import syslogrx as sysloglib
+import sophoslog
 import metrics as metricslib
 import emailer as emaillib
 from html import escape as html_escape
@@ -258,6 +259,7 @@ DEFAULTS = {
     "vuln_linux_source": "local",
     "vuln_skip_os": [],
     "vuln_third_party": True,
+    "vuln_skip_os_programs": [],
     "secret_ignore_folders": [],
     "vuln_software_extra": [],
     "wordpress_checks": True,
@@ -1975,6 +1977,7 @@ class Monitor:
         self.opts = opts
         self.store = store
         self.logs = sysloglib.LogStore(store.db)
+        self.fw = sophoslog.EventStore(store.db)  # Sophos firewall mail and attack events, from its syslog
         self.metrics = metricslib.Metrics(store.db)
         self.dbh = dblib.Health(DB_HEALTH_PATH)  # Manage > Database (dbhealth.py)
         self.claude = hintlib.ClaudeHints(CLAUDE_HINTS_PATH)  # hints for errors (hints.py)
@@ -2352,6 +2355,7 @@ class Monitor:
         if h and any(s.kind == "syslog" for s in h.services):
             self._syslog_claim(ip, h)
             self.logs.add(h.key, now, m)
+            self.fw.add(h.key, now, m["msg"])
             lvl = sysloglib.alert_level(m, h.syslog_alert, h.syslog_keywords, h.syslog_ignore)
             svc = next(s for s in h.services if s.kind == "syslog")
             if lvl and (svc.status == GREEN or (lvl == "red" and svc.status != RED)):
@@ -2378,6 +2382,7 @@ class Monitor:
         held = [(ts, m) for ts, m in u.get("held", []) if ts > time.time() - 3600]
         for ts, m in held:
             self.logs.add(h.key, ts, m)
+            self.fw.add(h.key, ts, m["msg"])
         log.info("Syslog from %s is %s: %d held message(s) filed", ip, h.name, len(held))
 
     def syslog_sweep(self) -> None:
@@ -2436,6 +2441,7 @@ class Monitor:
             self._save_maint()
         self.store.clear(h.key)
         self.logs.clear(h.key)
+        self.fw.clear(h.key)
         self.metrics.clear(h.key)
         await self.dismiss(f"ping_monitor_{h.key}")
         await self.ha.delete_state(h.entity_id)
@@ -2693,6 +2699,7 @@ class Monitor:
         if "history_days" in changed and int(changed["history_days"]) < int(old.get("history_days") or 0):
             self.store.prune(now - int(self.opts["history_days"]) * DAY)
             self.logs.prune(now - int(self.opts["history_days"]) * DAY)
+            self.fw.prune(now - int(self.opts["history_days"]) * DAY)
             notes.append("older history has been removed")
         for keys, attr, loop in (({"wordpress_checks", "wordfence_api_key"}, "_wp_task", self.wp_loop),
                                  ({"vuln_third_party", "vuln_software_extra", "vuln_checks"}, "_tp_task", self.tp_loop)):
@@ -2707,6 +2714,10 @@ class Monitor:
                         asyncio.create_task(self.reevaluate(h))
         if "secret_ignore_folders" in changed:
             for h in list(self.hosts.values()):  # whether each device's password findings count
+                if h.agent_id and h.agent_report:
+                    asyncio.create_task(self.reevaluate(h))
+        if "vuln_skip_os_programs" in changed:
+            for h in list(self.hosts.values()):
                 if h.agent_id and h.agent_report:
                     asyncio.create_task(self.reevaluate(h))
         if "vuln_skip_os" in changed and not ({"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys()):
@@ -2764,6 +2775,7 @@ class Monitor:
                 last_prune = now
                 self.store.prune(now - int(self.opts["history_days"]) * DAY)
                 self.logs.prune(now - int(self.opts["history_days"]) * DAY)
+                self.fw.prune(now - int(self.opts["history_days"]) * DAY)
                 try:
                     self.metrics.rollup(now, int(self.opts.get("metrics_days") or 365))
                 except sqlite3.Error as e:
@@ -4559,14 +4571,26 @@ class Monitor:
         found, extra = self.vuln_findings(h), self.extra_findings(h)
         if found is None and not extra:
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": self._vuln_why_not(h), "ids": []}
-        found = (found or []) + extra
-        skip = self.vuln_skipped(h)
-        if skip:  # end of life, kept on purpose: listed in its tab, never alerted (known-exploited ones too)
-            n = len({x["cve"] for x in found})
+        # What alerts: the operating system's own unless it's excluded as end of life; other programs unless they're
+        # excluded too (or quietened one by one); WordPress unless that site's item is quietened. The rest is listed.
+        skip, skip_prog, quiet = self.vuln_skipped(h), self.vuln_skipped_programs(h), self.vuln_quiet(h)
+        alerting = [] if skip else list(found or [])
+        for f in extra:
+            if f["what"] in quiet or (skip_prog and f.get("source") == "nvd"):
+                continue
+            alerting.append(f)
+        held = len({x["cve"] for x in (found or []) + extra} - {x["cve"] for x in alerting})
+        why = [w for w in (skip, skip_prog and f"programs too: {skip_prog}", quiet and f"{len(quiet)} quietened by hand") if w]
+        if not alerting:
+            if not held:
+                level, detail = vulnlib.summarise([], float(self.opts.get("vuln_min_score", 9)))
+                return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": detail, "ids": []}
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "ids": [], "excluded": True,
-                    "detail": (f"{n} known vulnerabilit{'y' if n == 1 else 'ies'}, not alerted: " if n else "Not alerted: ") + skip}
-        level, detail = vulnlib.summarise(found, float(self.opts.get("vuln_min_score", 9)))
-        return {"key": "vulns", "label": "Vulnerabilities", "detail": detail, "ids": sorted({x["cve"] for x in found}),
+                    "detail": f"{held} known vulnerabilit{'y' if held == 1 else 'ies'}, not alerted: " + "; ".join(why)}
+        level, detail = vulnlib.summarise(alerting, float(self.opts.get("vuln_min_score", 9)))
+        if held:
+            detail = f"{detail[:250]} ({held} more not alerted: {'; '.join(why)})"[:300]
+        return {"key": "vulns", "label": "Vulnerabilities", "detail": detail, "ids": sorted({x["cve"] for x in alerting}),
                 "level": {"ok": agentlib.OK, "warn": agentlib.WARN, "crit": agentlib.CRIT}[level]}
 
     def vuln_skipped(self, h: Host) -> str | None:
@@ -4579,6 +4603,34 @@ class Monitor:
             if oslife.matches(pat, h.agent_report):
                 return f"{pat} is excluded as end of life"
         return None
+
+    def vuln_skipped_programs(self, h: Host) -> str | None:
+        """Why the programs on this device don't alert either (an old OS whose programs can't be updated), or None."""
+        if ((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip_programs")):
+            return "this device's programs are excluded"
+        for pat in self.opts.get("vuln_skip_os_programs") or []:
+            pat = str(pat).strip()
+            if oslife.matches(pat, h.agent_report):
+                return f"programs on {pat} are excluded"
+        return None
+
+    def vuln_quiet(self, h: Host) -> set:
+        """Programs (or WordPress items) on this device whose vulnerabilities don't alert, quietened one by one."""
+        return set((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_quiet") or [])
+
+    async def set_vuln_quiet(self, h: Host, what: str, quiet: bool, who: str | None) -> None:
+        hs = self.agent_settings["hosts"].setdefault(h.key, {})
+        cur = set(hs.get("vuln_quiet") or [])
+        (cur.add if quiet else cur.discard)(what[:200])
+        if cur:
+            hs["vuln_quiet"] = sorted(cur)[:200]
+        else:
+            hs.pop("vuln_quiet", None)
+        self._save_agent_settings()
+        log.info("%s: vulnerabilities in %s %s%s", h.name, what, "not alerted" if quiet else "alerted again", f", by {who}" if who else "")
+        if h.agent_report:
+            await self.reevaluate(h)
+        self.publish_soon(h)
 
     def os_releases(self) -> list[dict]:
         """The operating system releases agents report, with how many devices run each and when support ends: the
@@ -4593,15 +4645,21 @@ class Monitor:
         return [{"name": r, "devices": n, "ends": oslife.end(r), "ended": oslife.ended(r)}
                 for r, n in sorted(count.items(), key=lambda x: (kind(x[0]), nat(x[0])))]
 
-    async def set_vuln_skip(self, h: Host, skip: bool, who: str | None) -> None:
+    async def set_vuln_skip(self, h: Host, skip: bool, who: str | None, programs: bool | None = None) -> None:
         hs = self.agent_settings["hosts"].setdefault(h.key, {})
         if skip:
             hs["vuln_skip"] = True
         else:
             hs.pop("vuln_skip", None)
+        if programs is not None:
+            if programs:
+                hs["vuln_skip_programs"] = True
+            else:
+                hs.pop("vuln_skip_programs", None)
         self._save_agent_settings()
-        log.info("%s: vulnerabilities %s%s", h.name, "not alerted (excluded as end of life)" if skip else "alerted again",
-                 f", by {who}" if who else "")
+        what = ("not alerted (excluded as end of life" + (", its programs too)" if hs.get("vuln_skip_programs") else ")")) if skip \
+            else "alerted again"
+        log.info("%s: vulnerabilities %s%s", h.name, what, f", by {who}" if who else "")
         if h.agent_report:
             await self.reevaluate(h)
         self.publish_soon(h)
@@ -4640,6 +4698,9 @@ class Monitor:
                 "checked": found is not None, "why_not": None if found is not None else self._vuln_why_not(h),
                 "min_score": int(self.opts.get("vuln_min_score", 9)), "linux_source": str(self.opts.get("vuln_linux_source") or "local"),
                 "excluded": self.vuln_skipped(h), "excluded_here": bool((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip")),
+                "programs_excluded": self.vuln_skipped_programs(h),
+                "programs_excluded_here": bool((self.agent_settings["hosts"].get(h.key) or {}).get("vuln_skip_programs")),
+                "quiet": sorted(self.vuln_quiet(h)),
                 "info": {**self.vulnfeeds.info, **({"offline": True, "bundle": self.offline_bundle()} if self.offline() else {})}}
 
     def offline(self) -> bool:
@@ -7949,8 +8010,22 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             raise web.HTTPNotFound()
         body = await _json_body(req)
         user = await access.who(req)
-        await monitor.set_vuln_skip(h, bool(body.get("skip")), user.get("display"))
-        return web.json_response({"ok": True, "excluded": monitor.vuln_skipped(h)})
+        prog = body.get("programs")
+        await monitor.set_vuln_skip(h, bool(body.get("skip")), user.get("display"), None if prog is None else bool(prog))
+        return web.json_response({"ok": True, "excluded": monitor.vuln_skipped(h), "programs_excluded": monitor.vuln_skipped_programs(h)})
+
+    async def host_vuln_quiet(req):
+        """Don't alert on one program's (or WordPress item's) vulnerabilities on this device, or alert again. {what, quiet}"""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        body = await _json_body(req)
+        what = str(body.get("what") or "").strip()
+        if not what or len(what) > 200:
+            return web.json_response({"error": "which program?"}, status=400)
+        user = await access.who(req)
+        await monitor.set_vuln_quiet(h, what, bool(body.get("quiet")), user.get("display"))
+        return web.json_response({"ok": True, "quiet": sorted(monitor.vuln_quiet(h))})
 
     async def host_vmware_ignore(req):
         """Never alert on a VMware problem on this device (e.g. a datastore of ISOs that's always nearly full),
@@ -8017,10 +8092,27 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
             log.exception("%s: couldn't work out readings from syslog", h.name)
             found = {"sensors": [], "status": []}
         return web.json_response({"name": h.name, "pending": pending, "ip": h.ip, "host": h.host, "rows": rows, "count_24h": n, "last": last,
-                                  "readings": found,
+                                  "readings": found, "fw_events": monitor.fw.has(h.key),
                                   "alert": h.syslog_alert, "keywords": h.syslog_keywords, "ignore": h.syslog_ignore,
                                   "ack": h.syslog_ack, "status": svc.status if svc else None,
                                   "detail": svc.detail if svc else None, "port": monitor.syslog_port, "now": now})
+
+    async def host_fw_events(req):
+        """Sophos firewall mail or attack events from its syslog (?kind=mail|attack&q=&days=). Admins and editors
+        only: mail details (sender, recipient, subject) are personal data."""
+        h = monitor.hosts.get(req.match_info["key"])
+        if not h:
+            raise web.HTTPNotFound()
+        kind = req.query.get("kind", "mail")
+        if kind not in ("mail", "attack"):
+            raise web.HTTPBadRequest(text="bad kind")
+        try:
+            days = max(1, min(int(monitor.opts.get("history_days", 7)), int(req.query.get("days") or monitor.opts.get("history_days", 7))))
+        except ValueError:
+            raise web.HTTPBadRequest(text="bad filter")
+        now = time.time()
+        got = await asyncio.to_thread(monitor.fw.query, h.key, kind, now - days * DAY, (req.query.get("q") or "")[:100], 500, now)
+        return web.json_response({**got, "days": days, "history_days": int(monitor.opts.get("history_days", 7))})
 
     async def host_reading_set(req):
         """Name a log reading and set its alert limits (blank clears them)."""
@@ -8207,6 +8299,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_delete("/api/icons/{file}", editor_only(icon_delete))
     app.router.add_get("/icons/{file}", icon_file)
     app.router.add_get("/api/hosts/{key}/syslog", host_syslog)
+    app.router.add_get("/api/hosts/{key}/firewall-events", editor_only(host_fw_events))
     app.router.add_post("/api/hosts/{key}/syslog/ack", editor_only(host_syslog_ack))
     app.router.add_post("/api/syslog/forget", editor_only(syslog_forget))
     app.router.add_get("/api/discovery", editor_only(discovery_get))
@@ -8228,6 +8321,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
     app.router.add_post("/api/hosts/{key}/ilo/ignore", editor_only(host_ilo_ignore))
     app.router.add_post("/api/hosts/{key}/vmware/ignore", editor_only(host_vmware_ignore))
     app.router.add_post("/api/hosts/{key}/agent/vuln-skip", editor_only(host_vuln_skip))
+    app.router.add_post("/api/hosts/{key}/agent/vuln-quiet", editor_only(host_vuln_quiet))
     app.router.add_post("/api/hosts/{key}/notes", editor_only(host_notes))
     app.router.add_post("/api/hosts/{key}/readings", editor_only(host_reading_set))
     app.router.add_delete("/api/hosts/{key}", editor_only(delete_host))
@@ -9149,6 +9243,7 @@ async def main() -> None:
                     await asyncio.sleep(1)
                     try:
                         monitor.logs.flush()
+                        monitor.fw.flush()
                     except Exception as err:  # noqa: BLE001
                         log.warning("Syslog: couldn't save messages: %s", err)
             monitor._syslog_flusher = asyncio.create_task(flusher())

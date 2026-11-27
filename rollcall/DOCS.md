@@ -551,6 +551,18 @@ Messages are matched to the device by the address they come from, including its 
 - **Rate limit.** Each device can send up to 100 messages a second, with bursts up to 200. Anything above that is dropped, so a chatty device can't fill the database.
 - **Trust.** Syslog over UDP isn't authenticated, so anything on your network can send messages that appear to come from a device. Treat syslog alerts as a prompt to look, not as proof. Messages from addresses that aren't devices in Rollcall are only listed, never alerted. If you don't use syslog, turn the port off under the add-on's **Configuration → Network**; if you do, allow UDP 514 at your firewall only from the devices that send it.
 
+#### Sophos Firewall: email and attacks
+
+A Sophos Firewall (SFOS: XG and XGS) sending its logs by syslog also gets **Email** and **Attacks** views on its **Logs** tab, beside **Messages**, once it has logged any. They're built from the firewall's own key="value" log lines:
+
+- **Email:** mail its email protection logged (Anti-Spam and Anti-Virus, SMTP): time, sender, recipient, subject, reason (e.g. Spam, or the virus found), action (e.g. Quarantine or Reject), size, and the sending server, address and country.
+- **Attacks:** what intrusion prevention (IPS) and web server protection (WAF) logged: time, the signature or reason, its classification and priority, the firewall rule, source address and country, destination address and port, victim (client or server) and action (e.g. Detect or Drop).
+- Each has a search box, counts per day, and the top senders and reasons, or the top sources and signatures.
+- Kept for `history_days`, separately from the messages, so a busy firewall's traffic log doesn't push them out.
+- Senders, recipients and subjects are personal data, so only Home Assistant admins and editors see these views.
+- They don't alert; the Messages view's **Alert on** settings still apply to the lines themselves.
+- In SFOS, add Home Assistant as a syslog server (**System services → Log settings**) and tick the Anti-Spam, Anti-Virus, IPS and WAF logs.
+
 #### Readings from its logs
 
 Some devices report readings in their routine log messages. Rollcall picks these out and shows them at the top of the **Logs** tab, and as tiles on the Overview: the latest value, the range and a small graph over 24 hours, and when it was last reported.
@@ -1158,6 +1170,7 @@ Keep filters narrow. "Added to Administrators, by anyone" would hide exactly the
 
 - `agent_disk_warn` / `agent_disk_crit`: the default disk thresholds.
 - `agent_ignore`: known noise. A service name (`MapsBroker`), or `event:10016` (the DCOM permission errors), `apppool:OldTestPool`, `site:Default Web Site`, `disk:E:`, `dhcp:10.0.6.0`, `printer:Old MFP`, `vm:TEST01`, `storage:E:` (a volume, disk or array), `backup:<job>`, `laps:laps`, `bitlocker:D:` (one drive) or `bitlocker:bitlocker` (the whole check), `cert:<thumbprint>` or `cert:certs`, `task:<name>` or `task:tasks`, `sqldb:<name>`, `sqljob:<name>` or `sqldb:sql`, `gpo:gpo`, `sysvol:sysvol`, `exchange:exchange`, `domain:domain`, `aduser:<name>`, `update:immich`.
+  - A `*` matches any part of a name: `service:GoogleUpdaterService*` covers every version of a service whose name includes its version (it comes back under a new name after each update). **Ignore all versions**, next to **Ignore** on such a service, adds that for you, and the matches show as **Ignored (all versions)**.
 - `agent_watch_services`: services to watch on every server, even manual-start ones (e.g. `AcmeBackupAgent`).
 - `agent_event_alerts` / `agent_security_alerts`: turn those alert types off.
 
@@ -1390,9 +1403,15 @@ Devices with an agent get a **Vulnerabilities** check: known vulnerabilities (CV
 
 - **Amber:** a vulnerability scoring `vuln_min_score` or more out of 10 (its CVSS base score; 9 by default, which is "critical"). Amber isn't notified, like other amber checks.
 - **Red, and notified:** any vulnerability, whatever its score (so it's listed even below `vuln_min_score`), on CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list, or that Microsoft says is being exploited, whatever its score.
-- The **Vulnerabilities** tab in Details lists each one, worst first: the CVE (linked to cve.org, or to Wordfence for WordPress entries without a CVE), its score, what it's in, the installed version and the version or Windows build that fixes it, and says what else was checked. Vulnerable programs and packages are marked on the **Software** tab, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
+- The **Vulnerabilities** tab in Details has a heading for each kind, each saying whether it alerts:
+  - **Operating system:** one line per CVE, worst first, linked to cve.org: its score, what it's in, the installed build or package version and the Windows build (with its KB) or package version that fixes it.
+  - **Programs:** one line per program: installed version, the version that fixes it, how many CVEs, the worst score and whether one is exploited. Click the CVE count for the list.
+  - **WordPress:** the same, by site, for WordPress itself, plugins and themes (linked to Wordfence for entries without a CVE).
+  - Each heading says what was checked. Vulnerable programs and packages are marked on the **Software** tab, with **Only the N with known vulnerabilities** to filter, and **Find software** marks them too.
 - **Acknowledge** keeps it green while the list stays the same; a new vulnerability alerts again. It clears by itself once the update is installed.
-- **End-of-life systems kept on purpose** (e.g. Windows 10 without extended security updates): in Settings, **End-of-life operating systems**, tick their releases, or tick **Treat this device as end of life** in one device's Vulnerabilities tab. Their vulnerabilities are still listed there, with a note saying why, but never turn the device amber or red or notify, known-exploited ones included.
+- **End-of-life systems kept on purpose** (e.g. Windows 10 without extended security updates): in Settings, **End-of-life operating systems**, tick their releases, or tick **Treat this device as end of life** in one device's Vulnerabilities tab. The operating system's own vulnerabilities are still listed, with a note saying why, but never turn the device amber or red or notify, known-exploited ones included. Other programs and WordPress keep alerting, as they can usually still be updated.
+  - **Their programs too:** when programs can't be updated on an old system either, tick its release under **End-of-life systems: their programs too** (`vuln_skip_os_programs`), or, on one device, **…and its programs too** under **Treat this device as end of life**. WordPress still alerts.
+  - **Don't alert** on one program's row (or a WordPress item's) quietens just that one on that device, e.g. an application that has to stay on an old version. It's marked **Not alerted**, listed under **Ignored on this server** on the Agent tab, and **Alert again** undoes it.
   - The ticks are the releases your agents report, each with how many devices run it and when its standard security updates end (paid extensions such as ESU or Ubuntu Pro aren't counted; Windows 11 shows no date, as its support depends on the feature update). Releases that are out of support are marked.
   - LTSC, LTSB and IoT editions are releases of their own, worked out from the build number: Windows 10 Enterprise LTSC 2019 is supported until 2029, so ticking **Windows 10** leaves it alone.
   - For a release no agent reports yet, type it under **Others**, one per line. It's matched as whole words against the OS the agent reports: `Ubuntu 20.04` matches `Ubuntu 20.04.6 LTS`, `Windows 10` doesn't match Windows 11 or Windows 10 LTSC (name `LTSC` to take those in), and `Windows Server 2012` includes 2012 R2. In the add-on's Configuration tab, `vuln_skip_os` is the same list, ticks included.
@@ -1772,7 +1791,8 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `printer_supply_warn` | 10 | Printers (SNMP): amber when a toner, ink or other supply is at this % or less |
 | `software_updates` | true | Highlight programs with a newer version: from the winget catalogue (downloaded daily) for Windows, and the package manager for Linux |
 | `offline` | false | For a network without the internet: download nothing, and use imported data instead (see [Offline use](#offline-use)) |
-| `vuln_skip_os` | `[]` | End-of-life operating systems whose vulnerabilities are listed but never alert (see [Known vulnerabilities](#known-vulnerabilities)) |
+| `vuln_skip_os` | `[]` | End-of-life operating systems whose own vulnerabilities are listed but never alert (see [Known vulnerabilities](#known-vulnerabilities)) |
+| `vuln_skip_os_programs` | `[]` | End-of-life operating systems whose other programs don't alert either |
 | `vuln_third_party` | `true` | Also check the programs on Rollcall's list against the NVD |
 | `vuln_software_extra` | `[]` | More programs to check, as `program name = vendor:product` |
 | `wordpress_checks` | `true` | WordPress sites on IIS servers: versions, updates and closed plugins (see [WordPress sites](#wordpress-sites)) |

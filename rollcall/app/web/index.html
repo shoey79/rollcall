@@ -218,6 +218,8 @@ p.asked{margin:0 0 10px;padding:8px 10px;border-radius:6px;background:color-mix(
 .notesbox .nhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .notesbox .nhead small{color:var(--muted)}
 .mergebox{border:1px solid var(--line);border-left:4px solid #d97706;border-radius:8px;padding:10px 12px;margin:0 0 14px;font-size:13.5px}
+.segbtns{display:flex;gap:4px;margin:0 0 10px}.fwsum{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 20px;margin:0 0 12px}
+.fwsum .diskrow{grid-template-columns:96px 1fr 52px;margin:2px 0;font-size:12px}td.fwmsg{max-width:340px;overflow-wrap:anywhere}.fwsum .bar i{background:var(--accent)}.fwtop{margin:4px 0 0;padding-left:20px;font-size:12.5px}.fwtop li{margin:1px 0;overflow-wrap:anywhere}
 .logbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}.logbar input[type=search]{flex:1;min-width:140px}
 .logout{height:min(60vh,560px);overflow:auto;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg2,rgba(0,0,0,.03));font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 .ll.warning{color:#b45309}.ll.error,.ll.critical{color:#dc2626;font-weight:600}.ll.debug{opacity:.6}
@@ -2078,15 +2080,27 @@ function describe(t) {
     return `${f.label} ${f.ops[r.op] || r.op} ${f.values ? (f.values[r.value] || r.value) : r.value}`;
   }).join(t.match === "any" ? " OR " : " AND ");
 }
-// A device's own end-of-life exclusion (Vulnerabilities tab)
-document.addEventListener("change", async e => {
-  const b = e.target.closest("[data-vulnskip]");
-  if (!b) return;
-  b.disabled = true;
-  const r = await fetch(`api/hosts/${encodeURIComponent(detKey)}/agent/vuln-skip`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({skip: b.checked})});
-  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); b.checked = !b.checked; b.disabled = false; return; }
+// A device's own end-of-life exclusion (Vulnerabilities tab): its operating system, and optionally its programs too
+async function vulnPost(path, body, undo) {
+  const r = await fetch(`api/hosts/${encodeURIComponent(detKey)}/agent/${path}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.error || `That didn't work (${r.status})`); if (undo) undo(); return; }
   await load();
   openDetails(detKey);
+}
+document.addEventListener("change", e => {
+  const b = e.target.closest("[data-vulnskip], [data-vulnskipprog]");
+  if (!b) return;
+  b.disabled = true;
+  const undo = () => { b.checked = !b.checked; b.disabled = false; };
+  // Unticking end of life takes "its programs too" with it
+  vulnPost("vuln-skip", "vulnskip" in b.dataset ? {skip: b.checked, ...(b.checked ? {} : {programs: false})} : {skip: true, programs: b.checked}, undo);
+});
+// "Don't alert" on one program (or WordPress item) on this device, and "Alert again"
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-vulnquiet]");
+  if (!b) return;
+  b.disabled = true;
+  vulnPost("vuln-quiet", {what: b.dataset.vulnquiet, quiet: b.dataset.q === "1"}, () => { b.disabled = false; });
 });
 // "In <tab>" under a search's matches in other tabs: go to that tab, keeping the search
 document.getElementById("rows").addEventListener("click", e => {
@@ -2267,7 +2281,7 @@ function stField(f) {
     input = `<select id="${id}"${dis}>${f.options.map(o => `<option${o === v ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
   else if (f.type === "int")
     input = `<input id="${id}" type="number" inputmode="numeric" min="${f.min}" max="${f.max}" step="1" value="${esc(v)}"${dis}>`;
-  else if (f.key === "vuln_skip_os" && (ST.meta.os_releases || []).length)
+  else if (OS_TICKS.includes(f.key) && (ST.meta.os_releases || []).length)
     input = osSkipField(v, id, dis);
   else if (LIST_TYPES.includes(f.type))
     input = `<textarea id="${id}" rows="${Math.min(8, Math.max(3, (v || []).length + 1))}" spellcheck="false" placeholder="One per line"${dis}>${esc(stText(f, v))}</textarea>`;
@@ -2280,7 +2294,7 @@ function stField(f) {
     const have = new Set(v || []), more = (ST.meta.notify_services || []).filter(s => !have.has(s));
     if (more.length) sugg = `<div class="st-sugg">${more.slice(0, 12).map(s => `<button type="button" data-add="${esc(s)}" title="Add ${esc(s)}">+ ${esc(s)}</button>`).join("")}</div>`;
   }
-  if (f.key === "vuln_skip_os" && input.includes("st-oslist"))  // holds labels of its own
+  if (OS_TICKS.includes(f.key) && input.includes("st-oslist"))  // holds labels of its own
     return `<div class="${cls}" data-f="${f.key}" role="group" aria-label="${esc(f.label)}"><span>${esc(f.label)}</span>${help}${input}${err}</div>`;
   return `<label class="${cls}" data-f="${f.key}" for="${id}">${esc(f.label)}${help}${input}${sugg}${err}</label>`;
 }
@@ -2357,7 +2371,9 @@ function stRender() {
   if (stChanged().length || Object.keys(ST.errors).length || !document.getElementById("stStatus").classList.contains("ok")) stTotals();
   else { document.getElementById("stSave").disabled = true; document.getElementById("stUndo").disabled = true; }
 }
-// End-of-life operating systems: a tick for each release the agents report, and a box for any others.
+// End-of-life operating systems (and, separately, their programs): a tick for each release the agents report,
+// and a box for any others.
+const OS_TICKS = ["vuln_skip_os", "vuln_skip_os_programs"];
 const osRel = v => (ST.meta.os_releases || []).find(r => r.name.toLowerCase() === String(v).trim().toLowerCase());
 function osSkipField(v, id, dis) {
   const on = new Set((v || []).map(x => String(x).trim().toLowerCase())), others = (v || []).filter(x => !osRel(x));
@@ -2367,19 +2383,19 @@ function osSkipField(v, id, dis) {
     <small>Others, one per line, for releases no agent reports yet:</small>
     <textarea id="${id}" rows="${Math.min(6, Math.max(2, others.length + 1))}" spellcheck="false" placeholder="e.g. Windows Server 2012 R2"${dis}>${esc(others.join("\n"))}</textarea>`;
 }
-function osSkipValue(wrap) {
+function osSkipValue(wrap, key0) {
   // Keep the saved order (so nothing looks changed that wasn't), then anything newly ticked or typed.
   const want = [...wrap.querySelectorAll("[data-osrel]")].filter(c => c.checked).map(c => c.dataset.osrel)
     .concat(wrap.querySelector("textarea").value.split(/\n|,/).map(x => x.trim()).filter(Boolean));
   const key = x => String(x).trim().toLowerCase(), wanted = new Set(want.map(key));
-  const kept = (ST.orig.vuln_skip_os || []).filter(x => wanted.has(key(x))), have = new Set(kept.map(key));
+  const kept = (ST.orig[key0] || []).filter(x => wanted.has(key(x))), have = new Set(kept.map(key));
   return kept.concat(want.filter(x => !have.has(key(x)) && have.add(key(x))));
 }
 function stInput(e) {
   const el = e.target, wrap = el.closest("[data-f]");
   if (!wrap || !el.id || !el.id.startsWith("st_")) return;
   const f = ST.meta.fields.find(x => x.key === wrap.dataset.f);
-  const v = f.key === "vuln_skip_os" && wrap.querySelector(".st-oslist") ? osSkipValue(wrap) : stParse(f, f.type === "bool" ? el.checked : el.value);
+  const v = OS_TICKS.includes(f.key) && wrap.querySelector(".st-oslist") ? osSkipValue(wrap, f.key) : stParse(f, f.type === "bool" ? el.checked : el.value);
   ST.vals[f.key] = v;
   if ((f.key === "email_send" || f.key === "email_digest") && e.type === "change") { delete ST.errors[f.key]; stRender(); return; }
   const problem = stCheck(f, v);
@@ -2853,6 +2869,11 @@ function renderDetails(d) {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
       for (const e of list || []) { const [k, val] = parse(e); if (k === kind && norm(k, val) === norm(kind, v)) return {scope, entry: e}; }
     }
+    if (kind !== "secret") {  // "GoogleUpdaterService*": every version of it
+      for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
+        for (const e of list || []) { const [k, val] = parse(e); if (k === kind && val.includes("*") && new RegExp("^" + norm(k, val).replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$").test(norm(kind, v))) return {scope, entry: e, wild: true}; }
+      }
+    }
     if (kind === "secret") {
       const path = slash(String(v).split("|")[0]);
       for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
@@ -2865,9 +2886,12 @@ function renderDetails(d) {
   const secretFolder = p => { const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return i > 0 ? p.slice(0, i + 1) + "*" : ""; };
   const ignBtn = (kind, v, label) => {
     const hit = findIgnore(kind, v);
+    if (hit && hit.wild) return `<span class="ignored" title="Ignored as ${esc(parse(hit.entry)[1])}${hit.scope === "all" ? " on all servers" : hit.scope === "config" ? " in the add-on's Configuration tab" : " on this server"}">Ignored (all versions)</span>`;
     if (hit && hit.scope === "settings") return `<span class="ignored" title="In Settings (Agents, Passwords left in files): ${esc(hit.entry)}">Ignored (Settings)</span>`;
     if (hit) return `<span class="ignored" title="${hit.scope === "config" ? "Ignored in the add-on's Configuration tab" : "Ignored " + (hit.folder ? "with its folder " : "") + (hit.scope === "all" ? "on all servers" : "on this server")}">Ignored${hit.folder ? " (folder)" : ""}${hit.scope === "all" ? " (all)" : hit.scope === "config" ? " (config)" : ""}</span>`;
-    return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>`;
+    const allv = kind === "service" && allVersions(v);
+    return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>` +
+      (allv ? ` <button type="button" class="mini edit-only" data-ign-kind="service" data-ign-value="${esc(allv)}" title="Its name changes with each update: ignore ${esc(allv)}, so newer versions stay ignored too">Ignore all versions</button>` : "");
   };
   const rowCls = (bad, kind, v) => bad ? (findIgnore(kind, v) ? "dim" : "hl") : "";
   // Acknowledged 24-hour alerts: still listed, no longer amber, until something new arrives.
@@ -3520,18 +3544,57 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
       const offNote = inf.offline ? `<p class="hint">📴 Offline: Rollcall doesn't download this data. ${offAt ? `It's from ${new Date(offAt * 1000).toLocaleDateString([], {day: "numeric", month: "short", year: "numeric"})} (${Math.floor((Date.now() / 1000 - offAt) / 86400)} days old)` : "None has been imported yet"}; import newer data under <b>Manage, Offline data</b>.</p>` : "";
       const cveLink = (c, ref) => /^CVE-/.test(c) ? `<a href="https://www.cve.org/CVERecord?id=${encodeURIComponent(c)}" target="_blank" rel="noopener">${esc(c)}</a>`
         : ref && /^https:\/\//.test(ref) ? `<a href="${esc(ref)}" target="_blank" rel="noopener">${esc(c)}</a>` : esc(c);
-      // End of life, kept on purpose: everything is still listed, but nothing alerts (Settings, or this device alone)
-      const eol = vu.excluded ? `<div class="mergebox"><p style="margin:0">🗄️ <b>Not alerted:</b> ${esc(vu.excluded.charAt(0).toUpperCase() + vu.excluded.slice(1))}. These vulnerabilities are listed below for reference, but don't turn the device amber or red or send notifications, known-exploited ones included.${vu.excluded_here ? "" : " Change the list in Settings (End-of-life operating systems)."}</p></div>` : "";
-      const eolSw = `<label class="schedopt edit-only" style="margin:4px 0 10px"><input type="checkbox" data-vulnskip${vu.excluded_here ? " checked" : ""}> <span>Treat this device as end of life: list its vulnerabilities, but don't alert on them</span></label>`;
-      const body = eol + eolSw + offNote + (!vu.checked && !vu.found.length ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
-        : !vu.found.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : ""}.</p>`
-        : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], vu.found.map(f =>
-            `<tr><td>${cveLink(f.cve, f.ref)}${f.title ? `<br><small class="muted">${esc(f.title)}</small>` : ""}${f.exploited ? ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or Microsoft says it's being exploited">Exploited</span>` : ""}</td>
-             <td class="num">${f.score ? esc(f.score.toFixed(1)) : "—"}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref && !/^https:\/\//.test(f.ref) ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`)));
-      const also = (vu.also || []).map(a => a.what === "wordpress" ? (a.checked ? `WordPress sites from Wordfence Intelligence` : `WordPress sites aren't: ${esc(a.why_not)}`)
-        : a.what === "programs" ? (a.checked.length ? `${a.checked.length} other program${a.checked.length === 1 ? "" : "s"} from the National Vulnerability Database (${a.checked.map(x => esc(x)).join(", ")})` : "") : "").filter(Boolean);
-      html += sect(`Known vulnerabilities${vu.found.length ? ` (${vu.found.length})` : ""}`, body
-        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${also.length ? " Also checked: " + also.join("; ") + "." : ""}${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`);
+      // One tab, three headings: the operating system's own, other programs (grouped), WordPress (by site).
+      // Each says whether it alerts: end of life (Settings or this device), or one program quietened by hand.
+      const quiet = new Set(vu.quiet || []), cap = t => esc(t.charAt(0).toUpperCase() + t.slice(1));
+      const expl = ` <span class="vuln expl" title="On CISA's Known Exploited Vulnerabilities list, or the vendor says it's being exploited">Exploited</span>`;
+      const cveCell = f => `${cveLink(f.cve, f.ref)}${f.title ? `<br><small class="muted">${esc(f.title)}</small>` : ""}${f.exploited ? expl : ""}`;
+      const score = f => f.score ? esc(f.score.toFixed(1)) : "—";
+      const notAlerted = (why, here, where) => `<div class="mergebox"><p style="margin:0">🗄️ <b>Not alerted:</b> ${cap(why)}. These are listed for reference, but don't turn the device amber or red or send notifications, known-exploited ones included.${here ? "" : ` Change it in Settings (${where}).`}</p></div>`;
+      const verCmp = (x, y) => String(x).localeCompare(String(y), undefined, {numeric: true});
+      const osF = vu.found.filter(f => !f.source), prF = vu.found.filter(f => f.source === "nvd"), wpF = vu.found.filter(f => f.source === "wordfence");
+      // Programs and WordPress items: one row each, the CVEs behind a click
+      const grouped = (list, label) => {
+        const by = new Map();
+        for (const f of list) { if (!by.has(f.what)) by.set(f.what, []); by.get(f.what).push(f); }
+        const rows = [...by.entries()].map(([what, fs]) => ({what, fs, worst: Math.max(0, ...fs.map(f => f.score || 0)), ex: fs.some(f => f.exploited)}))
+          .sort((x, y) => (y.ex - x.ex) || (y.worst - x.worst) || x.what.localeCompare(y.what));
+        return tbl([label, "Installed", "Fixed in", "CVEs", "Worst", ""], rows.map(g => {
+          const fixed = [...new Set(g.fs.map(f => f.fixed).filter(Boolean))].sort(verCmp), q = quiet.has(g.what);
+          return `<tr${q ? ' class="muted"' : ""}><td>${esc(label === "Item" ? g.fs[0].item || g.what : g.what)}${g.ex ? expl : ""}${q ? ` <span class="vuln" title="Quietened on this device">Not alerted</span>` : ""}</td>
+            <td>${esc(g.fs[0].installed)}</td><td>${esc(fixed.filter(v => /\d/.test(v)).pop() || fixed[0] || "")}</td>
+            <td><details class="vulncves"><summary>${g.fs.length}</summary>${g.fs.map(f => `<div>${cveCell(f)} <small class="muted">${score(f)}</small></div>`).join("")}</details></td>
+            <td class="num">${g.worst ? g.worst.toFixed(1) : "—"}</td>
+            <td><button type="button" class="mini edit-only" data-vulnquiet="${esc(g.what)}" data-q="${q ? 0 : 1}" title="${q ? "Alert on this one's vulnerabilities again" : "Keep listing these, but don't alert on them on this device (for a program that can't be updated)"}">${q ? "Alert again" : "Don't alert"}</button></td></tr>`;
+        }));
+      };
+      // Operating system
+      const eolSw = `<label class="schedopt edit-only" style="margin:4px 0 ${vu.excluded_here ? 2 : 10}px"><input type="checkbox" data-vulnskip${vu.excluded_here ? " checked" : ""}> <span>Treat this device as end of life: list its operating system's vulnerabilities, but don't alert on them</span></label>`
+        + (vu.excluded_here ? `<label class="schedopt edit-only" style="margin:0 0 10px 24px"><input type="checkbox" data-vulnskipprog${vu.programs_excluded_here ? " checked" : ""}> <span>…and its programs too (when they can't be updated on it)</span></label>` : "");
+      const osBody = (vu.excluded ? notAlerted(vu.excluded, vu.excluded_here, "End-of-life systems") : "") + eolSw + offNote
+        + (!vu.checked ? `<p class="empty-note">${esc(vu.why_not || "Not checked.")}</p>`
+        : !osF.length ? `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more${linux ? " that an update fixes" : " in this build of Windows"}.</p>`
+        : tbl(["CVE", "Score", linux ? "Package" : "In", "Installed", "Fixed in"], osF.map(f =>
+            `<tr><td>${cveCell(f)}</td><td class="num">${score(f)}</td><td>${esc(f.what)}</td><td>${esc(f.installed)}</td><td>${esc(f.fixed)}${f.ref && !/^https:\/\//.test(f.ref) ? ` <small class="muted">${esc(f.ref)}</small>` : ""}</td></tr>`)))
+        + `<p class="hint">CVEs scoring ${vu.min_score} or more out of 10 (CVSS), ${linux ? "in packages a newer version fixes" : "fixed in a later build of this device's Windows (desktop Windows and Windows Server are updated separately, even on the same build number)"}. Ones known to be exploited are always listed, <b>whatever their score</b>, and turn the check red; the rest are amber. From ${srcs.join(" and ")}.${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`;
+      html += sect(`Operating system${osF.length ? ` (${osF.length})` : ""}`, osBody);
+      // Other programs (curated list, from the NVD)
+      const progs = (vu.also || []).find(a => a.what === "programs");
+      if (prF.length || (progs && progs.checked.length)) {
+        const n = new Set(prF.map(f => f.what)).size;
+        html += sect(`Programs${n ? ` (${n})` : ""}`, (vu.programs_excluded ? notAlerted(vu.programs_excluded, vu.programs_excluded_here, "End-of-life systems: their programs too") : "")
+          + (prF.length ? grouped(prF, "Program") : `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more in the programs checked.</p>`)
+          + `<p class="hint">Checked against the National Vulnerability Database${progs && progs.checked.length ? `: ${progs.checked.map(x => esc(x)).join(", ")}` : ""}. Click a CVE count for the list. These alert even when the operating system is end of life, unless its programs are excluded too, or <b>Don't alert</b> is set on one.</p>`);
+      }
+      // WordPress, by site
+      const wpa = (vu.also || []).find(a => a.what === "wordpress");
+      if (wpF.length || wpa) {
+        const sites = [...new Set(wpF.map(f => f.site || ""))].sort();
+        html += sect(`WordPress${wpF.length ? ` (${new Set(wpF.map(f => f.what)).size})` : ""}`,
+          (wpF.length ? sites.map(st => `<p style="margin:10px 0 4px"><b>${esc(st || "Site")}</b></p>` + grouped(wpF.filter(f => (f.site || "") === st), "Item")).join("")
+            : wpa && !wpa.checked ? `<p class="empty-note">Not checked: ${esc(wpa.why_not)}</p>` : `<p class="empty-note">✓ No known vulnerabilities scoring ${vu.min_score} or more in WordPress, its plugins or themes.</p>`)
+          + `<p class="hint">From Wordfence Intelligence; the WordPress tab has every site's plugins and themes. Not affected by the end-of-life settings.</p>`);
+      }
     }
     flush("software");
     if (!sw || !sw.apps) html += sect("Installed software", `<p class="empty-note">${r.agent_version ? `Not reported yet. It needs ${linux ? "Linux agent 1.0.14" : "Windows agent 1.0.33"} or later, and arrives with the next report after the agent updates.` : ""}</p>`);
@@ -3566,8 +3629,11 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
   const ignRows = [
     ...(st.ignore || []).map(e => ({e, scope: "host"})),
     ...(st.global_ignore || []).map(e => ({e, scope: "all"})),
-    ...(st.config_ignore || []).map(e => ({e, scope: "config"}))];
+    ...(st.config_ignore || []).map(e => ({e, scope: "config"})),
+    ...((d.vulns && d.vulns.quiet) || []).map(e => ({e, scope: "quiet"}))];
   const ignHtml = !ignRows.length ? "" : sect("Ignored on this server", tbl(["What", "Applies to", ""], ignRows.map(({e, scope}) => {
+    if (scope === "quiet") return `<tr><td>Vulnerabilities not alerted: <b>${esc(e)}</b></td><td>This server</td>
+      <td><div class="actions"><button type="button" class="mini danger edit-only" data-vulnquiet="${esc(e)}" data-q="0">Alert again</button></div></td></tr>`;
     const [k, v] = parse(e);
     return `<tr><td>${k === "secret" && isFolderIgn(v) ? "Passwords in a folder (and below it)" : KIND[k] || k}: <b${k === "secret" ? ' class="secpath"' : ""}>${esc(k === "secret" ? v.split("|").filter(Boolean).join(" · ") : v)}</b></td><td>${scope === "host" ? "This server" : scope === "all" ? "All servers" : "All servers (Configuration tab)"}</td>
       <td>${scope === "config" ? `<small class="muted">Change it in the add-on's Configuration</small>` : `<div class="actions">
@@ -3866,7 +3932,7 @@ function secFilterText(f) {
 }
 function secFiltersSection(st) {
   const rows = [...(st.sec_filters || []).map(f => ({f, scope: "host"})), ...(st.global_sec_filters || []).map(f => ({f, scope: "all"}))];
-  if (!rows.length) return `<p class="hint">Expected changes, such as a managed account being recreated, or expected failed logons, such as a service that tries a wrong account, can be filtered so they don't alert: use <b>Filter…</b> on an event or failed logon. Filtered ones stay in the list.</p>`;
+  if (!rows.length) return sect("Security filters", `<p class="hint" style="margin-top:0">None yet. Expected changes, such as a managed account being recreated, or expected failed logons, such as a service that tries a wrong account, can be filtered so they don't alert: use <b>Filter…</b> on an event or failed logon. Filtered ones stay in the list.</p>`);
   return sect(`Security filters (${rows.length})`, tbl(["Doesn't alert when", "Applies to", "Added", ""], rows.map(({f, scope}) => {
     const n = f.kind === "logon" ? detLogons.reduce((a, x) => a + (x.top || []).filter(t => logonMatches(f, t)).reduce((b, t) => b + (+t.count || 0), 0), 0)
       : detSec.events.filter(x => secMatches(f, x)).length;
@@ -5282,10 +5348,10 @@ document.getElementById("detBody").addEventListener("change", async e => {
 // ---- Syslog viewer ----
 const SEV = ["Emergency", "Alert", "Critical", "Error", "Warning", "Notice", "Info", "Debug"];
 const SEV_DOT = s => s <= 2 ? "red" : s === 3 ? "degraded" : s === 4 ? "amber" : "unknown";
-let logQ = "", logSev = 7, logTimer = null;
+let logQ = "", logSev = 7, logTimer = null, logView = "messages";
 async function openLogs(key) {
   if (detMode !== "syslog" || key !== detKey) {
-    logQ = ""; logSev = 7;
+    logQ = ""; logSev = 7; logView = "messages";
     const h = data && data.hosts.find(x => x.key === key);
     document.getElementById("detTitle").textContent = h ? h.name : "Logs";
     document.getElementById("detSub").textContent = "Loading…";
@@ -5295,9 +5361,11 @@ async function openLogs(key) {
   detMode = "syslog"; detKey = key; renderDetActions();
   if (!detDlg.open) detDlg.showModal();
   try {
-    const r = await fetch(`api/hosts/${encodeURIComponent(key)}/syslog?sev=${logSev}&q=${encodeURIComponent(logQ)}&limit=500`, {cache: "no-store"});
+    const fwView = logView !== "messages";
+    const [r, f] = await Promise.all([fetch(`api/hosts/${encodeURIComponent(key)}/syslog?sev=${logSev}&q=${encodeURIComponent(fwView ? "" : logQ)}&limit=${fwView ? 1 : 500}`, {cache: "no-store"}),
+      fwView ? fetch(`api/hosts/${encodeURIComponent(key)}/firewall-events?kind=${logView}&q=${encodeURIComponent(logQ)}`, {cache: "no-store"}) : null]);
     if (!r.ok) throw new Error(r.status);
-    renderLogs(await r.json());
+    renderLogs(await r.json(), f && f.ok ? await f.json() : null);
   } catch (e) {
     document.getElementById("detBody").innerHTML = `<p class="empty-note">Couldn't load the logs.</p>`;
   }
@@ -5352,7 +5420,31 @@ function logReadings(rd, now) {
       <td colspan="2"><small class="muted">${r.label === "Last started" ? "" : "last reported "}${t(r.at)}</small></td><td><small class="muted">${ago(r.at, now)}</small></td></tr>`));
   return sect("Readings from its logs", `<table class="small"><thead><tr><th>Reading</th><th>Latest</th><th>Last 24 h</th><th></th><th>Reported</th></tr></thead><tbody>${rows.join("")}</tbody></table>`);
 }
-function renderLogs(x) {
+// Sophos firewall mail and attack events (from its syslog): admins and editors only, as mail details are personal data
+function fwTables(x, fw) {
+  const t = ts => esc(new Date(ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}));
+  const mail = logView === "mail";
+  if (!fw) return `<p class="empty-note">Couldn't load them.</p>`;
+  const max = Math.max(1, ...fw.per_day.map(d => d[1]));
+  const day = d => new Date(d + "T12:00:00").toLocaleDateString([], {weekday: "short", day: "numeric", month: "short"});
+  const perDay = fw.per_day.length ? `<div class="fwdays">${fw.per_day.map(([d, n]) => `<div class="diskrow" title="${esc(day(d))}: ${n}"><b style="font-weight:500;font-size:12px">${esc(day(d))}</b><div class="bar"><i style="width:${Math.max(1, 100 * n / max)}%"></i></div><span>${n.toLocaleString()}</span></div>`).join("")}</div>` : "";
+  const top = (title, list) => list.length ? `<div><b style="font-size:12.5px">${title}</b><ol class="fwtop">${list.map(([k, n]) => `<li><span>${esc(k)}</span> <small class="muted">${n.toLocaleString()}</small></li>`).join("")}</ol></div>` : "";
+  const summary = fw.total ? `<div class="fwsum">${perDay ? `<div><b style="font-size:12.5px">Per day</b>${perDay}</div>` : ""}${top(mail ? "Top senders" : "Top sources", fw.top)}${top(mail ? "Top reasons" : "Top signatures", fw.top2)}</div>` : "";
+  const from = (ip, c) => `${esc(ip || "")}${c ? ` <small class="muted">${esc(c)}</small>` : ""}`;
+  const rows = !fw.rows.length ? `<p class="empty-note">${logQ ? "Nothing matches." : `None in the last ${fw.days} day${fw.days === 1 ? "" : "s"}.`}</p>`
+    : mail ? tbl(["Time", "Sender", "Recipient", "Subject", "Reason", "Action", "Size", "From"], fw.rows.map(r =>
+        `<tr><td>${t(r.ts)}</td><td>${esc(r.sender)}</td><td>${esc(r.recipient)}</td><td class="fwmsg">${esc(r.subject)}</td><td>${esc(r.reason)}${r.kind && r.kind !== "Anti-Spam" ? ` <small class="muted">${esc(r.kind)}</small>` : ""}</td>
+         <td>${esc(r.action)}</td><td class="num">${r.size && /^\d+$/.test(r.size) ? (+r.size >= 1048576 ? (r.size / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(r.size / 1024)) + " KB") : esc(r.size || "")}</td>
+         <td>${r.src_host ? esc(r.src_host) + "<br>" : ""}${from(r.src_ip, r.src_country)}</td></tr>`))
+    : tbl(["Time", "Attack", "Priority", "Rule", "Source", "Destination", "Action"], fw.rows.map(r =>
+        `<tr><td>${t(r.ts)}</td><td class="fwmsg">${esc(r.message)}${r.classification ? `<br><small class="muted">${esc(r.classification)}</small>` : ""}${r.url ? `<br><small class="muted">${esc(r.url)}</small>` : ""} <small class="muted">${esc(r.kind)}</small></td>
+         <td>${esc(r.priority)}</td><td>${esc(r.fw_rule)}</td><td>${from(r.src_ip, r.src_country)}</td>
+         <td>${esc(r.dst_ip)}${r.dst_port ? ":" + esc(r.dst_port) : ""}${r.victim ? `<br><small class="muted">${esc(r.victim)}</small>` : ""}</td><td>${esc(r.action)}</td></tr>`));
+  return summary + rows + `<p class="hint">${fw.total > fw.rows.length ? `Showing the newest ${fw.rows.length} of ${fw.total.toLocaleString()}. ` : ""}${mail
+    ? "Mail the firewall's email protection logged (Anti-Spam and Anti-Virus, SMTP). Senders, recipients and subjects are personal data, so only admins and editors see this"
+    : "Attacks the firewall's intrusion prevention (IPS) and web server protection (WAF) logged"}; kept for ${fw.history_days} day${fw.history_days === 1 ? "" : "s"} (History in Settings). Nothing here alerts: the Messages view's alert settings still apply to the lines themselves.</p>`;
+}
+function renderLogs(x, fw) {
   const body = document.getElementById("detBody"), canEdit = data && data.can_edit === true;
   const hadFocus = document.activeElement && document.activeElement.id === "logQ";
   document.getElementById("detTitle").textContent = x.name;
@@ -5361,7 +5453,16 @@ function renderLogs(x) {
     (x.last ? ` · last ${ago(x.last, x.now)}` : "") + ` · from ${x.ip || x.host}`;
   const alerting = x.pending || x.rows.filter(r => r.alert).length;  // log messages only: readings over a limit and SIP registrations clear by themselves
   const alertText = x.alert < 0 ? "only the words you set" : SEV[x.alert].toLowerCase() + (x.alert < 7 ? " and worse" : "");
-  let html = `<div class="logbar">
+  const fe = (canEdit && x.fw_events) || {}, views = [["messages", "Messages"], ...(fe.mail ? [["mail", "Email"]] : []), ...(fe.attack ? [["attack", "Attacks"]] : [])];
+  if (!views.some(v => v[0] === logView)) logView = "messages";
+  const switcher = views.length > 1 ? `<div class="segbtns" role="group" aria-label="Show">${views.map(([k, n]) => `<button type="button" class="mini${k === logView ? " on" : ""}" data-logview="${k}" aria-pressed="${k === logView}">${n}${k !== "messages" ? ` <small>${fe[k].toLocaleString()}</small>` : ""}</button>`).join("")}</div>` : "";
+  if (logView !== "messages") {
+    body.innerHTML = switcher + `<div class="logbar"><input type="search" id="logQ" placeholder="${logView === "mail" ? "Search sender, recipient, subject…" : "Search attack, address, rule…"}" value="${esc(logQ)}" autocomplete="off" spellcheck="false"></div>` + fwTables(x, fw);
+    const q = document.getElementById("logQ");
+    if (hadFocus) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+    return;
+  }
+  let html = switcher + `<div class="logbar">
       <input type="search" id="logQ" placeholder="Search messages" value="${esc(logQ)}" autocomplete="off" spellcheck="false">
       <select id="logSev" aria-label="Severity">${SEV.map((n, i) => `<option value="${i}" ${i === logSev ? "selected" : ""}>${i === 7 ? "All severities" : n + " and worse"}</option>`).join("")}</select>
       ${alerting && canEdit ? `<button type="button" id="logAck" class="primary">Acknowledge ${alerting} alert${alerting === 1 ? "" : "s"}</button>` : ""}
@@ -5389,6 +5490,12 @@ document.getElementById("detBody").addEventListener("input", e => {
 });
 document.getElementById("detBody").addEventListener("change", e => {
   if (e.target.id === "logSev") { logSev = +e.target.value; openLogs(detKey); }
+});
+document.getElementById("detBody").addEventListener("click", e => {
+  const b = e.target.closest("[data-logview]");
+  if (!b || detMode !== "syslog") return;
+  logView = b.dataset.logview; logQ = "";
+  openLogs(detKey);
 });
 document.getElementById("detBody").addEventListener("click", async e => {
   if (e.target.id !== "logAck") return;
@@ -5443,6 +5550,11 @@ document.getElementById("detTabs").addEventListener("click", e => {
   const t = e.target.closest("[data-dtab]");
   if (t) showDetTab(t.dataset.dtab);
 });
+// A name that ends in a version (GoogleUpdaterService159.0.8140.0) changes with every update: ignore it as GoogleUpdaterService*
+function allVersions(name) {
+  const m = /^(.*?[A-Za-z_\-])[ _\-]?v?\d+(?:\.\d+)+$/.exec(String(name || "").trim());
+  return m && m[1].length >= 3 ? m[1].replace(/[ _\-]+$/, "") + "*" : null;
+}
 // A Needs attention item jumps to its check's tab, except for clicks on what's inside its hint (Ask Claude, "What
 // would be sent", the text in it) or on any other control in it.
 const ITEM_CONTROLS = ".hintbox, details, summary, pre, button, a[href], input, textarea, select, label";

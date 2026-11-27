@@ -33,7 +33,8 @@ ADMIN_ONLY = {("GET", "/api/export"), ("POST", "/api/hints/test"), ("POST", "/ap
 ADMIN_ONLY_PREFIX = ("/api/messages",)
 # GET routes that show what only someone who can make changes should see
 EDITOR_GETS = {"/api/database", "/api/log", "/api/agents", "/api/agents/msi", "/api/agents/script", "/api/discovery",
-               "/api/ha/devices", "/api/ha/entities", "/api/settings"}
+               "/api/ha/devices", "/api/ha/entities", "/api/settings",
+               "/api/hosts/{key}/firewall-events"}  # Sophos mail details are personal data
 ADMIN_GETS = {"/api/messages", "/api/changelog", "/api/offline", "/api/offline/export"}  # What's new and its changelog: admins only
 # Routes anyone viewing the panel may use, though they're not GETs (they change nothing)
 OPEN = {("POST", "/api/check/{key}")}   # Check now: only asks for a fresh check

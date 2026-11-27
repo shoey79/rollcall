@@ -525,6 +525,7 @@ class Ignore:
 
     def __init__(self, entries):
         self.items: dict[str, set[str]] = {}
+        self.wild: dict[str, list] = {}   # entries with * in them: "service:GoogleUpdaterService*" takes in every version
         for e in entries or []:
             e = str(e).strip()
             if not e:
@@ -533,10 +534,14 @@ class Ignore:
             kind = kind.lower()
             if kind not in IGNORE_KINDS:
                 kind, value = "service", e
-            self.items.setdefault(kind, set()).add(value.strip().lower().rstrip(":"))
+            v = value.strip().lower().rstrip(":")
+            self.items.setdefault(kind, set()).add(v)
+            if "*" in v and kind != "secret":  # (a secret's folder ignore has its own rule: Ignore.secret)
+                self.wild.setdefault(kind, []).append(re.compile(re.escape(v).replace(r"\*", ".*")))
 
     def has(self, kind: str, value) -> bool:
-        return str(value).strip().lower().rstrip(":") in self.items.get(kind, set())
+        v = str(value).strip().lower().rstrip(":")
+        return v in self.items.get(kind, set()) or any(rx.fullmatch(v) for rx in self.wild.get(kind, ()))
 
     def secret(self, f: dict) -> bool:
         """A password-scan finding that's ignored: on its own (file, rule and setting), or because its folder is
@@ -772,6 +777,13 @@ def clean_secret_status(s) -> dict:
     for k in ("files", "errors", "count"):
         out[k] = _int_or_none(s.get(k), 100_000_000) or 0
     return out
+
+
+def all_versions(name: str) -> str | None:
+    """For a name that ends in a version (GoogleUpdaterService159.0.8140.0, "Foo 2.1"), the ignore that takes in every
+    version: GoogleUpdaterService*. None if it doesn't end in one."""
+    m = re.match(r"^(.*?[A-Za-z_\-])[ _\-]?v?\d+(?:\.\d+)+$", str(name or "").strip())
+    return m.group(1).rstrip(" _-") + "*" if m and len(m.group(1)) >= 3 else None
 
 
 def folder_ignore(value: str) -> bool:

@@ -91,6 +91,7 @@ options:
   vuln_min_score: 9
   vuln_linux_source: local
   vuln_skip_os: []
+  vuln_skip_os_programs: []
   vuln_third_party: true
   vuln_software_extra: []
   wordpress_checks: true
@@ -204,6 +205,8 @@ schema:
   vuln_min_score: int(1,10)
   vuln_linux_source: list(local|online|off)
   vuln_skip_os:
+    - str
+  vuln_skip_os_programs:
     - str
   vuln_third_party: bool
   vuln_software_extra:

@@ -212,7 +212,8 @@ def findings(installs: list[dict], idx: dict, kev: set) -> list[dict]:
                 label = {"core": "WordPress", "plugin": f"{name} (plugin)", "theme": f"{name} (theme)"}[kind]
                 out.append({"cve": cve or f"WF-{vid[:8]}", "score": score, "exploited": bool(cve and cve in kev),
                             "what": f"{label} on {where}", "installed": ver, "fixed": fixed or "no fix yet",
-                            "source": "wordfence", "title": title, "ref": f"https://www.wordfence.com/threat-intel/vulnerabilities/id/{vid}" if vid else None})
+                            "source": "wordfence", "site": where, "item": label, "title": title,
+                            "ref": f"https://www.wordfence.com/threat-intel/vulnerabilities/id/{vid}" if vid else None})
     return out
 
 
