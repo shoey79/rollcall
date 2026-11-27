@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.103.2 - 2026-11-27
+
+- **Documentation and screenshots brought up to date.** New screenshots of the Overview, a server's Details (notes included), Add device and Agents (which still showed the agent by its old name, version 1.0.43, from back when Rollcall was younger and more naive), plus new ones for the WordPress and Vulnerabilities tabs. The guide now describes the grouped Manage menu, and the README lists what Rollcall does these days rather than what it did a fortnight ago.
+
+- **Small tidy-ups.** Links in the Overview's alerts name the tab properly (**Details: Vulnerabilities**, **Details: WordPress**, not "Vulns" and "Wordpress"); Manage → Agents no longer says there's one agent for Windows and one for Linux, as there are four; and "1 months" of Microsoft data is now "1 month".
+
 ## 1.103.1 - 2026-11-27
 
 - **Ignore a whole folder of password findings** ([#19](https://github.com/shoey79/rollcall/issues/19), thanks to [tomvining](https://github.com/tomvining) for the request). Daily log files arrive under a new name every day, and the password scan greeted each one as a fresh discovery. **Ignore folder** next to **Ignore** quietens everything in that folder and below it, including tomorrow's file. It's all on Rollcall's side, so no agent update is needed, and like other ignores it can be applied to every server.
