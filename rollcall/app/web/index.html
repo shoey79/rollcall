@@ -2833,15 +2833,25 @@ function renderDetails(d) {
   const norm = (kind, v) => kind === "disk" ? diskKey(v) : String(v).trim().toLowerCase();
   const parse = e => { const i = e.indexOf(":"); const kinds = ["service", "event", "apppool", "site", "disk", "dhcp", "printer", "vm", "storage", "hardware", "update", "backup", "laps", "bitlocker", "cert", "task", "sqldb", "sqljob", "gpo", "sysvol", "exchange", "domain", "aduser", "secret"];
     const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
+  // A password-scan folder ignore ("D:\\Logs\\*") covers every file in that folder and below it
+  const isFolderIgn = v => !v.includes("|") && /[\\/]\*$/.test(v) && v.length > 2;
+  const slash = v => String(v).toLowerCase().replace(/\\/g, "/");
   const findIgnore = (kind, v) => {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
       for (const e of list || []) { const [k, val] = parse(e); if (k === kind && norm(k, val) === norm(kind, v)) return {scope, entry: e}; }
     }
+    if (kind === "secret") {
+      const path = slash(String(v).split("|")[0]);
+      for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
+        for (const e of list || []) { const [k, val] = parse(e); if (k === "secret" && isFolderIgn(val) && path.startsWith(slash(val.slice(0, -1)))) return {scope, entry: e, folder: true}; }
+      }
+    }
     return null;
   };
+  const secretFolder = p => { const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return i > 0 ? p.slice(0, i + 1) + "*" : ""; };
   const ignBtn = (kind, v, label) => {
     const hit = findIgnore(kind, v);
-    if (hit) return `<span class="ignored" title="${hit.scope === "config" ? "Ignored in the add-on's Configuration tab" : "Ignored " + (hit.scope === "all" ? "on all servers" : "on this server")}">Ignored${hit.scope === "all" ? " (all)" : hit.scope === "config" ? " (config)" : ""}</span>`;
+    if (hit) return `<span class="ignored" title="${hit.scope === "config" ? "Ignored in the add-on's Configuration tab" : "Ignored " + (hit.folder ? "with its folder " : "") + (hit.scope === "all" ? "on all servers" : "on this server")}">Ignored${hit.folder ? " (folder)" : ""}${hit.scope === "all" ? " (all)" : hit.scope === "config" ? " (config)" : ""}</span>`;
     return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>`;
   };
   const rowCls = (bad, kind, v) => bad ? (findIgnore(kind, v) ? "dim" : "hl") : "";
@@ -3357,7 +3367,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
         `<tr class="${accepted(f) ? "dim" : rowCls(true, "secret", ikey(f))}"><td class="secpath">${esc(f.path)}${ackAt && !accepted(f) && !findIgnore("secret", ikey(f)) ? ` <span class="newer">New</span>` : ""}</td><td class="num">${f.line ?? "—"}</td>
           <td>${esc((sx.rules || {})[f.rule] || f.rule)}${f.key ? `<br><small class="muted">Setting: <code>${esc(f.key)}</code></small>` : ""}</td>
           <td>${f.len != null ? `${f.len} character${f.len === 1 ? "" : "s"}` : ""}</td><td>${f.first ? ago(f.first, Date.now() / 1000) : ""}</td>
-          <td>${accepted(f) && !findIgnore("secret", ikey(f)) ? `<span class="ignored" title="Ignored with Ignore all">Ignored (all)</span>` : ignBtn("secret", ikey(f), f.path)}</td></tr>`));
+          <td>${accepted(f) && !findIgnore("secret", ikey(f)) ? `<span class="ignored" title="Ignored with Ignore all">Ignored (all)</span>` : ignBtn("secret", ikey(f), f.path)}${!findIgnore("secret", ikey(f)) && secretFolder(f.path) ? ` <button type="button" class="mini edit-only" data-ign-kind="secret" data-ign-value="${esc(secretFolder(f.path))}" title="Stop alerting about anything found in ${esc(secretFolder(f.path).slice(0, -1))} and the folders below it, including files that turn up later (daily logs, say)">Ignore folder</button>` : ""}</td></tr>`));
     }
     if (data && data.can_edit) inner += `<details class="secsetup"${!sx.on ? " open" : ""}><summary><b>Scan settings for this device</b></summary><div class="secset">
       <label><span>Scan this device</span><select class="secmode">
@@ -3544,7 +3554,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     ...(st.config_ignore || []).map(e => ({e, scope: "config"}))];
   const ignHtml = !ignRows.length ? "" : sect("Ignored on this server", tbl(["What", "Applies to", ""], ignRows.map(({e, scope}) => {
     const [k, v] = parse(e);
-    return `<tr><td>${KIND[k] || k}: <b${k === "secret" ? ' class="secpath"' : ""}>${esc(k === "secret" ? v.split("|").filter(Boolean).join(" · ") : v)}</b></td><td>${scope === "host" ? "This server" : scope === "all" ? "All servers" : "All servers (Configuration tab)"}</td>
+    return `<tr><td>${k === "secret" && isFolderIgn(v) ? "Passwords in a folder (and below it)" : KIND[k] || k}: <b${k === "secret" ? ' class="secpath"' : ""}>${esc(k === "secret" ? v.split("|").filter(Boolean).join(" · ") : v)}</b></td><td>${scope === "host" ? "This server" : scope === "all" ? "All servers" : "All servers (Configuration tab)"}</td>
       <td>${scope === "config" ? `<small class="muted">Change it in the add-on's Configuration</small>` : `<div class="actions">
         ${scope === "host" ? `<button type="button" class="mini edit-only" data-ign-all="${esc(e)}">Apply to all servers</button>` : ""}
         <button type="button" class="mini danger edit-only" data-unign="${esc(e)}" data-scope="${scope}">Stop ignoring</button></div>`}</td></tr>`;

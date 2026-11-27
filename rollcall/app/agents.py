@@ -538,6 +538,14 @@ class Ignore:
     def has(self, kind: str, value) -> bool:
         return str(value).strip().lower().rstrip(":") in self.items.get(kind, set())
 
+    def secret(self, f: dict) -> bool:
+        """A password-scan finding that's ignored: on its own (file, rule and setting), or because its folder is
+        ("D:\\Logs\\*": everything in that folder and the ones below it, so a new daily log file stays quiet too)."""
+        if self.has("secret", secret_key(f)):
+            return True
+        path = str(f.get("path") or "").lower().replace("\\", "/")
+        return any(path.startswith(v[:-1].replace("\\", "/")) for v in self.items.get("secret", ()) if folder_ignore(v))
+
 
 # --------------------------------------------------------------------------
 # Security filters: expected, low-risk security events that shouldn't alert
@@ -766,6 +774,18 @@ def clean_secret_status(s) -> dict:
     return out
 
 
+def folder_ignore(value: str) -> bool:
+    """A password-scan ignore entry for a whole folder: its path ending in \\* or /* (one for a file has | in it)."""
+    return "|" not in value and (value.endswith("\\*") or value.endswith("/*")) and len(value) > 2
+
+
+def secret_folder(path: str) -> str:
+    """The ignore entry for the folder a file is in: D:\\Logs\\app-2026-11-27.txt -> D:\\Logs\\*."""
+    p = str(path or "")
+    i = max(p.rfind("\\"), p.rfind("/"))
+    return p[:i + 1] + "*" if i > 0 else ""
+
+
 def secret_key(f: dict) -> str:
     """What an Ignore button stores for a finding: the file, the rule and the setting (not the line, which moves)."""
     return f"{f.get('path') or ''}|{f.get('rule') or ''}|{f.get('key') or ''}"[:600]
@@ -774,12 +794,12 @@ def secret_key(f: dict) -> str:
 def secrets_state(status: dict, findings: list, ign: "Ignore", ack_at: float = 0) -> tuple[str, str]:
     """Amber at most: a password in a file is worth fixing, not worth waking anyone for.
     ack_at: "Ignore all" was pressed then; findings first found by then don't count."""
-    live = [f for f in findings if not ign.has("secret", secret_key(f)) and not (ack_at and (f.get("first") or 0) <= ack_at)]
+    live = [f for f in findings if not ign.secret(f) and not (ack_at and (f.get("first") or 0) <= ack_at)]
     if live:
         files = sorted({f["path"] for f in live})
         names = ", ".join(re.split(r"[\\/]", p)[-1] for p in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
         n = len(live)
-        new = " new" if ack_at and any(not ign.has("secret", secret_key(f)) and (f.get("first") or 0) <= ack_at for f in findings) else ""
+        new = " new" if ack_at and any(not ign.secret(f) and (f.get("first") or 0) <= ack_at for f in findings) else ""
         return WARN, f"{n}{new} possible password{'s' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}: {names}"
     if not status.get("done_at"):
         return OK, "First scan under way" if status.get("scanning") or not status.get("files") else "Scanning"
