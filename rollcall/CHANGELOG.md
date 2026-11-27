@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.104.0 - 2026-11-27
+
+- **Settings, tidied.** Ten tabs became seven, and the 33 settings that had piled up under **Agents** now sit in titled sections with a line on what each is for: **Checking**, **Alerts** (phone and email together), **Agents** (joining, the agent port, disks and resources, services, updates and roles, event logs, LAPS/BitLocker/system files, passwords, messages), **Vulnerabilities and software**, **Device limits**, **AI hints**, and **Dashboard and access**. The search box still looks everywhere, and every setting keeps its name, so the Configuration tab and existing installs carry on as they were. Finding something no longer requires archaeology.
+
+- **Folders whose password findings never count, for every device** (follows [#19](https://github.com/shoey79/rollcall/issues/19), thanks to [tomvining](https://github.com/tomvining)). Alongside **Ignore folder** on a finding, **Settings → Agents → Passwords left in files** now has a list of folders, one per line. `*` stands for any part of a folder's name and a line starting `*\` can be at any depth, so `*\Logs` covers every folder called Logs on every drive of every server. Findings there are still listed, marked **Ignored (Settings)**, but never turn anything amber. Rollcall-side, so no agent update.
+
 ## 1.103.2 - 2026-11-27
 
 - **Documentation and screenshots brought up to date.** New screenshots of the Overview, a server's Details (notes included), Add device and Agents (which still showed the agent by its old name, version 1.0.43, from back when Rollcall was younger and more naive), plus new ones for the WordPress and Vulnerabilities tabs. The guide now describes the grouped Manage menu, and the README lists what Rollcall does these days rather than what it did a fortnight ago.
