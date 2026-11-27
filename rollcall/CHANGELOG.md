@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.105.1 - 2026-11-27
+
+- **Chrome no longer cries wolf about a copy that isn't there.** Some machines showed Chrome 120 (from December 2023) as exploitable while Program Files held 158. The agent reads every signed-in user's list of programs, not just the one Programs and Features shows you, and one of them still had an entry for a per-user Chrome that had long since been deleted without being uninstalled. Rollcall took the registry's word for it. Now:
+  - Windows agent 1.0.62 checks each entry's program file: one that's gone is marked **Left over** on the Software tab and isn't checked for vulnerabilities, and the file's own version is used for browsers, 7-Zip, Notepad++ and VLC (Chrome's business installer leaves its entry at the version it first installed, which doesn't help either).
+  - Until the agents update, a user's entry older than the machine's own copy of the same browser is taken to be a leftover.
+  - A copy that really is in someone's profile now says so on the Vulnerabilities tab, with whose profile and the folder, as that's the one place you weren't going to look. The Software tab's **For** column names the user too.
+
 ## 1.105.0 - 2026-11-27
 
 - **Sophos Firewall: email and attacks on the Logs tab.** A Sophos Firewall (XG or XGS) sending its logs to Rollcall now gets **Email** and **Attacks** views beside **Messages**, built from the lines it was already sending. **Email** lists what its email protection quarantined, rejected or let through (sender, recipient, subject, reason, action, size, and where it came from); **Attacks** lists what intrusion prevention and web server protection caught (signature, classification, priority, rule, source and destination, Detect or Drop). Each has a search box, counts per day and the usual suspects at the top. They're kept for `history_days`, apart from the firewall's chatty traffic log so it can't crowd them out, and only admins and editors see them, as senders and subjects are personal data. Display only: nothing new alerts.
