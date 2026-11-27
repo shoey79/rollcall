@@ -1218,6 +1218,7 @@ Placeholders aren't counted, such as `${DB_PASS}`, `%PASSWORD%`, `$env:API_KEY`,
 - **The check is amber at most** (*Passwords in files*) and never sends a notification.
 - **Fix:** move the password into a password manager or the program's protected store, then remove it from the file. The finding clears after the next scan.
 - **Ignore:** use **Ignore** on a row for a finding you've accepted (e.g. a test password). It stays ignored until that file, setting or kind of finding changes.
+- **Folders that never count, on every device:** list them in Settings (**Agents → Passwords left in files**, `secret_ignore_folders`), one per line. `*` stands for any part of a folder's name, and a line starting `*\` can be at any depth: `D:\Logs` covers that folder and everything below it, `*\Logs` every folder called Logs on any drive, `D:\Apps\*\Logs` the Logs folder of every app under `D:\Apps`. Findings there are still listed, marked **Ignored (Settings)**, but never turn a device amber.
 - **Ignore folder:** ignores everything found in that file's folder and the folders below it, including files that turn up later, such as a new log file every day. It shows in **Ignored on this server** as `D:\Logs\App\*` and, like any ignore there, can be applied to all servers or undone with **Stop ignoring**.
 - **Ignore all:** accepts everything found so far on that device, e.g. after checking a first scan's false positives. Anything found later turns it amber again, marked **New**, and **Ignore all** accepts those too. A finding that only moves because lines were added or removed above it isn't new. **Undo** brings them all back.
 - **Turning it off** for a device removes its check and Rollcall's findings straight away. The agent deletes its own scan files on its next run.
@@ -1467,7 +1468,7 @@ Rollcall can secure agent reports itself, with nothing to buy or install. Under 
 - **Agents trust exactly that key** ("pinning"), not names or certificate authorities, so a certificate for the right name from anyone else is refused, before anything, the token included, is sent. That's stronger than **Accept a self-signed certificate**, which accepts any certificate.
 - **Agents move across by themselves.** At its next report each agent gets the port and the key's fingerprint, signed with the key that signs updates (so even that hand-over can't be changed on the way), and from the run after it reports to `https://<the same address>:8101`. The address it had stays as the fallback. Agents downloaded while HTTPS is on have it built in and use it from their first report. Needs Windows agent 1.0.54, Linux agent 1.0.22 or router agent 1.0.3. **Routers need TLS support** for HTTPS: `curl` built with TLS, or `uclient-fetch` with its TLS library (`libustream-mbedtls`, `-openssl` or `-wolfssl`), which many routers don't have room for. Without it a router can only use plain HTTP, so leave plain HTTP on; router agent 1.0.4 and later doesn't try HTTPS then, and tells Rollcall, which lists it under **Manage → Agents** and asks before plain HTTP is turned off.
 - **Routers** can't check a key or a signature: the router agent is given Rollcall's certificate and trusts only that (`uclient-fetch --ca-certificate`, or curl), so the certificate lists every address agents use; Rollcall adds new ones as agents report from them. It's kept on the router's flash, written only when it changes. A router without TLS support for uclient-fetch (the `libustream-*` package) stays on HTTP.
-- **Plain HTTP stays on** until you choose **Turn off plain HTTP**. Rollcall judges each agent by the port its reports actually arrive on, so an agent behind a reverse proxy that forwards to plain HTTP counts as plain HTTP, whatever address it was given. The HTTPS section lists agents still reaching Rollcall over plain HTTP, ones that haven't reported since Rollcall started checking, and ones quiet for over 2 days; turning plain HTTP off asks first if any active agent isn't on HTTPS. Once every agent that reported in the last 2 days did so over HTTPS, admins see a reminder on the Overview with a button to turn it off. If agents that were reporting stop for half an hour after it's turned off, the Overview names them with a button to turn plain HTTP back on. Off stays off across restarts and updates, and **Settings → Agent port** shows it. Leave it on if a reverse proxy forwards to port 8100 over plain HTTP: agents that reach Rollcall through one with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are.
+- **Plain HTTP stays on** until you choose **Turn off plain HTTP**. Rollcall judges each agent by the port its reports actually arrive on, so an agent behind a reverse proxy that forwards to plain HTTP counts as plain HTTP, whatever address it was given. The HTTPS section lists agents still reaching Rollcall over plain HTTP, ones that haven't reported since Rollcall started checking, and ones quiet for over 2 days; turning plain HTTP off asks first if any active agent isn't on HTTPS. Once every agent that reported in the last 2 days did so over HTTPS, admins see a reminder on the Overview with a button to turn it off. If agents that were reporting stop for half an hour after it's turned off, the Overview names them with a button to turn plain HTTP back on. Off stays off across restarts and updates, and **Settings → Agents → Agent port** shows it. Leave it on if a reverse proxy forwards to port 8100 over plain HTTP: agents that reach Rollcall through one with its own certificate (e.g. Let's Encrypt on a firewall) carry on as they are.
 - **Port 8101** must be open under the add-on's **Configuration → Network** (it is by default). If it's closed, the HTTPS section says so and agents stay on HTTP.
 
 ### Devices that report over the internet
@@ -1528,7 +1529,7 @@ For a message every user sees when they sign in, Group Policy's *Interactive log
 
 ### Email alerts
 
-Set up under **Manage → Settings → Email alerts**. One list of addresses gets everything. Alerts that arrive within a minute of each other come in one email.
+Set up under **Manage → Settings → Alerts → Email**. One list of addresses gets everything. Alerts that arrive within a minute of each other come in one email.
 
 **What to email** (tick any):
 
@@ -1624,11 +1625,11 @@ Times are in Home Assistant's time zone (Settings → System → General) and fo
 
 ### Settings
 
-**Manage → Settings** (admins and editors) changes the add-on's settings from the dashboard: check intervals, notifications, alert limits, agent options, the agent port and who can make changes. They're the same settings as the add-on's **Configuration** tab, grouped into tabs with a search box, and saved to the same place, so the two always agree.
+**Manage → Settings** (admins and editors) changes the add-on's settings from the dashboard: check intervals, notifications, alert limits, agent options, the agent port and who can make changes. They're the same settings as the add-on's **Configuration** tab, saved to the same place, so the two always agree. They're grouped into seven tabs (**Checking**, **Alerts**, **Agents**, **Vulnerabilities and software**, **Device limits**, **AI hints** and **Dashboard and access**), and within each tab into titled sections with a line on what each is for, such as **Agents → Passwords left in files**. The search box looks across every tab.
 
 - **No restart.** Changes take effect as soon as you save. A shorter check interval starts straight away; new limits apply from each device's next check or agent report; turning **Use your own certificate on the agent port** on or off switches the agent port over at once.
 - **Checked as you type.** A value out of range is marked and **Save** waits until it's fixed. If Home Assistant turns a change down, nothing is changed and the reason is shown.
-- **Who can make changes** (`admin_only_changes`, `editors`), **Messages to users' screens** and **Error hints** can only be changed by Home Assistant admins, not by editors.
+- **Who can make changes** (`admin_only_changes`, `editors`), **Messages to users' screens** and **AI hints** can only be changed by Home Assistant admins, not by editors.
 - **The Configuration tab still works.** Settings saved there are picked up within about 10 seconds without a restart, even though Home Assistant offers to restart the add-on.
 - Devices aren't listed here; add and edit them on the dashboard.
 
@@ -1675,7 +1676,7 @@ Amber and red checks with a well-known error show **💡**: on the Overview next
 
 **Built-in hints** cover common codes and messages: finding or signing in to the domain (`0x8007054B`, `0x8007051F`, `0x800706BA`, wrong or expired passwords, locked or disabled accounts, access denied), Group Policy failures, LAPS (no password in AD, overdue rotation), the clock and the PDC emulator, Windows Update and WSUS (`0x80244022`, `0x8024401C`, `0x80073712`, `0x800F081F` and others), certificates, DFS Replication (4012, 2213) and backups (VSS). They're part of Rollcall: free, and nothing leaves your network.
 
-**Hints from AI** are optional and **off by default**. An admin turns them on under **Manage → Settings → Error hints**, chooses who answers, and enters their own API key for it:
+**Hints from AI** are optional and **off by default**. An admin turns them on under **Manage → Settings → AI hints**, chooses who answers, and enters their own API key for it:
 
 | Provider (`ai_provider`) | Key from | Default model |
 |---|---|---|
@@ -1780,6 +1781,7 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `vuln_min_score` | 9 | Vulnerabilities scoring this much or more (CVSS, out of 10) go amber; known-exploited ones are always red |
 | `vuln_linux_source` | local | Linux data: `local` (download each distro's data and match in the add-on; nothing is sent), `online` (send OSV.dev one combined list of package names and versions) or `off` |
 | `agent_secret_scan` | off | Which devices look for passwords left in files by default: `off`, `servers`, `workstations` or `all`. Only where each one is reaches Rollcall, never the password (see [Passwords left in files](#passwords-left-in-files)) |
+| `secret_ignore_folders` | `[]` | Folders whose password-scan findings never count, on every device; `*` for any part of a folder's name, `*\` at the start for any depth |
 | `ip_ranges` | `[]` | Names for parts of your network, shown next to each device's address and in Details, e.g. `Servers=10.0.1.0/24`, `IoT=192.168.20.10-200`, `Workstations=10.0.2.*`. Several ranges can share a name (`Servers=10.0.1.0/24, 10.0.3.0/24`); where they overlap, the smallest wins. The search box matches them too |
 | `name_line` | auto | What the list shows under each name, unless a device has its own choice: `auto`, `model`, `os`, `address` or `none` (see **Line under the name** in the Edit form) |
 | `agent_patch_days` | 60 | Amber if no update installed for this long (0 turns it off) |
@@ -1794,10 +1796,10 @@ Set these under **Manage → Settings** on the dashboard, or in the add-on's **C
 | `agent_watch_services` | `[]` | Extra services to watch on every server |
 | `agent_ignore` | `[]` | Things to ignore on every server; see [Tuning](#tuning) |
 | `agent_auto_add` | true | Add approved servers to the dashboard automatically |
-| `agent_ssl` | false | Serve the agent port over HTTPS with your own certificate, instead of Rollcall's own HTTPS. Not while Rollcall's own HTTPS is on (Manage → Agents); **Settings → Agent port** says which is in use |
+| `agent_ssl` | false | Serve the agent port over HTTPS with your own certificate, instead of Rollcall's own HTTPS. Not while Rollcall's own HTTPS is on (Manage → Agents); **Settings → Agents → Agent port** says which is in use |
 | `agent_certfile` | fullchain.pem | Certificate in Home Assistant's `/ssl` folder |
 | `agent_keyfile` | privkey.pem | Its private key |
-| **Error hints** (admins only) | | |
+| **AI hints** (admins only) | | |
 | `claude_hints` | false | Offer **Ask** (hints from AI) on amber and red checks; see [Hints for errors](#hints-for-errors) |
 | `ai_provider` | anthropic | Who answers: `anthropic` (Claude), `openai` (ChatGPT) or `gemini` |
 | `claude_api_key` | | Anthropic API key; never shown again, only sent to Anthropic |

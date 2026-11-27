@@ -212,6 +212,9 @@ configuration:
   offline:
     name: Offline (no internet)
     description: For a network without the internet. Rollcall downloads nothing (vulnerability lists, the winget catalogue, Jellyfin's latest version) and stops warning that it can't; it uses data imported under Manage, Offline data instead, and says how old it is.
+  secret_ignore_folders:
+    name: "Folders whose password findings don't count"
+    description: "One per line. Anything the password scan finds in these folders, and the folders below them, is listed but never alerts, on every device (for example a folder of daily log files). * stands for any part of a folder's name, and a line starting *\\ can be at any depth: \"*\\Logs\" is every folder called Logs. A single folder can also be ignored on one device with Ignore folder in its details."
   agent_sfc:
     name: System file check (Windows)
     description: Which Windows devices' agents run a weekly read-only system file check (sfc /verifyonly), which never repairs anything. It takes 10 to 30 minutes of CPU and disk, in the background. Each device can be turned on or off, or run now, in its details.

@@ -258,6 +258,7 @@ DEFAULTS = {
     "vuln_linux_source": "local",
     "vuln_skip_os": [],
     "vuln_third_party": True,
+    "secret_ignore_folders": [],
     "vuln_software_extra": [],
     "wordpress_checks": True,
     "wordfence_api_key": "",
@@ -2694,6 +2695,10 @@ class Monitor:
                 for h in list(self.hosts.values()):
                     if h.agent_id and h.agent_report:
                         asyncio.create_task(self.reevaluate(h))
+        if "secret_ignore_folders" in changed:
+            for h in list(self.hosts.values()):  # whether each device's password findings count
+                if h.agent_id and h.agent_report:
+                    asyncio.create_task(self.reevaluate(h))
         if "vuln_skip_os" in changed and not ({"vuln_checks", "vuln_min_score", "vuln_linux_source"} & changed.keys()):
             for h in list(self.hosts.values()):  # only whether each one alerts changes: judge them again
                 if h.agent_id and h.agent_report:
@@ -6066,7 +6071,8 @@ class Monitor:
                            "rules": agentlib.SECRET_RULES, "config": {"mode": hsc.get("mode") or "default", "paths": hsc.get("paths") or [],
                                                                       "hours": hsc.get("hours") or 24},
                            "on": self.secret_scan_config({**ag, "host_key": h.key})["on"],
-                           "default": str(self.opts.get("agent_secret_scan", "off")), "linux": ag.get("os_family") == "linux"}
+                           "default": str(self.opts.get("agent_secret_scan", "off")), "linux": ag.get("os_family") == "linux",
+                           "settings_folders": [e[7:] for e in agentlib.folder_entries(self.opts.get("secret_ignore_folders"))]}
         if not include_security:
             r.pop("security", None)
             r.pop("sessions", None)
@@ -6472,7 +6478,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         return web.json_response({"ok": True})
 
     async def hints_test(req):
-        """Settings → Error hints → Test: one tiny question to the chosen provider, to check its key and model."""
+        """Settings → AI hints → Test: one tiny question to the chosen provider, to check its key and model."""
         prov, key, model = monitor.ai_settings()
         p = hintlib.PROVIDERS[prov]
         if not key:
@@ -6506,7 +6512,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if body.get("preview"):
             return web.json_response(base)
         if not monitor.claude_on():
-            return web.json_response({**base, "error": "Hints from AI are off. An admin can turn them on under Settings → Error hints."}, status=409)
+            return web.json_response({**base, "error": "Hints from AI are off. An admin can turn them on under Settings → AI hints."}, status=409)
         user = await access.who(req)
         prov, key, model = monitor.ai_settings()
         name = hintlib.PROVIDERS[prov]["name"]
@@ -6613,6 +6619,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
                 notify = sorted(s for s in (d.get("services") or {}) if s not in ("send_message", "persistent_notification"))
         return web.json_response({
             "groups": [{"key": k, "label": v} for k, v in settingslib.GROUPS],
+            "sections": settingslib.sections(),
             "fields": settingslib.fields(),
             "values": settingslib.values(monitor.opts),
             "can_admin": await access.is_admin(req),
@@ -7216,7 +7223,7 @@ def build_app(monitor: Monitor, access: Access, live: "LiveSettings | None" = No
         if not listener:
             return web.json_response({"error": "The agent port isn't running (see the log)"}, status=503)
         if monitor.opts.get("agent_ssl"):
-            return web.json_response({"error": "The agent port already uses HTTPS with your own certificate (Settings → Agent port)"}, status=400)
+            return web.json_response({"error": "The agent port already uses HTTPS with your own certificate (Settings → Agents → Agent port)"}, status=400)
         try:
             if "https" in body:
                 on = body["https"] is True

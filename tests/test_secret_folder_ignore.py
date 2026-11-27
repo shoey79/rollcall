@@ -41,3 +41,23 @@ def test_file_ignores_still_work_and_linux_paths():
     ign = a.Ignore(["secret:" + a.secret_key(one), "secret:/opt/app/logs/*"])
     assert ign.secret(one) and not ign.secret(f(r"D:\Scripts\other.ps1"))
     assert ign.secret(f("/opt/app/logs/2026/11/27.txt")) and not ign.secret(f("/opt/app/config.yml"))
+
+
+def test_settings_folders_with_wildcards():
+    """Folders typed in Settings (secret_ignore_folders) apply on every device; * is any part of a folder's name, and a
+    leading *\\ is any depth."""
+    e = a.folder_entries(["D:\\Logs", "*\\AppLogs", "/var/log/app", "D:\\Apps\\*\\Logs\\*", " ", "bad|entry"])
+    assert e == ["secret:D:\\Logs\\*", "secret:*\\AppLogs\\*", "secret:/var/log/app/*", "secret:D:\\Apps\\*\\Logs\\*"]
+    ign = a.Ignore(e)
+    assert ign.secret(f(r"D:\Logs\x.txt")) and ign.secret(f(r"C:\Data\AppLogs\2026\x.txt")) and ign.secret(f(r"E:\AppLogs\y.txt"))
+    assert ign.secret(f(r"D:\Apps\Shop\Logs\today.txt")) and not ign.secret(f(r"D:\Apps\Shop\Data\Logs\x.txt"))
+    assert ign.secret(f("/var/log/app/a/b.txt")) and not ign.secret(f(r"C:\Data\MyAppLogs\x.txt"))
+
+
+def test_settings_folders_reach_the_check():
+    report = {"os_family": "windows", "secrets": {"on": True, "done_at": "2026-11-27T09:00:00Z", "files": 50, "count": 2, "hash": "x"}}
+    found = [f(r"D:\AppLogs\Daily\2026-11-27.txt"), f(r"D:\Scripts\deploy.ps1")]
+    chk = lambda opts: next(c for c in a.evaluate(report, opts, settings={"secret_findings": found})["checks"] if c["key"] == "secrets")  # noqa: E731
+    assert "2 possible passwords" in chk({})["detail"]
+    c = chk({"secret_ignore_folders": ["*\\AppLogs"]})
+    assert c["level"] == a.WARN and c["detail"].startswith("1 possible password") and "deploy.ps1" in c["detail"]

@@ -544,7 +544,7 @@ class Ignore:
         if self.has("secret", secret_key(f)):
             return True
         path = str(f.get("path") or "").lower().replace("\\", "/")
-        return any(path.startswith(v[:-1].replace("\\", "/")) for v in self.items.get("secret", ()) if folder_ignore(v))
+        return any(folder_rx(v).match(path) for v in self.items.get("secret", ()) if folder_ignore(v))
 
 
 # --------------------------------------------------------------------------
@@ -777,6 +777,30 @@ def clean_secret_status(s) -> dict:
 def folder_ignore(value: str) -> bool:
     """A password-scan ignore entry for a whole folder: its path ending in \\* or /* (one for a file has | in it)."""
     return "|" not in value and (value.endswith("\\*") or value.endswith("/*")) and len(value) > 2
+
+
+def folder_rx(pattern: str) -> "re.Pattern":
+    """A folder ignore as a pattern for file paths (lower case, / separators): "D:\\Logs\\*" is that folder and everything
+    below it; * stands for any part of one folder's name; one that starts with "*\\" can be at any depth, so "*\\Logs\\*"
+    is every folder called Logs, on any drive."""
+    p = str(pattern).strip().lower().replace("\\", "/")
+    p = p[:-2] if p.endswith("/*") else p.rstrip("/")
+    anywhere = p.startswith("*/")
+    if anywhere:
+        p = p[2:]
+    body = re.escape(p).replace(r"\*", "[^/]*")
+    return re.compile(("(?:^|.*/)" if anywhere else "^") + body + "/")
+
+
+def folder_entries(lines) -> list[str]:
+    """The folders typed in Settings (secret_ignore_folders) as ignore entries for every device."""
+    out = []
+    for line in lines or []:
+        v = str(line).strip()
+        if len(v) < 2 or "|" in v:
+            continue
+        out.append("secret:" + (v if v.endswith(("\\*", "/*")) else v.rstrip("\\/") + ("/*" if "/" in v and "\\" not in v else "\\*")))
+    return out
 
 
 def secret_folder(path: str) -> str:
@@ -1946,7 +1970,7 @@ def evaluate(report: dict, opts: dict, now: float | None = None, settings: dict 
     """
     now = now or _now()
     settings = settings or {}
-    ign = Ignore(list(opts.get("agent_ignore") or []) + list(settings.get("ignore") or []))
+    ign = Ignore(list(opts.get("agent_ignore") or []) + list(settings.get("ignore") or []) + folder_entries(opts.get("secret_ignore_folders")))
     checks = []
 
     # Disk space: each volume against its own thresholds (dashboard override or default).

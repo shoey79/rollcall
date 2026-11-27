@@ -96,6 +96,7 @@ options:
   wordpress_checks: true
   wordfence_api_key: ""
   agent_secret_scan: "off"
+  secret_ignore_folders: []
   agent_sfc: "off"
   agent_sfc_day: sunday
   agent_sfc_hour: 3
@@ -210,6 +211,8 @@ schema:
   wordpress_checks: bool
   wordfence_api_key: password?
   agent_secret_scan: list(off|servers|workstations|all)
+  secret_ignore_folders:
+    - str
   agent_sfc: list(off|servers|workstations|all)
   agent_sfc_day: list(monday|tuesday|wednesday|thursday|friday|saturday|sunday)
   agent_sfc_hour: int(0,23)

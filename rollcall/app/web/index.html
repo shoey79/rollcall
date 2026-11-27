@@ -227,6 +227,10 @@ p.asked{margin:0 0 10px;padding:8px 10px;border-radius:6px;background:color-mix(
 
 .lgrow+.lgrow{border-top:1px dashed var(--line)}
 .lgrow.dim{opacity:.55}
+.st-sec{border:1px solid var(--line);border-radius:10px;padding:12px 14px 4px;margin:0 0 14px}
+.st-sec h4{margin:0;font-size:14px}
+.st-sec .st-intro{margin:2px 0 4px;color:var(--muted);font-size:12.5px}
+.st-sec .st-grid{margin:10px 0}
 .st-sub{grid-column:1/-1;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .st-f{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:600;color:var(--text)}
 .st-f small{font-weight:400;color:var(--muted);line-height:1.4}
@@ -2242,8 +2246,8 @@ const stSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function stChanged() { return ST.meta ? ST.meta.fields.filter(f => !stSame(ST.vals[f.key], ST.orig[f.key])).map(f => f.key) : []; }
 const ST_ADMIN_KEYS = ["messages", "claude_hints", "ai_provider", "claude_api_key", "claude_model", "openai_api_key", "openai_model",
   "gemini_api_key", "gemini_model", "claude_hints_per_day"];  // as settingslib.ACCESS_KEYS
-function stLocked(f) { return ((f.group === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin)
-  || (f.group === "agent_port" && !!(ST.meta.agent_tls || {}).builtin); }  // not used while Rollcall's own HTTPS is on
+function stLocked(f) { return ((f.section === "access" || ST_ADMIN_KEYS.includes(f.key)) && !ST.meta.can_admin)
+  || (f.section === "port" && !!(ST.meta.agent_tls || {}).builtin); }  // not used while Rollcall's own HTTPS is on
 function stCheck(f, v) {
   if (f.type === "int" && (typeof v !== "number" || v < f.min || v > f.max)) return `Must be a whole number from ${f.min} to ${f.max}`;
   if (f.type === "ints" && v.some(x => typeof x !== "number" || x < f.min || x > f.max)) return `Each must be a whole number from ${f.min} to ${f.max}`;
@@ -2251,7 +2255,7 @@ function stCheck(f, v) {
 }
 function stField(f) {
   const v = ST.vals[f.key], id = "st_" + f.key, dis = stLocked(f) ? " disabled" : "";
-  const tick = f.type === "bool" && f.group === "email" && f.key.startsWith("email_");   // the email choices: two to a row
+  const tick = f.type === "bool" && f.section === "email" && f.key.startsWith("email_");   // the email choices: two to a row
   const cls = ["st-f", f.type === "bool" ? "bool" : "", (LIST_TYPES.includes(f.type) || (f.type === "bool" && !tick)) ? "wide" : "",
     stSame(v, ST.orig[f.key]) ? "" : "changed", ST.errors[f.key] ? "bad" : ""].filter(Boolean).join(" ");
   const err = ST.errors[f.key] ? `<small class="st-err">${esc(ST.errors[f.key])}</small>` : "";
@@ -2286,11 +2290,11 @@ function stShown(f) {
   if (f.key.startsWith("smtp_")) return mode === "smtp";
   if (f.key.startsWith("m365_")) return mode === "microsoft365";
   if (f.key === "email_digest_time") return mode !== "off" && !!ST.vals.email_digest;
-  if (f.group === "email" && f.key !== "email_send") return mode !== "off";
+  if (f.section === "email" && f.key !== "email_send") return mode !== "off";
   return true;
 }
 const ST_EMAIL_HEADS = {email_red: "What to email", email_about_devices: "Email about", smtp_host: "Mail server", m365_tenant_id: "Microsoft 365"};
-function stNote(group) {
+function stNote(group) {  // a section's own note, under its heading
   if (group === "email") {
     const mode = ST.vals.email_send;
     const how = mode === "microsoft365" ? `<p class="st-note"><b>Microsoft 365 set-up:</b> in Microsoft Entra ID, register an app, add the Microsoft Graph <b>Mail.Send</b> <i>application</i> permission and grant admin consent, then create a client secret. Fill in the tenant ID, the app's client ID and the secret below, and put the mailbox it sends as under <b>Send email from</b>. To stop it sending as any mailbox, limit it with an Exchange application access policy (or RBAC for Applications) to that one mailbox.</p>`
@@ -2302,7 +2306,7 @@ function stNote(group) {
   if (group === "hints") return `<p class="st-note">Every amber or red check with a well-known error code shows 💡 <b>What this usually means</b>, from a table built into Rollcall: free, and nothing leaves your network.</p>` +
     `<p class="st-note"><b>Hints from AI</b> are optional and off unless turned on here. They add an <b>Ask</b> button for errors the table doesn't cover, answered by the provider you choose: <b>Claude</b> (Anthropic), <b>ChatGPT</b> (OpenAI) or <b>Gemini</b> (Google), with your own API key for it. Only the check and its error are sent, with computer, account and domain names and addresses replaced by stand-ins (each hint shows exactly what was sent). Security events, account lists and anything from password scanning are never sent. It only asks when someone clicks, and the same error is only asked about once.</p>` +
     (ST.meta.can_admin ? `<p class="st-note"><button type="button" class="mini" id="aiTest">Test the saved key and model</button> <span id="aiTestOut" class="muted"></span></p>` : `<p class="st-note">Only Home Assistant administrators can change these.</p>`);
-  if (group === "agent_port") {
+  if (group === "port") {
     const t = ST.meta.agent_tls || {};
     if (t.builtin) return `<p class="st-note">Agents use <b>Rollcall's own HTTPS</b> on port ${esc(t.port)}, set under <b>Manage → Agents</b>. ` +
       (t.plain_http ? `Plain HTTP on port ${esc(t.http_port)} is still on for agents that haven't moved yet.` : `Plain HTTP on port ${esc(t.http_port)} is off.`) +
@@ -2310,7 +2314,7 @@ function stNote(group) {
     if (ST.meta.agent_port === "HTTPS") return `<p class="st-note">The agent port (${esc(t.http_port || "")}) uses <b>HTTPS with your own certificate</b>, below. Agents keep using the address they were installed with, so their addresses under <b>Agents</b> should start <code>https://</code>.</p>`;
     return `<p class="st-note">The agent port (${esc(t.http_port || "")}) uses plain <b>HTTP</b>. For HTTPS, the simplest is <b>Rollcall's own HTTPS</b> under <b>Manage → Agents</b>: nothing to set up, and agents move over by themselves. Or tick below to use your own certificate on this port instead; agents keep the address they were installed with, so update their addresses under <b>Agents</b> to <code>https://</code>.</p>`;
   }
-  if (group === "checks") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each device's next check or agent report.</p>`;
+  if (group === "timing") return `<p class="st-note">A shorter interval starts straight away. Limits elsewhere apply from each device's next check or agent report.</p>`;
   return "";
 }
 function stRenderTabs() {
@@ -2337,8 +2341,14 @@ function stRender() {
       return fs.length ? `<div class="st-gt">${esc(g.label)}</div><div class="st-grid">${fs.map(stField).join("")}</div>` : "";
     }).join("") || `<p class="hint">No setting matches "${esc(ST.q)}".</p>`;
   } else {
-    const heads = ST.tab === "email" ? ST_EMAIL_HEADS : {};
-    html = stNote(ST.tab) + `<div class="st-grid">${ST.meta.fields.filter(f => f.group === ST.tab && stShown(f)).map(f => (heads[f.key] ? `<div class="st-sub">${heads[f.key]}</div>` : "") + stField(f)).join("")}</div>`;
+    // Each section: its heading and what it's for, its own note, then its settings
+    html = (ST.meta.sections || []).filter(sc => sc.tab === ST.tab).map(sc => {
+      const fs = ST.meta.fields.filter(f => f.section === sc.key);
+      if (!fs.length) return "";
+      const heads = sc.key === "email" ? ST_EMAIL_HEADS : {};
+      return `<section class="st-sec"><h4>${esc(sc.title)}</h4><p class="st-intro">${esc(sc.intro)}</p>${stNote(sc.key)}
+        <div class="st-grid">${fs.filter(stShown).map(f => (heads[f.key] ? `<div class="st-sub">${heads[f.key]}</div>` : "") + stField(f)).join("")}</div></section>`;
+    }).join("");
   }
   html += `<datalist id="stSslFiles">${(ST.meta.ssl_files || []).map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
   const body = document.getElementById("stBody"), focus = document.activeElement && document.activeElement.id, top = body.scrollTop;
@@ -2443,7 +2453,7 @@ document.getElementById("stBody").addEventListener("click", async e => {
   if (tb) {
     const note = document.getElementById("stEmailTestNote");
     tb.disabled = true; note.className = "hint"; note.textContent = "Sending…";
-    const values = Object.fromEntries(ST.meta.fields.filter(f => f.group === "email").map(f => [f.key, ST.vals[f.key]]));
+    const values = Object.fromEntries(ST.meta.fields.filter(f => f.section === "email").map(f => [f.key, ST.vals[f.key]]));
     try {
       const r = await fetch("api/email/test", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({values})});
       const j = await r.json().catch(() => ({}));
@@ -2835,6 +2845,9 @@ function renderDetails(d) {
     const k = i > 0 ? e.slice(0, i).toLowerCase() : "service"; return kinds.includes(k) ? [k, e.slice(i + 1)] : ["service", e]; };
   // A password-scan folder ignore ("D:\\Logs\\*") covers every file in that folder and below it
   const isFolderIgn = v => !v.includes("|") && /[\\/]\*$/.test(v) && v.length > 2;
+  const folderRx = v => { let p = String(v).trim().toLowerCase().replace(/\\/g, "/"); p = p.endsWith("/*") ? p.slice(0, -2) : p.replace(/\/+$/, "");
+    const any = p.startsWith("*/"); if (any) p = p.slice(2);
+    return new RegExp((any ? "(?:^|.*/)" : "^") + p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*") + "/"); };
   const slash = v => String(v).toLowerCase().replace(/\\/g, "/");
   const findIgnore = (kind, v) => {
     for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
@@ -2843,14 +2856,16 @@ function renderDetails(d) {
     if (kind === "secret") {
       const path = slash(String(v).split("|")[0]);
       for (const [list, scope] of [[st.ignore, "host"], [st.global_ignore, "all"], [st.config_ignore, "config"]]) {
-        for (const e of list || []) { const [k, val] = parse(e); if (k === "secret" && isFolderIgn(val) && path.startsWith(slash(val.slice(0, -1)))) return {scope, entry: e, folder: true}; }
+        for (const e of list || []) { const [k, val] = parse(e); if (k === "secret" && isFolderIgn(val) && folderRx(val).test(path)) return {scope, entry: e, folder: true}; }
       }
+      for (const val of (d.secrets && d.secrets.settings_folders) || []) if (folderRx(val).test(path)) return {scope: "settings", entry: val, folder: true};
     }
     return null;
   };
   const secretFolder = p => { const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/")); return i > 0 ? p.slice(0, i + 1) + "*" : ""; };
   const ignBtn = (kind, v, label) => {
     const hit = findIgnore(kind, v);
+    if (hit && hit.scope === "settings") return `<span class="ignored" title="In Settings (Agents, Passwords left in files): ${esc(hit.entry)}">Ignored (Settings)</span>`;
     if (hit) return `<span class="ignored" title="${hit.scope === "config" ? "Ignored in the add-on's Configuration tab" : "Ignored " + (hit.folder ? "with its folder " : "") + (hit.scope === "all" ? "on all servers" : "on this server")}">Ignored${hit.folder ? " (folder)" : ""}${hit.scope === "all" ? " (all)" : hit.scope === "config" ? " (config)" : ""}</span>`;
     return `<button type="button" class="mini edit-only" data-ign-kind="${esc(kind)}" data-ign-value="${esc(v)}" title="Stop alerting about ${esc(label || v)} on this server">Ignore</button>`;
   };
@@ -3487,7 +3502,7 @@ ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [NT AUTHORITY\\SYSTEM];   -- SQL Agen
     const errs = Object.entries(dat.errors || {});
     html += `<p class="hint">Found from IIS's sites and read from their files: <code>wp-config.php</code> and the database are never opened, so every plugin present is listed, switched on or not (one that's switched off can often still be reached from the web). Looked for hourly.
       ${wp.offline ? "📴 Offline: updates and vulnerabilities aren't checked." : `Updates from wordpress.org (asked only about the plugin and theme names, daily)${dat.core_latest ? `; the newest WordPress is ${esc(dat.core_latest)}` : ""}.`}
-      ${wp.wordfence ? `Known vulnerabilities from Wordfence Intelligence${dat.wf_at ? ` (${(dat.wf_entries || 0).toLocaleString()} entries, updated daily)` : " (downloading)"}; they're also on the Vulnerabilities tab.` : `Set a free Wordfence API key in Settings (Agents) to check for known vulnerabilities too.`}
+      ${wp.wordfence ? `Known vulnerabilities from Wordfence Intelligence${dat.wf_at ? ` (${(dat.wf_entries || 0).toLocaleString()} entries, updated daily)` : " (downloading)"}; they're also on the Vulnerabilities tab.` : `Set a free Wordfence API key in Settings (Vulnerabilities and software, WordPress) to check for known vulnerabilities too.`}
       ${errs.length ? ` ⚠ Couldn't update: ${errs.map(([k, v]) => `${esc(k)} (${esc(v)})`).join(", ")}.` : ""}</p>`;
   }
   flush("software");
@@ -5612,7 +5627,7 @@ async function plainOff(confirmText) {
 function tlsHtml(t) {
   const admin = data && data.can_admin;
   let body;
-  if (t.own_cert) body = `<p>The agent port uses HTTPS with your own certificate (<b>Manage → Settings → Agent port</b>).</p>`;
+  if (t.own_cert) body = `<p>The agent port uses HTTPS with your own certificate (<b>Manage → Settings → Agents → Agent port</b>).</p>`;
   else if (!t.on) body = `<p><b>Agents report over plain HTTP</b>, so anyone on the network path could read their reports. Turn on HTTPS and Rollcall makes its own certificate: agents move across at their next report and only trust Rollcall's own key, so nothing can stand in for it. Nothing to buy or install, and plain HTTP stays on until you turn it off.</p>
       ${admin ? `<button type="button" class="primary" data-tls="on">Turn on HTTPS</button>` : `<p class="hint">Only Home Assistant admins can turn it on.</p>`}`;
   else {
