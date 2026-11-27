@@ -1290,8 +1290,16 @@ async def ping(ip: str, count: int, timeout: int, ports: list[int] | None = None
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=count * (timeout + 1) + 5)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        # No answer in time (often a name that's slow to look up while the computer is off). It may have finished just
+        # as the time ran out, and then there's nothing left to stop.
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), 5)
+        except asyncio.TimeoutError:
+            pass
         return False, None
     ok = proc.returncode == 0
     match = RTT_RE.search(out.decode(errors="replace"))
