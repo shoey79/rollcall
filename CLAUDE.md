@@ -39,6 +39,10 @@ Remove each line once it's released.
   Keep it one tab (owner's words), with its own headings: Operating system (Windows build or distro packages; one line per CVE, with the fixing KB/build),
   Programs (grouped by program: name, installed, fixed in, CVE count, worst score, exploited; expand for the CVEs) and
   WordPress (by site). Each section has its own end-of-life/not-alerted state (goes with the exclusion fix above).
+- Ignored services across versions (owner asked 27 Nov): services named with their version (GoogleUpdaterService159.0.8140.0,
+  GoogleUpdaterInternalService...) come back as a new name after each update, so Ignore never sticks. Service ignores to
+  accept * wildcards (service:GoogleUpdater*), and Ignore on a service whose name ends in a version offers "all versions"
+  (stores the name without the version plus *). Show matches as Ignored (all versions). Same for agent_ignore entries.
 
 ## Requested features (not started)
 
