@@ -32,7 +32,10 @@ Remove each line once it's released.
 
 ## Requested features (not started)
 
-(none)
+- WordPress on Linux (owner asked 27 Nov): the Linux agent finds WordPress installs (Apache/nginx site configs, /var/www,
+  up to two folders down) and sends the same shape as the Windows agent (wordpress.py, WordPress tab and Wordfence already
+  OS-agnostic). Files only: version.php and plugin/theme headers, never wp-config.php or the database. Docker-hosted
+  WordPress (files in container volumes) as a later step. Leave on the list until asked.
 
 ## Built, waiting for release
 
@@ -41,8 +44,4 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-- Overview hint jump and System files Run now feedback (owner reported 26 Nov): queued fixes, built.
-- WordPress (owner asked 26 Nov): Windows agent 1.0.61 finds installs from IIS vdirs, reads version.php and plugin/theme
-  headers only; WordPress tab, check (updates, closed plugins), wordpress.org per slug, Wordfence feed with optional key.
-- Third-party software vulnerabilities (owner asked 26 Nov; chose the curated list): thirdparty.py CATALOG of ~50
-  programs mapped to NVD CPEs, plus vuln_software_extra lines; NVD CVE API per product, daily incremental.
+(none)
