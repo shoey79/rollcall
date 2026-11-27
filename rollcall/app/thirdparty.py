@@ -155,19 +155,46 @@ def installed_version(app: dict, from_name) -> str:
     return m.group(1) if m else ""
 
 
+# Programs with one copy per machine whose own file tells the real version (from Windows agent 1.0.62): an
+# "Apps & features" entry can be stale (Chrome's business installer keeps the version it first installed) or left
+# over (a per-user copy deleted without uninstalling), and the file is what's really there.
+OWN_FILE = {"Google Chrome": r"chrome\.exe", "Microsoft Edge": r"msedge\.exe", "Mozilla Firefox": r"firefox\.exe",
+            "Mozilla Firefox ESR": r"firefox\.exe", "Mozilla Thunderbird": r"thunderbird\.exe", "7-Zip": r"7zfm\.exe",
+            "Notepad++": r"notepad\+\+\.exe", "VLC media player": r"vlc\.exe"}
+_OWN_FILE = {k: re.compile(r"(?:^|\\)" + v + "$", re.I) for k, v in OWN_FILE.items()}
+
+
+def _vkey(v: str) -> list:
+    return [int(x) for x in re.findall(r"\d+", v)[:4]]
+
+
 def matches(apps: list[dict], extra: list | None = None) -> list[tuple]:
-    """(index into the software list, label, NVD products, version) for each program on the list."""
+    """(index into the software list, label, NVD products, version) for each program on the list.
+
+    Entries whose program file has gone (the agent says so) are left out. For the one-copy programs above, the
+    version is the file's own where the agent read it; from older agents, which don't, a user's entry older than
+    the machine's copy of the same program is taken to be a leftover too."""
     out = []
     entries = _COMPILED + list(extra or [])
     for i, a in enumerate(apps or []):
         name = str(a.get("name") or "")
         for label, rx, cpes, vn in entries:
             if rx.search(name):
+                if a.get("gone"):
+                    break
                 v = installed_version(a, vn)
+                own = _OWN_FILE.get(label)
+                if own and a.get("file_ver") and own.search(str(a.get("file") or "")):
+                    v = installed_version({"version": a["file_ver"]}, None) or v
                 if v:
                     out.append((i, label, cpes, v))
                 break
-    return out
+    machine: dict = {}
+    for i, label, _c, v in out:
+        if label in _OWN_FILE and (apps[i].get("scope") or "machine") == "machine":
+            machine[label] = max(machine.get(label, []), _vkey(v))
+    return [m for m in out if not (m[1] in machine and apps[m[0]].get("scope") == "user" and "file_ver" not in apps[m[0]]
+                                   and _vkey(m[3]) < machine[m[1]])]
 
 
 # -- the NVD's answers ------------------------------------------------------------------------------------

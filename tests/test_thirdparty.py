@@ -200,3 +200,26 @@ def test_end_of_life_quietens_the_os_not_its_programs(tmp_path, monkeypatch):
     m_.opts["vuln_skip_os"] = []
     aio.run(m_.set_vuln_skip(h, True, "admin", programs=True))                     # the device on its own, programs too
     assert m_.vuln_check(h)["level"] == main.agentlib.OK and m_.vulns_view(h)["programs_excluded_here"]
+
+
+def test_leftover_and_stale_entries():
+    """An entry whose program has gone isn't checked; the program file's own version wins for one-copy programs;
+    from older agents, a user's entry older than the machine's copy is taken to be a leftover."""
+    chrome = lambda **k: {"name": "Google Chrome", "version": k.pop("version", "120.0.6099.71"), **k}  # noqa: E731
+    lab = lambda apps: [(i, v) for i, label, _c, v in tp.matches(apps) if label == "Google Chrome"]  # noqa: E731
+    # Agent 1.0.62: a per-user entry whose chrome.exe has gone; the machine's copy read from its file
+    apps = [chrome(scope="user", user="user1", file=r"C:\Users\user1\AppData\Local\Google\Chrome\Application\chrome.exe", gone=True),
+            chrome(scope="machine", file=r"C:\Program Files\Google\Chrome\Application\chrome.exe", file_ver="158.0.8127.89")]
+    assert lab(apps) == [(1, "158.0.8127.89")]
+    # The business installer's stale entry: the file says otherwise
+    assert lab([chrome(scope="machine", version="68.94.77", file=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                       file_ver="158.0.8127.89")]) == [(0, "158.0.8127.89")]
+    # A file that isn't the program's own (an uninstaller as the icon) doesn't override
+    assert lab([chrome(scope="machine", file=r"C:\x\uninstall.exe", file_ver="1.0")]) == [(0, "120.0.6099.71")]
+    # Older agents: the user's 120 next to the machine's 158 is dropped; on its own it still counts
+    old = [chrome(scope="user"), chrome(scope="machine", version="158.0.8127.89")]
+    assert lab(old) == [(1, "158.0.8127.89")]
+    assert lab([chrome(scope="user")]) == [(0, "120.0.6099.71")]
+    # Programs that can sit side by side keep each copy
+    py = [{"name": "Python 3.8.10 (64-bit)", "version": "3.8.10", "scope": "user"}, {"name": "Python 3.12.1 (64-bit)", "version": "3.12.1", "scope": "machine"}]
+    assert len(tp.matches(py)) == 2

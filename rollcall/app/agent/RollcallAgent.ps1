@@ -68,7 +68,7 @@ param(
     [string]$SecretTest = ''
 )
 
-$AgentVersion = '1.0.61'
+$AgentVersion = '1.0.62'
 # The public half of Rollcall's own signing key, built in when the script is downloaded. Agent updates and the
 # addresses Rollcall tells this agent to use must be signed with it. Not a parameter: it can't be swapped at run time.
 $UpdateKey = '__PM_UPDATE_KEY__'
@@ -999,7 +999,10 @@ function Get-InstalledApps {
     if ([Environment]::Is64BitOperatingSystem) { $sources.Add(@{ path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; arch = 'x86'; scope = 'machine' }) }
     try {
         foreach ($u in @(Get-ChildItem -Path 'Registry::HKEY_USERS' -ErrorAction Stop | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' })) {
-            $sources.Add(@{ path = "Registry::HKEY_USERS\$($u.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"; arch = ''; scope = 'user' })
+            # Whose list it is: the profile's folder name (Programs and Features only shows the signed-in user's own)
+            $who = ''
+            try { $who = Split-Path -Leaf ([string](Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($u.PSChildName)" -ErrorAction Stop).ProfileImagePath) } catch { }
+            $sources.Add(@{ path = "Registry::HKEY_USERS\$($u.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"; arch = ''; scope = 'user'; who = $who })
         }
     } catch { }
     $seen = @{}
@@ -1016,11 +1019,31 @@ function Get-InstalledApps {
             if ([string]$k.InstallDate -match '^(\d{4})(\d\d)(\d\d)$') { $date = '{0}-{1}-{2}' -f $Matches[1], $Matches[2], $Matches[3] }
             $size = 0
             try { if ($k.EstimatedSize) { $size = [math]::Round([double]$k.EstimatedSize / 1024, 1) } } catch { }
-            $out.Add([ordered]@{
+            $app = [ordered]@{
                 name = Limit-Text $name 150; version = Limit-Text $ver 60; publisher = Limit-Text ([string]$k.Publisher).Trim() 100
                 installed = $date; size_mb = $size; arch = $src.arch; scope = $src.scope
                 code = Limit-Text ([string]$k.PSChildName) 100  # the Uninstall key name: an MSI product code, or what winget matches on
-            })
+            }
+            if ($src.who) { $app.user = Limit-Text $src.who 60 }
+            # The program's own file (its icon), so a stale or left-over entry can be told apart from what's really
+            # there: Chrome's business installer keeps the version first installed, and an entry can outlive its
+            # program (a per-user copy deleted without uninstalling). The file's version is the real one.
+            try {
+                $icon = (([string]$k.DisplayIcon).Trim().Trim('"') -replace '"?,\s*-?\d+$', '').Trim('"')
+                $exe = [Environment]::ExpandEnvironmentVariables($icon)
+                $loc = [Environment]::ExpandEnvironmentVariables(([string]$k.InstallLocation).Trim().Trim('"'))
+                if ($exe -match '^[A-Za-z]:\\.+\.exe$') {
+                    $app.file = Limit-Text $exe 260
+                    if (Test-Path -LiteralPath $exe -PathType Leaf) {
+                        $fv = (Get-Item -LiteralPath $exe -ErrorAction Stop).VersionInfo
+                        $v2 = ([string]$(if ($fv.ProductVersion) { $fv.ProductVersion } else { $fv.FileVersion })).Trim()
+                        if ($v2) { $app.file_ver = Limit-Text $v2 60 }
+                    } else { $app.gone = $true }
+                } elseif ($loc -match '^[A-Za-z]:\\' -and -not (Test-Path -LiteralPath $loc)) {
+                    $app.file = Limit-Text $loc 260; $app.gone = $true
+                }
+            } catch { }
+            $out.Add($app)
             if ($out.Count -ge 2000) { break }
         }
     }
@@ -1029,7 +1052,7 @@ function Get-InstalledApps {
 
 function Get-AppsHash($Apps) {
     # A fingerprint of the list, so it's only sent when something changes
-    $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope, $_.code }) -join "`n")
+    $text = (@($Apps | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}' -f $_.name, $_.version, $_.publisher, $_.arch, $_.scope, $_.code, $_.file_ver, $_.gone }) -join "`n")
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))) -replace '-', '').Substring(0, 32).ToLower() } finally { $sha.Dispose() }
 }

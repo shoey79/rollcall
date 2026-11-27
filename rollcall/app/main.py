@@ -4302,7 +4302,13 @@ class Monitor:
                           "arch": str(a.get("arch") or "")[:12], "scope": "user" if a.get("scope") == "user" else "machine",
                           **({"code": str(a["code"])[:100]} if a.get("code") else {}),
                           **({"src": str(a["src"])[:150], "srcver": str(a.get("srcver") or "")[:60]} if a.get("src") else {}),
-                          **({"available": str(a["available"])[:60]} if a.get("available") else {})})
+                          **({"available": str(a["available"])[:60]} if a.get("available") else {}),
+                          # Windows agent 1.0.62: whose per-user list it's in, and the program's own file (its real
+                          # version, or gone: an entry left behind when the program was removed)
+                          **({"user": str(a["user"])[:60]} if a.get("user") else {}),
+                          **({"file": str(a["file"])[:260]} if a.get("file") else {}),
+                          **({"file_ver": str(a["file_ver"])[:60]} if a.get("file_ver") else {}),
+                          **({"gone": True} if a.get("gone") is True else {})})
             if len(clean) >= 5000:
                 break
         old = self.software(agent["id"])
@@ -4495,7 +4501,15 @@ class Monitor:
         key = (self._tp[h.agent_id][0], self.tpdata.version, len(self.vulnfeeds.kev), self.vulnfeeds.version)
         hit = self._tpf.get(h.agent_id)
         if not hit or hit[0] != key:  # worked out again only when its programs or the data change
-            hit = (key, tplib.findings(m, self.tpdata, self.vulnfeeds.kev))
+            apps = self.software(h.agent_id).get("apps") or []
+            found = tplib.findings(m, self.tpdata, self.vulnfeeds.kev)
+            for f in found:  # whose copy it is, and where: a per-user copy isn't in Programs and Features for others
+                a = apps[f["app"]] if f.get("app") is not None and f["app"] < len(apps) else {}
+                if a.get("scope") == "user":
+                    f["user"] = a.get("user") or "a user"
+                if a.get("file"):
+                    f["file"] = a["file"]
+            hit = (key, found)
             self._tpf[h.agent_id] = hit
         return hit[1]
 

@@ -874,6 +874,9 @@ The installer isn't code-signed, so Windows SmartScreen may say "Windows protect
 
 **Installed software:** the **Software** tab in Details lists every installed program with its version, publisher, install date and size, plus a filter box. **Recent changes** shows what was installed, removed, updated or downgraded in the last 30 days (the add-on keeps 180 days).
 - On Windows the list matches **Apps & features**: the machine's Uninstall entries (64- and 32-bit) and those of signed-in users. Windows updates and hidden system components are left out. It doesn't use `Win32_Product`, which is slow and can make MSI packages repair themselves.
+  - A signed-in user's own programs show that user's profile name under **For**. Programs and Features only shows your own, so a copy in someone else's profile can be on the list here but not there.
+  - From Windows agent 1.0.62, the agent also checks each entry's program file. An entry whose program has gone (e.g. a per-user Chrome deleted without uninstalling) is marked **Left over** and isn't checked for vulnerabilities. Where the file's own version differs from the entry's, it's shown too; for browsers, 7-Zip, Notepad++ and VLC it's the one checked, as Chrome's business (MSI) installer leaves its entry at the version first installed.
+  - With older agents, a user's entry for one of those programs that's older than the machine's own copy is taken to be a leftover.
 - On Linux it's the package list from `dpkg` or `rpm`.
 - The agent checks every run but only sends the list when something has changed, so reports stay small. If the add-on hasn't got a device's list (e.g. after a restore), it asks for it.
 - **Newer versions** are highlighted (never alerted) with *Newer: …* under the installed version, and **Only the N with a newer version** filters to them. Find software shows them too.
