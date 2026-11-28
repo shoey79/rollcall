@@ -84,7 +84,8 @@ def test_releases_from_what_agents_report():
     assert g(R("Microsoft Windows 10 IoT Enterprise LTSC (10.0.19044.5371)")) == "Windows 10 IoT Enterprise LTSC 2021"
     assert g(R("Microsoft Windows 10 Enterprise 2016 LTSB (10.0.14393.7700)")) == "Windows 10 Enterprise LTSB 2016"
     assert g(R("Microsoft Windows 11 Enterprise LTSC (10.0.26100.3000)")) == "Windows 11 Enterprise LTSC 2024"
-    assert g(R("Microsoft Windows 11 Pro (10.0.26100.3000)")) == "Windows 11"
+    assert g(R("Microsoft Windows 11 Pro (10.0.26100.3000)")) == "Windows 11 24H2 Home/Pro"
+    assert g(R("Microsoft Windows 11 Pro (10.0.29999.1)")) == "Windows 11"   # a build Rollcall doesn't know yet
     assert g(R("Microsoft Windows 8.1 Pro (6.3.9600)")) == "Windows 8.1"
     assert g(R("Microsoft Windows Server 2012 R2 Standard (6.3.9600.0)")) == "Windows Server 2012 R2"
     assert g(R("Microsoft Windows Server 2019 Datacenter (10.0.17763.6893)")) == "Windows Server 2019"
@@ -109,7 +110,48 @@ def test_plain_release_leaves_ltsc_alone():
 def test_end_dates():
     assert oslife.end("Windows 10") == "2025-10-14" and oslife.ended("Windows 10", now=1795000000) is True
     assert oslife.end("Windows 10 Enterprise LTSC 2019") == "2029-01-09" and oslife.ended("Windows 10 Enterprise LTSC 2019", now=1795000000) is False
-    assert oslife.end("Windows 11") is None and oslife.ended("Windows 11") is None   # depends on the feature update
+    assert oslife.end("Windows 11") is None and oslife.ended("Windows 11") is None   # feature update not known
+
+
+NOV_28_2026 = 1795824000
+
+
+def test_windows_11_by_feature_update_and_edition():
+    g = oslife.group
+    ent21 = R("Microsoft Windows 11 Enterprise (10.0.22000.3260)", os_build="10.0.22000.3260")
+    assert g(ent21) == "Windows 11 21H2 Enterprise/Education"
+    assert oslife.end(g(ent21)) == "2024-10-08" and oslife.ended(g(ent21), now=NOV_28_2026)
+    assert g(R("Microsoft Windows 11 Education", os_build="10.0.22631.6000")) == "Windows 11 23H2 Enterprise/Education"
+    assert g(R("Microsoft Windows 11 Pro Education", os_build="10.0.22631.6000")) == "Windows 11 23H2 Home/Pro"
+    assert g(R("Microsoft Windows 11 Home", os_build="10.0.26200.7000")) == "Windows 11 25H2 Home/Pro"
+    # Enterprise gets a year longer: 23H2 ended this month for both, a year apart
+    assert oslife.end("Windows 11 23H2 Home/Pro") == "2025-11-11" and oslife.end("Windows 11 23H2 Enterprise/Education") == "2026-11-10"
+    assert oslife.ended("Windows 11 24H2 Home/Pro", now=NOV_28_2026) and not oslife.ended("Windows 11 24H2 Enterprise/Education", now=NOV_28_2026)
+    assert not oslife.ended("Windows 11 25H2 Home/Pro", now=NOV_28_2026)
+    # LTSC on the same build as 24H2 is still its own release
+    assert g(R("Microsoft Windows 11 Enterprise LTSC (10.0.26100.3000)")) == "Windows 11 Enterprise LTSC 2024"
+    # An existing "Windows 11" tick still takes them all in; a feature-update tick takes in just that one
+    assert oslife.matches("Windows 11", ent21) and oslife.matches("windows 11 21h2 enterprise/education", ent21)
+    assert not oslife.matches("Windows 11 23H2 Enterprise/Education", ent21)
+    assert not oslife.matches("Windows 11", R("Microsoft Windows 11 Enterprise LTSC (10.0.26100.3000)"))
+
+
+def test_out_of_support_windows_11_says_so(tmp_path, monkeypatch):
+    m = setup(tmp_path, monkeypatch)
+    h = m.hosts["w11"]
+    h.agent_report = {"os": "Microsoft Windows 11 Enterprise", "os_build": "10.0.22000.3260", "os_family": "windows"}
+    m.vulnfeeds.msrc = {"x": 1}                                   # Microsoft's data is in, but nothing for 21H2
+    why = m._vuln_why_not(h)
+    assert why.startswith("Not checked: Windows 11 21H2 Enterprise/Education is out of support") and "8 Oct 2024" in why
+    assert "probably" not in why
+    h.agent_report["os_build"] = "10.0.29999.1"                   # not known: the old guess
+    assert "probably out of support" in m._vuln_why_not(h)
+    # Still in Microsoft's data (it only just ended) and up to date: no vulnerabilities, but it says it's out of support
+    h.agent_report = {"os": "Microsoft Windows 11 Pro", "os_build": "10.0.26100.7000", "os_family": "windows"}
+    m.vuln_findings = lambda h: []
+    monkeypatch.setattr(oslife.time, "time", lambda: NOV_28_2026)
+    c = m.vuln_check(h)
+    assert c["level"] == agentlib.OK and "Windows 11 24H2 Home/Pro is out of support (security updates ended 13 Oct 2026)" in c["detail"]
 
 
 def test_settings_lists_reported_releases(tmp_path, monkeypatch):

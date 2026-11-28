@@ -7,8 +7,9 @@ supported long after Windows 10 itself, so "Windows 10" never takes them in.
 
 END is when standard security updates end (Microsoft's lifecycle pages, ubuntu.com/about/release-cycle, Debian's
 LTS pages). Paid extensions (ESU, Ubuntu Pro) aren't counted: whether a device has one is for the admin to say.
-Windows 11 Home/Pro/Enterprise is left out on purpose: its support depends on the feature update (23H2, 24H2...),
-not the release.
+Windows 11 (other than LTSC) is grouped by its feature update (23H2, 24H2...) and edition, as that's what its support
+depends on: Enterprise and Education get a year longer than Home and Pro. A build Rollcall doesn't know yet is just
+"Windows 11", with no date.
 """
 from __future__ import annotations
 
@@ -17,6 +18,10 @@ import time
 
 # Windows LTSC/LTSB releases by build number (the caption often leaves the year out).
 LTSC_BUILDS = {10240: "LTSB 2015", 14393: "LTSB 2016", 17763: "LTSC 2019", 19044: "LTSC 2021", 26100: "LTSC 2024"}
+
+# Windows 11 feature updates by build number (learn.microsoft.com/windows/release-health/windows11-release-information)
+WIN11_BUILDS = {22000: "21H2", 22621: "22H2", 22631: "23H2", 26100: "24H2", 26200: "25H2", 28000: "26H1", 26300: "26H2"}
+WIN11_HOME, WIN11_ENT = "Home/Pro", "Enterprise/Education"
 
 END = {
     "Windows 7": "2020-01-14", "Windows 8.1": "2023-01-10", "Windows 10": "2025-10-14",
@@ -33,6 +38,13 @@ END = {
     "Ubuntu 22.04": "2027-05-31", "Ubuntu 24.04": "2029-05-31",
     "Debian 9": "2022-06-30", "Debian 10": "2024-06-30", "Debian 11": "2026-08-31", "Debian 12": "2028-06-30",
 }
+# The last day of security updates for each Windows 11 feature update (Microsoft's lifecycle pages for Windows 11
+# Home and Pro, and Enterprise and Education; their end times are the morning after, Pacific time)
+for _v, _home, _ent in (("21H2", "2023-10-10", "2024-10-08"), ("22H2", "2024-10-08", "2025-10-14"),
+                        ("23H2", "2025-11-11", "2026-11-10"), ("24H2", "2026-10-13", "2027-10-12"),
+                        ("25H2", "2027-10-12", "2028-10-10"), ("26H1", "2028-03-14", "2029-03-13"),
+                        ("26H2", "2028-10-09", "2029-10-08")):
+    END[f"Windows 11 {_v} {WIN11_HOME}"], END[f"Windows 11 {_v} {WIN11_ENT}"] = _home, _ent
 
 LINUX_NAMES = {"ubuntu": "Ubuntu", "debian": "Debian", "raspbian": "Raspbian", "rhel": "Red Hat Enterprise Linux",
                "centos": "CentOS", "rocky": "Rocky Linux", "almalinux": "AlmaLinux", "fedora": "Fedora",
@@ -66,6 +78,12 @@ def group(report: dict | None) -> str | None:
         ver = m.group(1)
         kind = re.search(r"(?<![A-Za-z])(LTS[BC])(?![A-Za-z])", os_name, re.I)
         if not kind:
+            fu = WIN11_BUILDS.get(_build(report) or 0) if ver == "11" else None
+            if fu:
+                # Pro Education and Pro for Workstations follow Home and Pro; Enterprise, Education and IoT Enterprise
+                # (not LTSC) get the longer support
+                ent = re.search(r"\b(Enterprise|Education)\b", os_name, re.I) and not re.search(r"\bPro\b", os_name, re.I)
+                return f"Windows 11 {fu} {WIN11_ENT if ent else WIN11_HOME}"
             return f"Windows {ver}"
         iot = "IoT " if re.search(r"(?<![A-Za-z])IoT(?![A-Za-z])", os_name, re.I) else ""
         rel = LTSC_BUILDS.get(_build(report) or 0)

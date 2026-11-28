@@ -1070,6 +1070,15 @@ def fmt_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
+def _day(ymd: str | None) -> str:
+    """2024-10-08 as 8 Oct 2024."""
+    try:
+        t = time.strptime(str(ymd), "%Y-%m-%d")
+    except ValueError:
+        return str(ymd or "")
+    return f"{t.tm_mday} {time.strftime('%b %Y', t)}"
+
+
 def iso(ts: float | None) -> str | None:
     if ts is None:
         return None
@@ -4571,6 +4580,10 @@ class Monitor:
             return f"Microsoft's update data couldn't be downloaded ({err})" if err else "Waiting for Microsoft's update data to download"
         if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", b):
             return "Not checked: the agent didn't report the Windows build with its update revision"
+        rel = oslife.group(r)
+        if oslife.ended(rel):
+            return (f"Not checked: {rel} is out of support (its security updates ended {_day(oslife.end(rel))}), "
+                    "so Microsoft has no updates to compare it with. Move it to a supported version")
         return (f"Not checked: Microsoft hasn't released security updates for this Windows version "
                 f"({'Windows Server' if self._vuln_server(h) else 'Windows'}, build {b.rsplit('.', 1)[0]}) "
                 "in the last 12 months, so it's probably out of support")
@@ -4600,6 +4613,10 @@ class Monitor:
         if not alerting:
             if not held:
                 level, detail = vulnlib.summarise([], float(self.opts.get("vuln_min_score", 9)))
+                rel = oslife.group(r) if r.get("os_family") != "linux" else None
+                if found is not None and oslife.ended(rel):
+                    # Up to date with the last updates it got, but it won't get any more
+                    detail = f"{detail}; but {rel} is out of support (security updates ended {_day(oslife.end(rel))})"
                 return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "detail": detail, "ids": []}
             return {"key": "vulns", "label": "Vulnerabilities", "level": agentlib.OK, "ids": [], "excluded": True,
                     "detail": f"{held} known vulnerabilit{'y' if held == 1 else 'ies'}, not alerted: " + "; ".join(why)}
