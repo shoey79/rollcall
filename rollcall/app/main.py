@@ -3032,9 +3032,10 @@ class Monitor:
             s.failures = 0 if ok or warn else s.failures + 1
             new = GREEN if ok else AMBER if warn or (s.failures == 1 and level != "now") else RED
             ok = ok or warn  # a warning isn't counted as downtime
-            if not ok and starting:
+            if not ok and starting and s.status != RED:
                 # Just switched on (or its window just opened): give it time to start before alerting.
                 # Once the allowance is over, the next failed check alerts straight away.
+                # Already red (alerted before): stays red, so it isn't alerted a second time.
                 new, s.failures = MAINT, 1
                 s.detail = f"starting up: {detail}"
             self.store.add(svc_key(h, s), now, MAINT_OK if new == MAINT else ok, s.latency)
@@ -5894,9 +5895,11 @@ class Monitor:
                     # was already in the report, so don't wait for two more reports.
                     sv.failures = 2
                 status = AMBER if c.get("confirm") and sv.failures < 2 else RED
-                if startup_until(h, time.time()) and not restoring:
+                if startup_until(h, time.time()) and not restoring and sv.status != RED:
                     # Just switched on: services may still be starting, so wait before alerting.
-                    # Checked again when the allowance ends (see check_startup_end).
+                    # Checked again when the allowance ends (see check_startup_end). Already red
+                    # (alerted before it was switched off or restarted) stays red: grey would send
+                    # "no longer critical", then alert again when the allowance ends.
                     status, sv.failures = MAINT, max(sv.failures, 2)
                     detail = f"starting up: {detail}"
             else:

@@ -78,6 +78,27 @@ def test_service_down_while_starting_doesnt_alert_then_does_straight_after(monke
     assert svc.status == main.RED and changes[-1] == main.RED   # straight to red, not amber first
 
 
+def test_service_already_red_stays_red_while_starting(monkeypatch):
+    monkeypatch.setattr(main.time, "time", lambda: 1060.0)
+    h = _host(expect_off=True, startup_grace=10, sched_started=1000.0, ip="192.168.1.20")
+    svc = main.Service(key="rdp", **main.parse_check("tcp:3389")[0])
+    svc.status, svc.failures = main.RED, 3                   # alerted before it was restarted
+    h.services = [svc]
+    changes = []
+
+    async def tcp_down(*_a, **_k):
+        return False, None, "connection refused"
+    monkeypatch.setattr(main, "tcp_check", tcp_down)
+    m = types.SimpleNamespace(sem=asyncio.Semaphore(4), svc_timeout=1, store=types.SimpleNamespace(add=lambda *a: None))
+
+    async def on_change(_h, s, old, new):
+        changes.append(new)
+    m.on_service_change = on_change
+    m._vpn_more_down = lambda *a: None
+    asyncio.run(main.Monitor.check_services(m, h, 1060))
+    assert svc.status == main.RED and changes == []           # no grey, so no second alert at the end
+
+
 # --- Sophos VPN tunnels ----------------------------------------------------------------------------
 
 def _vpn(*rows):
