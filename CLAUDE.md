@@ -41,4 +41,5 @@ releasing; remove each line once it's released. Built changes waiting for releas
 (force-pushed as it changes; main stays the released version). At release, rebase it onto main, put the CHANGELOG
 rename and version bump in the release commit, push the code, wait for CI, then the bump.
 
-(none)
+- Already-red checks stay red through the start-up allowance (no false "no longer critical" and repeat alert at boot).
+- Windows 11 end of life by feature update and edition (Settings ticks, definite "out of support" message).
