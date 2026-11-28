@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.105.3 - 2026-11-28
+
+- **Starting up doesn't fix your vulnerabilities after all.** A computer switching on gets its start-up allowance, and any check failing during it showed *starting up* instead, including ones that were already red before it was switched off. Leaving red counted as a recovery, so you got a cheerful "Vulnerabilities no longer critical" just because the PC booted, and the same alert again 15 minutes later. A check that's already red now stays red through the allowance: no false recovery, no repeat alert. The allowance still holds back new problems, as before, and port and service checks get the same fix.
+
+- **Windows 11, by feature update.** Rollcall knew when Windows 10 and Server lose support, but treated Windows 11 as one release, when it's really one per feature update, with Enterprise and Education getting a year longer than Home and Pro. So a Windows 11 21H2 Enterprise laptop got a shrugging "Microsoft hasn't released updates for this... probably out of support". Now:
+  - The end-of-life ticks in Settings list Windows 11 by feature update and edition (*Windows 11 23H2 Enterprise/Education* and so on), with Microsoft's end dates. An existing `Windows 11` tick or line still covers them all.
+  - A version that's out of support says so outright, with the date its updates stopped.
+  - One that's only just gone out of support (24H2 Home/Pro in October, 23H2 Enterprise/Education this month) shows *out of support* on its Vulnerabilities check while Microsoft's last updates for it are still in the data, rather than looking fine for another year.
+
 ## 1.105.2 - 2026-11-27
 
 - **Chrome 120, take two.** 1.105.1 cleared a leftover Chrome in someone's profile, but there was a second hiding place: two of Chrome's business installer (MSI) entries for everyone, the one for 158 and an orphan for 120 that the upgrade left behind under its old product code. Programs and Features hides an orphan like that; Rollcall didn't, and neither entry names chrome.exe for the file check to catch it. Now:
